@@ -158,7 +158,8 @@ class MemorySearchTool(BaseTool):
         ensure_memory_files()
         path = _path_for("memory")
         text = _read_text(path)
-        sections = _split_sections(text)
+        # The current agent's private sections first, then the shared ones.
+        sections = _private_sections() + _split_sections(text)
         if not sections:
             return "MEMORY.md is empty or has no sections yet."
         scored = sorted(
@@ -230,12 +231,34 @@ class MemoryReadTool(BaseTool):
 # ---------------------------------------------------------------------------
 
 
+def _current_agent_id() -> Optional[int]:
+    try:
+        from distr.core.agent_groups import current_agent_id
+
+        return current_agent_id()
+    except Exception:
+        return None
+
+
+def _private_sections() -> list[str]:
+    agent_id = _current_agent_id()
+    if not agent_id:
+        return []
+    try:
+        from distr.core.memory.files import agent_memory_sections
+
+        return agent_memory_sections(agent_id)
+    except Exception:
+        return []
+
+
 class MemoryAddInput(BaseModel):
     section: str = Field(description="Short section title or heading text for this memory block.")
     content: str = Field(description="Body text to store (facts, preferences, decisions).")
-    target: Literal["memory", "user"] = Field(
+    target: Literal["memory", "user", "shared"] = Field(
         default="memory",
-        description="Append to MEMORY.md (default) or USER.md preferences.",
+        description="memory (default): your own private memory as this agent; shared: MEMORY.md "
+        "that every agent reads; user: shared USER.md preferences about Paul.",
     )
 
 
@@ -289,6 +312,13 @@ class MemoryAddTool(BaseTool):
             append_markdown_section("user", block)
             _publish_file_changed("user")
             return f"Appended section to {USER_MD}."
+        agent_id = _current_agent_id() if target == "memory" else None
+        if agent_id:
+            from distr.core.memory.files import append_agent_memory
+
+            append_agent_memory(agent_id, block)
+            _publish_file_changed("agent_memory")
+            return "Saved to your private memory."
         append_markdown_section("memory", block)
         _publish_file_changed("memory")
         return f"Appended section to {MEMORY_MD}."

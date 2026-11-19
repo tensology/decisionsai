@@ -427,6 +427,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 return
 
         # Set up renderer
+        self._apply_saved_oracle_background(self._skin_config)
         self._render_strategy = create_renderer(self._skin_config)
 
         # Restore per-skin saved size on startup (the per-skin store tracks
@@ -502,6 +503,16 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
             QTimer.singleShot(2200 + index * 500, _preload)
 
+    def _apply_saved_oracle_background(self, config):
+        if self._skin_folder != "oracle":
+            return
+        from distr.core.services.settings_service import active_oracle_background
+
+        filename = active_oracle_background()
+        if filename and os.path.isfile(os.path.join(AVATARS_DIR, "oracle", filename)):
+            for event in config.events.values():
+                event.animation = filename
+
     def _on_direct_oracle_change(self, skin_name: str):
         """Handle skin change from settings — reload config and recreate components."""
         logger.info("Direct oracle change to skin: %s", skin_name)
@@ -516,22 +527,16 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         logger.info("Direct oracle change: skin_changed=%s previous=%s content_size=%d",
                        skin_changed, previous_skin_folder, self.content_size)
 
-        self._skin_folder = migrated
-
-        # Persist active skin selection immediately (hotkeys/settings both route here).
-        try:
-            settings = load_settings_from_db()
-            settings['selected_oracle'] = migrated
-            save_settings_to_db(settings)
-        except Exception as e:
-            logger.warning("Failed to persist selected_oracle=%s: %s", migrated, e)
-
         result = get_skin_by_name(AVATARS_DIR, migrated)
         if result is None:
             logger.warning("Skin '%s' not found on change, ignoring", migrated)
             return
 
         _folder, config = result
+        self._skin_folder = migrated
+        self._apply_saved_oracle_background(config)
+        if not skin_changed and config == self._skin_config:
+            return
         self._skin_config = config
 
         # Restore the saved size — only when actually switching to a different
@@ -1455,114 +1460,29 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self.menu.exec(event.globalPosition().toPoint())
 
     def cycle_oracle(self):
-        """Cycle to the next oracle animation file within the oracle skin folder."""
-        if not self._check_eula_accepted():
-            return
-        if self._skin_config is None or self._skin_config.type != "oracle":
-            logger.info("cycle_oracle: skipped — skin_config type is %s", 
-                       self._skin_config.type if self._skin_config else "None")
-            return
-
-        oracle_dir = os.path.join(AVATARS_DIR, "oracle")
-        anim_files = sorted(
-            [f for f in os.listdir(oracle_dir) if f.endswith('.webm') or f.endswith('.gif')],
-            key=lambda x: int(os.path.splitext(x)[0]) if os.path.splitext(x)[0].isdigit() else float('inf')
-        )
-        if not anim_files:
-            logger.warning("cycle_oracle: no animation files found in %s", oracle_dir)
-            return
-
-        current_anim = self._skin_config.events.get("idle", None)
-        current_file = current_anim.animation if current_anim else anim_files[0]
-        try:
-            idx = anim_files.index(current_file)
-            next_file = anim_files[(idx + 1) % len(anim_files)]
-        except ValueError:
-            next_file = anim_files[0]
-
-        logger.info("cycle_oracle: %s → %s (%d files total) — content_size=%d skin_folder=%s",
-                       current_file, next_file, len(anim_files), self.content_size, self._skin_folder)
-
-        # Update all events in the config to use the new animation file
-        for hook in self._skin_config.events:
-            self._skin_config.events[hook].animation = next_file
-
-        # Write updated config to disk
-        from distr.core.skin_config import to_json
-        skin_json_path = os.path.join(oracle_dir, "skin.json")
-        with open(skin_json_path, "w", encoding="utf-8") as f:
-            f.write(to_json(self._skin_config))
-
-        # Do not reload skin geometry here; only swap animation file in-place.
-        # Reload churn can momentarily desync frame/render sizing on rapid cycling.
-        current_hook = self._event_dispatcher.get_current_hook() or "idle"
-        response = self._skin_config.events.get(current_hook) or self._skin_config.events.get("idle")
-        if response:
-            self._play_animation(response)
-        self.update()
-
-        try:
-            from distr.core.integrations.telegram.remote_skin import notify_remote_skin_changed
-
-            notify_remote_skin_changed(
-                folder_name=self._skin_folder,
-                skin_name=self._skin_config.name,
-                skin_type=self._skin_config.type,
-                idle_animation=next_file,
-            )
-        except Exception:
-            logger.debug("Remote skin notify skipped after cycle_oracle", exc_info=True)
+        self._cycle_oracle_background(1)
 
     def cycle_oracle_previous(self):
-        """Cycle to the previous oracle animation file."""
-        if not self._check_eula_accepted():
-            return
-        if self._skin_config is None or self._skin_config.type != "oracle":
+        self._cycle_oracle_background(-1)
+
+    def _cycle_oracle_background(self, delta: int):
+        if not self._check_eula_accepted() or self._skin_folder != "oracle" or self._skin_config is None:
             return
 
         oracle_dir = os.path.join(AVATARS_DIR, "oracle")
-        anim_files = sorted(
-            [f for f in os.listdir(oracle_dir) if f.endswith('.webm') or f.endswith('.gif')],
-            key=lambda x: int(os.path.splitext(x)[0]) if os.path.splitext(x)[0].isdigit() else float('inf')
+        files = sorted(
+            (name for name in os.listdir(oracle_dir) if name.endswith((".webm", ".gif"))),
+            key=lambda name: (int(os.path.splitext(name)[0]) if os.path.splitext(name)[0].isdigit()
+                              else float("inf"), name),
         )
-        if not anim_files:
+        if not files:
             return
 
-        current_anim = self._skin_config.events.get("idle", None)
-        current_file = current_anim.animation if current_anim else anim_files[0]
-        try:
-            idx = anim_files.index(current_file)
-            prev_file = anim_files[(idx - 1) % len(anim_files)]
-        except ValueError:
-            prev_file = anim_files[-1]
-
-        for hook in self._skin_config.events:
-            self._skin_config.events[hook].animation = prev_file
-
-        from distr.core.skin_config import to_json
-        skin_json_path = os.path.join(oracle_dir, "skin.json")
-        with open(skin_json_path, "w", encoding="utf-8") as f:
-            f.write(to_json(self._skin_config))
-
-        # Do not reload skin geometry here; only swap animation file in-place.
-        current_hook = self._event_dispatcher.get_current_hook() or "idle"
-        response = self._skin_config.events.get(current_hook) or self._skin_config.events.get("idle")
-        if response:
-            self._play_animation(response)
-        self.update()
-        logging.debug(f"Cycled oracle previous to: {prev_file}")
-
-        try:
-            from distr.core.integrations.telegram.remote_skin import notify_remote_skin_changed
-
-            notify_remote_skin_changed(
-                folder_name=self._skin_folder,
-                skin_name=self._skin_config.name,
-                skin_type=self._skin_config.type,
-                idle_animation=prev_file,
-            )
-        except Exception:
-            logger.debug("Remote skin notify skipped after cycle_oracle_previous", exc_info=True)
+        idle = self._skin_config.events.get("idle")
+        current = idle.animation if idle else None
+        index = files.index(current) if current in files else (-1 if delta > 0 else 0)
+        from distr.core.services.settings_service import update_oracle_background
+        update_oracle_background(files[(index + delta) % len(files)])
 
 
     def mouseMoveEvent(self, event):
@@ -2104,14 +2024,16 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         else:
             idx = avatars.index(current)
             target = avatars[(idx + delta) % len(avatars)]
-        self._on_direct_oracle_change(target)
+        from distr.core.services.settings_service import update_oracle_skin
+        update_oracle_skin(target)
 
     def _select_skin_by_shortcut_index(self, index: int):
         order = self._get_skin_shortcut_order()
         if index < 1 or index > len(order):
             return
         target = order[index - 1]
-        self._on_direct_oracle_change(target)
+        from distr.core.services.settings_service import update_oracle_skin
+        update_oracle_skin(target)
 
     def _on_global_hotkey_action(self, action_name: str):
         if action_name == "skin_prev":

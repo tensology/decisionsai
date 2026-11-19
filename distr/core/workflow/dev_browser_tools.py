@@ -162,7 +162,10 @@ def _settings() -> dict[str, Any]:
 def browser(action: str, url: str | None = None, selector: str | None = None, text: str | None = None,
             submit: bool | None = False, mode: str | None = "text", headed: bool | None = False,
             approval_id: str | None = None, *, project_folder: str | None = None,
-            settings: dict[str, Any] | None = None, **_: Any) -> dict[str, Any]:
+            settings: dict[str, Any] | None = None, gate: Optional[Callable[..., Optional[dict[str, Any]]]] = None,
+            **_: Any) -> dict[str, Any]:
+    # ``gate`` lets Chat swap the Development thread approval for an in-chat confirmation.
+    gate = gate or dev_approvals.gate
     s = settings if settings is not None else _settings()
     if not s.get("dev_browser_enabled"):
         return _res(False, "The browser tool is off. Turn on 'Browser' in Settings > Third party > Development agent tools.")
@@ -189,7 +192,7 @@ def browser(action: str, url: str | None = None, selector: str | None = None, te
         risky = bool(el.get("is_submit")) or bool(RISKY_TEXT.search(el.get("text") or ""))
         if risky:
             page = transport({"cmd": "ping"}, headed).get("url")
-            blocked = dev_approvals.gate("browser", "click", {"selector": selector, "page": page}, approval_id,
+            blocked = gate("browser", "click", {"selector": selector, "page": page}, approval_id,
                                          f"click '{(el.get('text') or selector)[:80]}' on {page}",
                                          {"page": page, "element": el})
             if blocked:
@@ -206,7 +209,7 @@ def browser(action: str, url: str | None = None, selector: str | None = None, te
                                "(headed=true) or use the sign-in helper.")
         if submit:
             page = transport({"cmd": "ping"}, headed).get("url")
-            blocked = dev_approvals.gate("browser", "submit", {"selector": selector, "text": text, "page": page},
+            blocked = gate("browser", "submit", {"selector": selector, "text": text, "page": page},
                                          approval_id, f"type and submit on {page}",
                                          {"page": page, "field": d["element"], "text": (text or "")[:200]})
             if blocked:

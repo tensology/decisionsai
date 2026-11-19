@@ -1,21 +1,21 @@
 import { installTooltipPortal } from '../shared/tooltip_portal.js?v=20261110-queue1';
-import { createReports } from './reports/index.js?v=20261111-client-message';
-import { createThreadLiveUpdates } from './threads/live.js?v=20261110-proposal-sounds1';
-import { createThreadSession } from './threads/session.js?v=20261112-queue-handoff';
+import { createReports } from './reports/index.js?v=20261114-reports-cache1';
+import { createThreadLiveUpdates } from './threads/live.js?v=20261114-thread-stream1';
+import { createThreadSession } from './threads/session.js?v=20261115-workflow-display';
 import { createCatalogLoader } from './shell/catalog.js';
 import { installNavigationGuard } from './shell/navigation-guard.js';
 import { catalogModels, providerLabel } from './shared/models.js';
-import { createPlanning } from './planning/index.js?v=20261112-open-created-outline';
+import { createPlanning } from './planning/index.js?v=20261114-plan-docs9';
 import { seedPlanHistory } from './planning/back.js?v=20261102-verify';
 import { planCrumbs, renderPlanCrumbs, clearPlanCrumbs } from './planning/breadcrumb.js?v=20261111-nav-apply-chrome4';
 import { setOverflowLabel } from './shared/overflow-names.js?v=20261111-overflow-names3';
 import { rememberBoardThread, boardLastThread, rememberBoardSection, boardLastSection, boardViewOptions, boardViewSwitchHtml, projectClickTarget } from './planning/view-switch.js?v=20261111-nav-apply-chrome3';
 
-import { createSidebar } from './sidebar/index.js?v=20261113-board-notes';
+import { createSidebar } from './sidebar/index.js?v=20261118-proposal-count';
 
-import { createAutomations } from './automations/index.js?v=20261111-automation-inplace3';
+import { createAutomations } from './automations/index.js?v=20261113-calendar-page1';
 
-import { createIncoming } from './incoming/index.js?v=20261112-scoped-source-count';
+import { createIncoming } from './incoming/index.js?v=20261118-message-copy';
 import { fileDropZoneHtml, proposalThreadToast } from './shared/ticket-modal.js?v=20261111-thread-recovery';
 
 import { createWorkflows } from './workflows/index.js?v=20261024-wfwhat1';
@@ -24,7 +24,7 @@ import { createBoards } from './boards/index.js?v=20261112-ticket-draft-project'
 
 import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261110-startup-only1';
 
-import { createThreadsTranscript } from './threads/transcript/index.js?v=20261113-env-note';
+import { createThreadsTranscript } from './threads/transcript/index.js?v=20261115-workflow-history';
 import { openSourceReply } from './threads/source-reply.js?v=20261112-recipient-select';
 
 import { createThreadsComposer } from './threads/composer/index.js?v=20261112-human-review';
@@ -56,6 +56,7 @@ const state = {
     activeArtifactIndex: null,
     currentChat: null,
     currentWorkflow: null,
+    currentWorkflowRun: null,
     currentRun: null,
     guidanceRunId: null,
     guidanceScope: 'workflow',
@@ -124,6 +125,7 @@ const developmentModePaths = {
     incoming: '/development/incoming/',
     automations: '/development/automations/',
     automation_rules: '/development/automation-rules/',
+    calendar: '/development/calendar/',
     workflows: '/development/workflows/',
     terminals_home: '/development/terminals/',
     reports: '/development/reports/'
@@ -169,6 +171,15 @@ function developmentRoute() {
         .split('/')
         .filter(Boolean)
         .map((part) => decodeURIComponent(part));
+    if (parts[0] === 'calendar') {
+        const automationId = query.get('automation');
+        const path = automationId
+            ? `/development/calendar/?${new URLSearchParams({ automation: automationId })}`
+            : '/development/calendar/';
+        return automationId
+            ? { kind: 'workspace', mode: 'calendar', automationId, path }
+            : { kind: 'workspace', mode: 'calendar', path };
+    }
     if (parts[0] !== 'development' || parts.length === 1)
         return query.get('recent') === '1'
             ? { kind: 'recent', path: '/development/?recent=1' }
@@ -203,6 +214,8 @@ function developmentRoute() {
             ? 'automations'
             : parts[1] === 'automation-rules'
               ? 'automation_rules'
+              : parts[1] === 'calendar'
+                ? 'calendar'
               : parts[1] === 'terminals'
                 ? 'terminals_home'
                 : parts[1];
@@ -211,7 +224,7 @@ function developmentRoute() {
         const path = `/development/incoming/?${new URLSearchParams({ proposal_key: proposalKey })}`;
         return { kind: 'workspace', mode, proposalKey, path };
     }
-    if ((mode === 'automations' || mode === 'automation_rules') && query.get('automation')) {
+    if ((mode === 'automations' || mode === 'automation_rules' || mode === 'calendar') && query.get('automation')) {
         const automationId = query.get('automation');
         const path = `${developmentModePaths[mode]}?${new URLSearchParams({ automation: automationId })}`;
         return { kind: 'workspace', mode, automationId, path };
@@ -322,14 +335,19 @@ function projectById(projectId) {
     return state.projects.find((project) => Number(project.id) === id) || null;
 }
 
-function workflowForChat(chatId) {
+function workflowForChat(chatId, thread = null) {
     const chat = state.chats.concat(state.archivedChats).find((item) => Number(item.id) === Number(chatId));
     const metadataWorkflowId = Number(chat?.development_workflow_id || 0);
     if (metadataWorkflowId) {
         return state.workflows.find((workflow) => Number(workflow.id) === metadataWorkflowId) || null;
     }
     const matches = state.workflows.filter((workflow) => Number(workflow.chat_id) === Number(chatId));
-    return matches.sort((a, b) => Number(b.id) - Number(a.id))[0] || null;
+    const linked = matches.sort((a, b) => Number(b.id) - Number(a.id))[0];
+    if (linked || Number(thread?.id) !== Number(chatId)) return linked || null;
+    const active = state.runs.find((run) => Number(run.chat_id) === Number(chatId) && Number(run.workflow_id) > 0);
+    const event = thread.messages?.findLast((message) => message.role === 'workflow' && Number(message.workflow_event?.workflow_id) > 0);
+    const workflowId = Number(active?.workflow_id || event?.workflow_event?.workflow_id);
+    return workflowId > 0 ? { id: workflowId } : null;
 }
 
 function directExecutionForChat(chat) {
@@ -1508,6 +1526,7 @@ function setWorkspaceMode(mode, options) {
     if (state.workspaceMode === 'plan' && mode !== 'plan') planning.leave();
     if (['terminals', 'terminals_home'].includes(state.workspaceMode) && !['terminals', 'terminals_home'].includes(mode)) terminals.leave();
     const automationMode = mode === 'automations' || mode === 'automation_rules';
+    const calendarMode = mode === 'calendar';
     const ruleMode = mode === 'automation_rules';
     const workflowMode = mode === 'workflows';
     const kanbanMode = mode === 'kanban';
@@ -1518,7 +1537,7 @@ function setWorkspaceMode(mode, options) {
     const terminalsHomeMode = mode === 'terminals_home';
     const reportsMode = mode === 'reports';
     const placeholderMode = planMode || terminalsHomeMode || reportsMode;
-    const alternateMode = automationMode || workflowMode || kanbanMode || incomingMode || terminalMode || placeholderMode;
+    const alternateMode = automationMode || calendarMode || workflowMode || kanbanMode || incomingMode || terminalMode || placeholderMode;
     if (!terminalMode && state.workspaceMode === 'terminals') terminals.closeTerminalViews();
     state.workspaceMode = ruleMode
         ? 'automation_rules'
@@ -1538,6 +1557,8 @@ function setWorkspaceMode(mode, options) {
                         ? 'terminals_home'
                         : reportsMode
                           ? 'reports'
+                          : calendarMode
+                            ? 'calendar'
                           : 'chat';
     // Plan and terminal details sit under the shared thread header so the
     // Kanban/Plan/thread/Terminals switch stays visible and works both ways.
@@ -1562,7 +1583,10 @@ function setWorkspaceMode(mode, options) {
     const cliOwnsChat = !alternateMode && threadCliMode.ownsChatView();
     el('conversation').classList.toggle('hidden', alternateMode || cliOwnsChat);
     el('development-composer-layer').classList.toggle('hidden', alternateMode || cliOwnsChat);
-    el('scheduled-workspace').classList.toggle('hidden', !automationMode);
+    document.documentElement.classList.toggle('calendar-page', calendarMode);
+    document.body.classList.toggle('calendar-page', calendarMode);
+    el('scheduled-workspace').classList.toggle('hidden', !automationMode && !calendarMode);
+    el('calendar-workspace')?.classList.toggle('hidden', !calendarMode);
     el('workflow-workspace').classList.toggle('hidden', !workflowMode);
     el('kanban-workspace').classList.toggle('hidden', !kanbanMode);
     el('incoming-workspace').classList.toggle('hidden', !incomingMode);
@@ -1573,7 +1597,7 @@ function setWorkspaceMode(mode, options) {
     if (alternateMode) {
         closePickerMenus();
         closeInspector();
-        if (automationMode) automations.renderScheduledWorkspace();
+        if (automationMode || calendarMode) automations.renderScheduledWorkspace();
         if (workflowMode) workflows.renderWorkflowWorkspace();
         if (kanbanMode) boards.renderKanbanWorkspace();
         if (incomingMode) {
@@ -1860,7 +1884,7 @@ async function performShellRefresh(options) {
         threads_composer.renderComposerSkillMenu();
         threads_composer.updateModelLabel();
         sidebar.renderSidebar();
-        if (['automations', 'automation_rules'].includes(state.workspaceMode)) automations.renderScheduledWorkspace();
+        if (['automations', 'automation_rules', 'calendar'].includes(state.workspaceMode)) automations.renderScheduledWorkspace();
         if (state.workspaceMode === 'workflows') workflows.renderWorkflowWorkspace();
         if (state.workspaceMode === 'terminals') terminals.renderTerminalWorkspace();
         if (state.workspaceMode === 'plan') planning.syncCatalog(state.boards, state.projects);
@@ -1868,14 +1892,18 @@ async function performShellRefresh(options) {
             const selection = state.chatLoadToken;
             const chatId = Number(state.currentChat.id);
             const runWasActive = isActiveAgentRun(state.currentRun);
+            const previousWorkflowId = workflowRunId(state.currentWorkflowRun);
+            const workflowWasActive = isActiveAgentRun(state.currentWorkflowRun);
             const current = () => selection === state.chatLoadToken && chatId === Number(state.currentChat?.id) && state.workspaceMode === 'chat';
-            const snapshot = await threadSession.read(chatId, { isCurrent: current });
+            const snapshot = await threadSession.read(chatId, { previousChat: state.currentChat, isCurrent: current });
             if (!snapshot || !current()) return chatsData;
             Object.assign(state, snapshot);
             if (snapshot.executionAvailable) threads_transcript.renderQueueHandoffStatus(chatId);
             updateElapsedTime();
             const runActive = isActiveAgentRun(state.currentRun);
             const runFinished = runWasActive && !runActive;
+            const workflowChanged = previousWorkflowId !== workflowRunId(state.currentWorkflowRun)
+                || workflowWasActive !== isActiveAgentRun(state.currentWorkflowRun);
             const currentTurnId = Number(state.currentRun?.turn_id || 0);
             const turnMissing = runActive && currentTurnId > 0 && !(state.currentChat.messages || []).some(
                 (message) => message.role === 'user' && Number(message.chat_row_id) === currentTurnId,
@@ -1883,13 +1911,13 @@ async function performShellRefresh(options) {
             const resultTurnId = snapshot.lastProactiveResultTurnId;
             const resultChanged = Number.isSafeInteger(resultTurnId) && resultTurnId > 0
                 && resultTurnId !== state.currentChat.development?.last_proactive_result_turn_id;
-            const reloadTranscript = preserveConversation && (runFinished || turnMissing || resultChanged);
+            const reloadTranscript = preserveConversation && (runFinished || workflowChanged || turnMissing || resultChanged);
             if (reloadTranscript) {
                 const updatedChat = await api(`/chats/${chatId}?surface=development`);
                 if (!current()) return chatsData;
                 state.currentChat = updatedChat;
                 state.chats = state.chats.map((chat) => (Number(chat.id) === chatId ? state.currentChat : chat));
-                threads_transcript.renderConversation(state.currentChat, { preserveReadingPosition: resultChanged });
+                threads_transcript.renderConversation(state.currentChat, { preserveReadingPosition: resultChanged || workflowChanged });
             } else if (preserveConversation && state.currentChat === chatBeforeRefresh && !errors.includes('chatsData')) {
                 const summary = developmentChats.find(chat => Number(chat.id) === chatId);
                 if (summary && Object.hasOwn(summary, 'telegram_proposal_update_status')) {
@@ -2223,6 +2251,7 @@ function showEmptyTask(options) {
     }
     state.currentChat = null;
     state.currentWorkflow = null;
+    state.currentWorkflowRun = null;
     state.currentRun = null;
     state.guidanceRunId = null;
     state.guidanceScope = 'workflow';
@@ -2242,6 +2271,7 @@ function showEmptyTask(options) {
     el('message-list').classList.add('hidden');
     el('thread-attachment-warning')?.classList.add('hidden');
     el('thread-telegram-status')?.classList.add('hidden');
+    el('thread-workflow-navigation')?.classList.add('hidden');
     el('studio-empty').classList.remove('hidden');
     syncHeader();
     sidebar.renderSidebar();
@@ -2500,6 +2530,9 @@ const threadLive = createThreadLiveUpdates({
     isActive: (id) => state.workspaceMode === 'chat' && Number(state.currentChat?.id) === id,
     refresh: () => {
         if (!state.busy) refreshShell({ preserveConversation: false });
+    },
+    onStreamToken: (id, token) => {
+        if (Number(state.currentChat?.id) === Number(id)) threads_transcript?.appendStreamToken?.(token);
     }
 });
 
@@ -2688,15 +2721,19 @@ async function restoreDevelopmentLocation(options) {
         }
         if (route.kind === 'thread') {
             const thread = developmentChatById(route.chatId);
-            if (!thread) {
-                // fix2: a missing thread id (failed create, archived/deleted
-                // thread) resets to a fresh composer instead of leaving the
-                // URL on a thread the UI can never load.
-                startNewDevelopment({ updateUrl: false });
-                setDevelopmentLocation('/development/new/', { replace: true });
-                return;
+            // A just-created thread can be missing from the sidebar catalog
+            // for a beat. Try loading it by id before treating the deep link
+            // as gone; only bounce to /development/new/ when that fails.
+            if (thread) {
+                await loadChat(thread.id, { quiet: true, updateUrl: false });
+            } else {
+                await loadChat(route.chatId, { quiet: true, updateUrl: false });
+                if (Number(state.currentChat?.id) !== Number(route.chatId)) {
+                    startNewDevelopment({ updateUrl: false });
+                    setDevelopmentLocation('/development/new/', { replace: true });
+                    return;
+                }
             }
-            await loadChat(thread.id, { quiet: true, updateUrl: false });
         } else if (route.kind === 'new') {
             startNewDevelopment({ updateUrl: false });
             el('task-prompt').focus();
@@ -3030,7 +3067,7 @@ const sidebar = createSidebar({
         hasStartupTerminalCommands: (...args) => hasStartupTerminalCommands(...args),
         setTerminalProjectRunning: (...args) => terminals.setTerminalProjectRunning(...args),
         terminalProjectActionIcon: (...args) => terminalProjectActionIcon(...args),
-        incomingConversations: (...args) => incoming.incomingConversations(...args),
+        incomingProposalCount: () => incoming.incomingProposalCount(),
         loadChat: (...args) => loadChat(...args),
         loadProjectTerminalSessions: (...args) => terminals.loadProjectTerminalSessions(...args),
         openBoardFromSidebar: (...args) => openBoardFromSidebar(...args),
@@ -3324,6 +3361,9 @@ const threads_transcript = createThreadsTranscript({
         },
         get currentRun() {
             return state.currentRun;
+        },
+        get currentWorkflowRun() {
+            return state.currentWorkflowRun;
         },
         get currentWorkflow() {
             return state.currentWorkflow;

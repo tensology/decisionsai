@@ -1388,6 +1388,29 @@ def test_pi_workflow_command_honours_provider_for_nested_catalog_model():
     assert command[command.index("--model") + 1] == "openrouter/free"
 
 
+def test_pi_implementation_restores_coding_tools_in_an_existing_session():
+    task = ProjectTask(
+        project_id=2,
+        project_name="Example project",
+        folder="/tmp/example-project",
+        instruction="Fix the delivery mapping.",
+        origin="development",
+        chat_id=1509,
+        execution_session_id=1107,
+        model="deepseek/deepseek-v4.1-flash",
+        adapter_options={"model_provider": "openrouter"},
+    )
+
+    command = _pi_print_command("pi", task)
+
+    assert "--session-id" in command
+    assert "--tools" in command
+    assert set(command[command.index("--tools") + 1].split(",")) == {
+        "+read", "+bash", "+edit", "+write", "+grep", "+find", "+ls",
+    }
+    assert any(arg.endswith("pi_extensions/checked_bash.ts") for arg in command)
+
+
 def test_pi_read_only_workflow_step_excludes_mutating_tools():
     task = ProjectTask(
         project_id=12,
@@ -2810,3 +2833,32 @@ def test_pi_execution_event_is_bounded_before_live_delivery():
     assert "credential-fragment" not in str(compact)
     assert "partial" not in str(compact)
     assert "thinkingSignature" not in str(compact)
+
+
+
+def test_live_text_deltas_are_kept_when_persistence_compacts_and_throttles():
+    from distr.core.project_cli_backends.registry import (
+        _compact_execution_event,
+        _is_duplicate_progress_event,
+        _live_assistant_text_delta,
+    )
+
+    first = {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "Blue "}}
+    second = {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "is calm."}}
+    assert _live_assistant_text_delta(first)["assistantMessageEvent"]["delta"] == "Blue "
+    assert _live_assistant_text_delta(second)["assistantMessageEvent"]["delta"] == "is calm."
+    assert _live_assistant_text_delta({"type": "agent_end"}) is None
+    assert _live_assistant_text_delta({"type": "message_update", "assistantMessageEvent": {"type": "text_start"}}) is None
+    compact = _compact_execution_event(first)
+    assert compact["update_type"] == "text_delta"
+    assert "assistantMessageEvent" not in compact
+    assert "delta" not in compact
+    assert _is_duplicate_progress_event(
+        second,
+        "is calm.",
+        previous_message="Blue ",
+        previous_at=10.0,
+        now=10.2,
+    )
+
+

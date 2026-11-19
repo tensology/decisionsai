@@ -116,6 +116,46 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "message_agent",
+        (
+            r"\b(ask|tell|message|ping|check\s+with|consult|delegate\s+(?:this\s+|it\s+)?to|hand\s+(?:this|it)\s+(?:over\s+)?to)\b.{0,60}\b(?:the\s+)?(?:other\s+)?agents?\b",
+            r"(?:^|\s)@[a-z][\w-]+",
+        ),
+    ),
+    (
+        "web_browser",
+        (
+            r"\bhttps?://\S+",
+            r"\b(?:in|with|using)\s+(?:the\s+|a\s+)?(?:web\s+)?browser\b",
+            r"\b(browse|visit|go\s+to|open|navigate\s+to|check)\b.{0,40}\b(website|web\s*site|web\s*page|site|url|www\.\S+|\w+\.(?:com|org|net|io|co\.za|dev|ai))\b",
+            r"\b(log\s*in|sign\s*in)\b.{0,30}\b(website|site|portal)\b",
+        ),
+    ),
+    (
+        "calendar_blocks",
+        (
+            # Decisions' own /calendar (schedule blocks). Google Calendar
+            # requests stay with google_workspace.
+            r"^(?!.*\b(?:google|gmail|g\s*cal)\b).*\b(?:my|the|decisions)\s+calendar\b",
+            r"(?:^|\s)/calendar\b",
+            r"\b(time|schedule)\s*blocks?\b",
+            r"^(?!.*\b(?:google|gmail)\b).*\b(block\s+out|book\s+(?:me\s+)?(?:some\s+)?time|schedule\s+(?:me\s+)?(?:some\s+)?time)\b",
+        ),
+    ),
+    (
+        "snippets",
+        (
+            r"\bsnippets?\b",
+        ),
+    ),
+    (
+        "development_overview",
+        (
+            r"\b(development|dev)\b.{0,40}\b(status|overview|threads?|work\s+items?|progress|going\s+on)\b",
+            r"\bwhat(?:'s|\s+is|\s+are)\b.{0,30}\b(?:the\s+)?(?:dev(?:elopment)?\s+)?threads?\b.{0,20}\b(doing|status|working\s+on)\b",
+        ),
+    ),
+    (
         "select_thread",
         (
             r"\b(select|pick|highlight|choose)\b.{0,60}\b(threads?|conversations?|chats?)\b",
@@ -294,7 +334,66 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"^quit$",
         ),
     ),
+    (
+        "list_actions",
+        (
+            r"\b(?:list|show)\b.{0,80}\b(?:the\s+)?(?:list\s+of\s+)?(?:(?:my|the|your|available|saved|custom|recorded)\s+)*actions\b",
+            r"\bwhat(?:'s|s|\s+is|\s+are)\b.{0,80}\b(?:the\s+)?(?:list\s+of\s+)?(?:(?:my|the|your|available|saved|custom|recorded)\s+)*actions\b",
+            r"\b(?:saved|custom|recorded)\s+actions\b",
+            r"\bactions\s+that\s+(?:i(?:'?ve|\s+have)?|you(?:'?ve|\s+have)?|we(?:'?ve|\s+have)?)\s+(?:created|recorded|saved)\b",
+            r"\bactions\s+that\s+i\s+can(?:\s+actually)?\s+run\b",
+        ),
+    ),
+    (
+        "play_action",
+        (
+            r"\b(run|play|execute)\s+(?:the\s+|that\s+|my\s+|this\s+)?(?:saved\s+|custom\s+|recorded\s+)?action\b",
+            r"\b(run|play|execute)\s+it\b",
+        ),
+    ),
 )
+
+
+SAVED_ACTION_TOOLS: tuple[str, str] = ("list_actions", "play_action")
+
+_EXPLICIT_CREATE_ACTION_PATTERNS: tuple[str, ...] = (
+    r"\b(?:create|make|add|record)\b.{0,60}\b(?:a\s+|an\s+|new\s+)?(?:saved\s+|custom\s+|recorded\s+)?actions?\b",
+    r"\bnew\s+action\b",
+    r"\bstart\s+recording\b",
+)
+
+
+def pair_saved_action_tools(names: list[str]) -> list[str]:
+    """If either saved-action tool is present, include both."""
+    present = set(names)
+    if present & set(SAVED_ACTION_TOOLS):
+        for name in SAVED_ACTION_TOOLS:
+            if name not in present:
+                names.append(name)
+                present.add(name)
+    return names
+
+
+def is_explicit_create_action_request(text: str) -> bool:
+    """Return whether the user explicitly asked to create or record a new action."""
+    raw = (text or "").strip()
+    return bool(raw) and any(
+        re.search(pattern, raw, re.IGNORECASE)
+        for pattern in _EXPLICIT_CREATE_ACTION_PATTERNS
+    )
+
+
+def is_saved_action_run_or_list_request(text: str) -> bool:
+    """Return whether the user asked to list or run an existing saved action."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    forced = forced_tool_names_for_text(raw)
+    if any(name in forced for name in SAVED_ACTION_TOOLS):
+        return True
+    return is_workflow_follow_up(raw) and bool(
+        re.search(r"\b(run|play|execute|do)\s+(it|that)\b", raw, re.IGNORECASE)
+    )
 
 
 def forced_tool_names_for_text(text: str) -> list[str]:
@@ -323,16 +422,54 @@ def forced_tool_names_for_text(text: str) -> list[str]:
             continue
         if tool_name == "start_project" and re.match(r"^\s*(?:did|have|has)\b", raw, re.IGNORECASE):
             continue
+        if tool_name in SAVED_ACTION_TOOLS and re.search(
+            r"\bscheduled\s+(?:desktop\s+)?actions?\b", raw, re.IGNORECASE
+        ):
+            continue
         if any(re.search(pattern, raw, re.IGNORECASE) for pattern in patterns):
             forced.append(tool_name)
-    return forced
+    if "message_agent" not in forced and _addresses_known_agent(raw):
+        forced.append("message_agent")
+    return pair_saved_action_tools(forced)
 
+
+_AGENT_NAMES_CACHE: dict = {"at": 0.0, "names": ()}
+
+
+def _known_agent_names() -> tuple:
+    import time
+
+    if time.monotonic() - _AGENT_NAMES_CACHE["at"] < 60:
+        return _AGENT_NAMES_CACHE["names"]
+    names: tuple = ()
+    try:
+        from distr.core.db import ChatAgent, get_session
+
+        with get_session() as session:
+            names = tuple(name for (name,) in session.query(ChatAgent.name).all() if name)
+    except Exception:
+        names = ()
+    _AGENT_NAMES_CACHE.update(at=time.monotonic(), names=names)
+    return names
+
+
+def _addresses_known_agent(raw: str) -> bool:
+    """'ask Uncle Roger ...', 'tell Hayley ...': a talk verb followed by a known agent's name."""
+    verbs = r"\b(?:ask|tell|message|ping|check\s+with|consult|delegate\s+(?:this\s+|it\s+)?to|let)\b"
+    for name in _known_agent_names():
+        if re.search(verbs + r"\s+" + re.escape(name) + r"\b", raw, re.IGNORECASE):
+            return True
+    return False
+
+
+_FOLLOW_UP_LEAD = r"^(?:(?:so|then|okay|ok|yes|yeah|yep|sure)[,.]?\s+)*"
 
 _WORKFLOW_FOLLOW_UP_PATTERNS: tuple[str, ...] = (
-    r"^(?:yes|yeah|yep|sure|okay|ok)[.!]?$",
-    r"^(?:please\s+)?(?:try|retry)(?:\s+it|\s+that)?\s+again[.!]?$",
-    r"^(?:please\s+)?do\s+(?:it|that)(?:\s+again)?[.!]?$",
-    r"^(?:please\s+)?(?:go\s+ahead|continue|finish\s+it)[.!]?$",
+    r"^(?:yes|yeah|yep|sure|okay|ok)[.!?]?$",
+    _FOLLOW_UP_LEAD + r"(?:please\s+)?(?:try|retry)(?:\s+it|\s+that)?\s+again[.!?]?$",
+    _FOLLOW_UP_LEAD + r"(?:please\s+)?do\s+(?:it|that)(?:\s+again)?[.!?]?$",
+    _FOLLOW_UP_LEAD + r"(?:please\s+)?(?:go\s+ahead|continue|finish\s+it)[.!?]?$",
+    _FOLLOW_UP_LEAD + r"(?:please\s+)?(?:can\s+you\s+|could\s+you\s+)?(?:run|play|execute)(?:\s+it|\s+that)?[.!?]?$",
     r"^(?:please\s+)?create\s+the\b.*\bevent\b[.!]?$",
     r"\bclipboard\b.*\bdo\s+it\b",
     r"^(?:i\s+want\s+you\s+to\s+)?(?:perform|do|choose|use|take)?\s*(?:the\s+)?(?:first|second|third|fourth|fifth|last)\s+option[.!]?$",

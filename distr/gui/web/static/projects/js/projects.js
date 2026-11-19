@@ -875,6 +875,35 @@
         document.getElementById("create-project-modal").classList.remove("hidden");
     }
 
+    async function importTensologyProject(event) {
+        var file = event.target.files[0];
+        event.target.value = "";
+        if (!file) return;
+        if (file.size > 8192) {
+            showSnackbar("Choose a Tensology project file smaller than 8 KB.", "error");
+            return;
+        }
+        var button = document.getElementById("project-import-tensology");
+        button.disabled = true;
+        try {
+            var project = await apiFetch("/api/projects/import-tensology", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: await file.text(),
+            });
+            var url = new URL(window.location.href);
+            url.searchParams.set("project_id", project.id);
+            url.searchParams.delete("tab");
+            window.history.replaceState(window.history.state, "", url);
+            loadProjects();
+            showSnackbar(project.created ? "Tensology project imported" : "Tensology project opened", "success");
+        } catch (error) {
+            showSnackbar(error.message || "Could not import the Tensology project.", "error");
+        } finally {
+            button.disabled = false;
+        }
+    }
+
     function closeCreateProjectModal() {
         document.getElementById("create-project-modal").classList.add("hidden");
     }
@@ -980,6 +1009,11 @@
 
         document.getElementById("project-add").addEventListener("click", addProject);
         document.getElementById("project-create-big").addEventListener("click", addProject);
+        var tensologyImportFile = document.getElementById("project-import-tensology-file");
+        document.getElementById("project-import-tensology").addEventListener("click", function() {
+            tensologyImportFile.click();
+        });
+        tensologyImportFile.addEventListener("change", importTensologyProject);
 
         // Create project modal
         document.getElementById("create-project-cancel").addEventListener("click", closeCreateProjectModal);

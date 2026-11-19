@@ -42,7 +42,11 @@ def check_keys(command: str) -> list[str]:
         if not args:
             continue
         args[0] = PurePath(args[0]).name
-        if not _CHECK.match(' '.join(args)):
+        if len(args) > 2 and re.fullmatch(r'python[\d.]*', args[0]) and PurePath(args[1]).name == 'manage.py':
+            candidate = [args[0], 'manage.py', *args[2:]]
+        else:
+            candidate = args
+        if not _CHECK.match(' '.join(candidate)):
             continue
         # Redirection and output filters do not identify a different check.
         end = next((i for i, arg in enumerate(args) if any(c in arg for c in '<>')), len(args))

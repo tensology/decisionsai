@@ -475,12 +475,95 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
         )
         return any(marker in lowered for marker in mutation_markers)
 
+    @staticmethod
+    def _types_into_password(code: str) -> bool:
+        """Never type into password fields from a script."""
+        lowered = (code or "").lower()
+        if "password" not in lowered and "passwd" not in lowered:
+            return False
+        return any(m in lowered for m in (".fill(", ".type(", ".press_sequentially(", "keyboard.type(", "keyboard.insert_text("))
+
+    @staticmethod
+    def _plain_steps(code: str) -> str:
+        """Describe what a script will do in plain language for the approval card."""
+        import re
+
+        steps = []
+        pattern = re.compile(
+            r"\.(goto|click|dblclick|fill|type|press|check|uncheck|select_option|set_input_files)\(\s*"
+            r"(['\"])(.*?)\2(?:\s*,\s*(['\"])(.*?)\4)?", re.S)
+        verbs = {"goto": "open", "click": "click", "dblclick": "double-click", "fill": "type", "type": "type",
+                 "press": "press", "check": "tick", "uncheck": "untick", "select_option": "choose",
+                 "set_input_files": "upload a file to"}
+        for m in pattern.finditer(code or ""):
+            verb, target, value = m.group(1), m.group(3)[:120], (m.group(5) or "")[:120]
+            if verb == "goto":
+                steps.append(f"open {target}")
+            elif verb in ("fill", "type") and value:
+                steps.append(f"type “{value}” into {target}")
+            elif verb == "press" and value:
+                steps.append(f"press {value} in {target}")
+            else:
+                steps.append(f"{verbs[verb]} {target}")
+            if len(steps) >= 8:
+                steps.append("…")
+                break
+        return "; ".join(steps) or "run a browser script that clicks or types on a page"
+
+    def _safety_refusal(self, code: str, label: str) -> str:
+        """Return a refusal message, or "" when the script may run. Fails CLOSED."""
+        from distr.core.agent_capabilities import UNKNOWN_AGENT, browser_policy
+        from distr.core.chat_approvals import request_in_chat, sensitive_ask_enabled
+
+        if self._types_into_password(code):
+            return "Not run: scripts may not type into password fields. Ask Paul to sign in himself."
+        mutating = self._requires_confirmation(code)
+        try:
+            from distr.core.agent_groups import current_agent_id
+
+            agent_id = current_agent_id(strict=True)
+        except Exception:
+            agent_id = UNKNOWN_AGENT
+        policy = browser_policy(agent_id, mutating=mutating)
+        if policy == "deny":
+            return "Not run: this agent is not permitted to use the browser."
+        if not mutating:
+            return ""
+        if policy == "allow" and not sensitive_ask_enabled():
+            return ""
+        name = "The agent"
+        try:
+            from distr.core.db import ChatAgent, get_session
+
+            with get_session() as session:
+                agent = session.get(ChatAgent, int(agent_id)) if agent_id and agent_id > 0 else None
+                name = agent.name if agent else name
+        except Exception:
+            pass
+        summary = f"{name} wants to {self._plain_steps(code)}."
+        try:
+            decision = request_in_chat("playwright_browser", "run", {"code": code}, summary,
+                                       {"agent": name, "description": label, "script": code[:2000]})
+        except Exception:
+            logger.warning("PlaywrightTool: approval failed; refusing", exc_info=True)
+            return "Playwright execution not approved (the approval could not be completed). Not run; do not retry."
+        if decision.approved:
+            return ""
+        return f"Playwright execution not approved: {decision.message} Not run; do not retry."
+
     def _run(self, code: str = "", description: Optional[str] = None, analyze_screenshot: Optional[bool] = True, **kwargs) -> str:
         if not code.strip():
             return "Error: No code provided. Write Playwright Python code to execute."
 
         label = description or "Playwright script"
         logger.info("PlaywrightTool: executing — %s", label)
+
+        # Safety gate. Fails CLOSED: a missing confirmation channel, an error,
+        # or no answer means the script does not run.
+        refusal = self._safety_refusal(code, label)
+        if refusal:
+            return refusal
+
 
         try:
             from distr.core.browser_bridge import (
@@ -508,33 +591,6 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
                 os.remove(console_log)
             except OSError:
                 pass
-
-        # Confirm with user if safety gate is on
-        if self.event_queue is not None and self.command_queue is not None:
-            try:
-                from distr.core.settings import load_settings_from_db
-                settings = load_settings_from_db()
-                if settings.get("initiative_ask_file_changes", True) and self._requires_confirmation(code):
-                    import uuid, time
-                    confirmation_id = str(uuid.uuid4())
-                    preview = code[:300] + ("..." if len(code) > 300 else "")
-                    self.event_queue.put(("confirmation_request", {
-                        "confirmation_id": confirmation_id,
-                        "title": "Run Playwright Script",
-                        "message": f"Execute browser automation?\n\n{preview}",
-                    }), block=False)
-                    deadline = time.time() + 30
-                    while time.time() < deadline:
-                        if self.confirmation_results_dict and confirmation_id in self.confirmation_results_dict:
-                            result = self.confirmation_results_dict.pop(confirmation_id)
-                            if not result.get("approved"):
-                                return "Playwright execution cancelled by user."
-                            break
-                        time.sleep(0.2)
-                    else:
-                        return "Playwright execution timed out waiting for confirmation."
-            except Exception as e:
-                logger.warning("Confirmation check failed, proceeding: %s", e)
 
         # Wrap user code with console log capture harness
         wrapped_code = self._build_console_wrapper(code, screenshot_dir=screenshot_dir, console_log=console_log)

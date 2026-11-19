@@ -606,3 +606,68 @@
 .scheduled-run-row-head { display: flex; justify-content: space-between; gap: 8px; color: #f8fafc; font-size: 13px; }
 .scheduled-run-row-body { color: #a8b3cf; font-size: 12px; }
 .development-empty-actions { margin-top: 12px; }
+
+
+/* 2026-11-13: Automations list toolbar — three zones after the list/calendar toggle was removed. */
+.scheduled-list-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+    margin: 0 0 14px;
+    min-height: 34px;
+}
+.scheduled-toolbar-left,
+.scheduled-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.scheduled-toolbar-left { justify-self: start; }
+.scheduled-toolbar-right { justify-content: flex-end; justify-self: end; }
+.scheduled-toolbar-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+.scheduled-status-count {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--studio-muted);
+    font-size: 12px;
+    white-space: nowrap;
+}
+.scheduled-list-toolbar .scheduled-status-filter { margin-right: 0; }
+
+/* Standalone calendar page: reuse the automations calendar sizing, hide Development chrome. */
+html.calendar-page .studio-shell {
+    grid-template-columns: minmax(0, 1fr);
+}
+html.calendar-page .studio-sidebar,
+html.calendar-page .development-mobile-navigation,
+html.calendar-page #development-task-header,
+html.calendar-page .task-inspector {
+    display: none !important;
+}
+#calendar-workspace .scheduled-calendar-toolbar { margin-top: 0; }
+#calendar-workspace .scheduled-calendar {
+    --cal-h: max(360px, calc(100vh - 150px));
+    height: var(--cal-h);
+}
+#calendar-workspace .scheduled-calendar-month.cal-fixed { flex: none; height: calc(var(--cal-h) - 36px); }
+#calendar-workspace .scheduled-calendar-agenda.week.cal-fixed { flex: none; height: 100%; }
+#calendar-workspace .scheduled-calendar.cal-has-timegrid,
+#calendar-workspace .scheduled-calendar { overflow-x: auto; }
+@media (max-width: 980px) {
+    .scheduled-list-toolbar {
+        grid-template-columns: 1fr;
+        justify-items: stretch;
+    }
+    .scheduled-toolbar-left, .scheduled-toolbar-right, .scheduled-toolbar-center { justify-content: flex-start; }
+    #calendar-workspace .scheduled-calendar { --cal-h: max(360px, calc(100dvh - 220px)); overflow-x: auto; }
+}

@@ -9,13 +9,13 @@ from unittest.mock import patch, MagicMock, call
 
 
 class TestUpdateOracleSkin:
-    """update_oracle_skin should migrate the value before persisting."""
+    """Restoring the live skin migrates legacy values without editing an agent."""
 
     @patch("distr.core.services.settings_service.update_setting")
     @patch("distr.core.services.settings_service.signal_manager")
     def test_gif_filename_migrated_to_oracle(self, mock_sm, mock_update):
         from distr.core.services.settings_service import update_oracle_skin
-        update_oracle_skin("0.gif")
+        update_oracle_skin("0.gif", persist_chat=False)
         mock_update.assert_called_once_with(
             "selected_oracle", "oracle",
             signal=mock_sm.direct_oracle_change,
@@ -27,7 +27,7 @@ class TestUpdateOracleSkin:
     @patch("distr.core.services.settings_service.signal_manager")
     def test_folder_name_passes_through(self, mock_sm, mock_update):
         from distr.core.services.settings_service import update_oracle_skin
-        update_oracle_skin("clippy")
+        update_oracle_skin("clippy", persist_chat=False)
         mock_update.assert_called_once_with(
             "selected_oracle", "clippy",
             signal=mock_sm.direct_oracle_change,
@@ -39,7 +39,7 @@ class TestUpdateOracleSkin:
     @patch("distr.core.services.settings_service.signal_manager")
     def test_empty_string_defaults_to_oracle(self, mock_sm, mock_update):
         from distr.core.services.settings_service import update_oracle_skin
-        update_oracle_skin("")
+        update_oracle_skin("", persist_chat=False)
         mock_update.assert_called_once_with(
             "selected_oracle", "oracle",
             signal=mock_sm.direct_oracle_change,

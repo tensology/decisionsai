@@ -1,15 +1,16 @@
-// Development automation list/calendar. Full edits open in place on this
+// Development automation list, plus the standalone calendar page. Full edits open in place on this
 // surface so execution bindings and schedule metadata have one save path.
 import { displayModelName, shortModelName } from '../../shared/model_variant.js?v=20261022-automodel';
 import { SNAP_MINUTES, snapMinutes, timeToMinutes, minutesToTime, topForMinutes, shiftSchedule, groupCalendarEvents } from './calendar_drag.js?v=20261030-calendar-groups';
 import { loadInstalledHarnesses, harnessSelectOptions, harnessLabel } from '../../shared/harnesses.js?v=20261022-harnesssrc';
 
 export function createAutomations({ context, actions, el }) {
-    // autofilter 2026-10-22: view + status filter remembered for the session (sessionStorage, as chat.js does).
-    const VIEW_KEY = 'decisions_automations_view';
+    // autofilter 2026-10-22: status filter remembered for the session (sessionStorage, as chat.js does).
     const STATUS_KEY = 'decisions_automations_status_filter';
     const readSession = (key, fallback) => { try { return sessionStorage.getItem(key) || fallback; } catch (_) { return fallback; } };
     const writeSession = (key, value) => { try { sessionStorage.setItem(key, value); } catch (_) {} };
+    const isCalendarMode = () => context.workspaceMode === 'calendar';
+    const isScheduledSurface = () => ['automations', 'automation_rules', 'calendar'].includes(context.workspaceMode);
     const state = {
         selectedAutomationId: '',
         creatingAutomation: false,
@@ -20,7 +21,7 @@ export function createAutomations({ context, actions, el }) {
         editorTab: 'details',
         missingAutomationId: '',
         automationRuns: {},
-        view: readSession(VIEW_KEY, 'list') === 'calendar' ? 'calendar' : 'list',
+        view: 'list',
         statusFilter: readSession(STATUS_KEY, 'all'),
         calendarMode: 'week',
         calendarAnchor: new Date()
@@ -126,6 +127,12 @@ export function createAutomations({ context, actions, el }) {
         root.dataset.value = state.statusFilter;
         root.querySelector('.studio-dropdown-value').textContent = key2text(labelFor(state.statusFilter));
         root.querySelector('.studio-dropdown-button .studio-count-pill').textContent = String(countFor(state.statusFilter));
+        const center = el('scheduled-toolbar-center');
+        if (center) {
+            center.innerHTML = ['all', ...statuses]
+                .map((key) => `<span class="scheduled-status-count"><span>${labelFor(key)}</span><span class="studio-count-pill">${countFor(key)}</span></span>`)
+                .join('');
+        }
     }
     function key2text(html) {
         const node = document.createElement('span');
@@ -555,16 +562,35 @@ export function createAutomations({ context, actions, el }) {
         });
         return true;
     }
-    // Calendar views put Status first, then the date navigation; List keeps its own layout.
-    function placeStatusFilter(calendarView) {
+    // Calendar puts Status, Add, and the cog on the calendar toolbar; the list keeps its three-zone toolbar.
+    function placeToolbarControls(calendarView) {
         const filter = document.querySelector('.scheduled-status-filter');
-        const toolbar = el('scheduled-calendar-toolbar');
-        const controls = el('scheduled-view-toggle');
-        if (!filter || !toolbar || !controls) return;
-        if (calendarView) {
-            if (toolbar.firstElementChild !== filter) toolbar.insertBefore(filter, toolbar.firstElementChild);
-        } else if (filter.parentElement !== controls) {
-            controls.insertBefore(filter, controls.firstElementChild);
+        const cog = el('automation-presets-btn');
+        const add = el('automation-new');
+        const menu = el('automation-preset-menu');
+        const left = el('scheduled-toolbar-left');
+        const right = el('scheduled-toolbar-right');
+        const calendarToolbar = el('scheduled-calendar-toolbar');
+        const compose = el('scheduled-automation-compose');
+        if (calendarView && calendarToolbar) {
+            if (filter && calendarToolbar.firstElementChild !== filter) calendarToolbar.insertBefore(filter, calendarToolbar.firstElementChild);
+            if (compose) {
+                if (add && add.parentElement !== compose) compose.appendChild(add);
+                if (cog && cog.parentElement !== compose) compose.appendChild(cog);
+                if (compose.parentElement !== calendarToolbar) {
+                    const after = filter && filter.parentElement === calendarToolbar ? filter.nextSibling : calendarToolbar.firstElementChild;
+                    calendarToolbar.insertBefore(compose, after);
+                }
+            }
+            if (menu && menu.parentElement !== calendarToolbar) calendarToolbar.appendChild(menu);
+        } else if (left && right) {
+            if (filter && filter.parentElement !== left) left.insertBefore(filter, left.firstElementChild);
+            if (cog && cog.parentElement !== left) {
+                const beforeMenu = menu && menu.parentElement === left ? menu : null;
+                left.insertBefore(cog, beforeMenu);
+            }
+            if (menu && menu.parentElement !== left) left.appendChild(menu);
+            if (add && add.parentElement !== right) right.appendChild(add);
         }
     }
 
@@ -796,33 +822,29 @@ export function createAutomations({ context, actions, el }) {
     // ---------- page ----------
     function renderScheduledWorkspace() {
         const list = el('scheduled-list');
-        if (!list) return;
+        const calendar = el('scheduled-calendar');
+        if (!list && !calendar) return;
         const rules = context.workspaceMode === 'automation_rules';
         syncEditorFromRoute();
         const editingOpen = Boolean(state.selectedAutomationId && (state.selectedAutomationId === 'new' || state.creatingAutomation || findAutomation(state.selectedAutomationId)));
-        const calendarView = state.view === 'calendar';
-        placeStatusFilter(calendarView);
-        list.classList.toggle('hidden', calendarView || editingOpen);
+        const calendarView = isCalendarMode();
+        state.view = calendarView ? 'calendar' : 'list';
+        placeToolbarControls(calendarView);
+        list?.classList.toggle('hidden', calendarView || editingOpen);
         el('scheduled-calendar-wrap')?.classList.toggle('hidden', !calendarView || editingOpen);
         const editorRoot = el('scheduled-automation-editor');
         editorRoot?.classList.toggle('hidden', !editingOpen);
         if (editorRoot) editorRoot.hidden = !editingOpen;
-        el('scheduled-view-toggle')?.classList.toggle('hidden', editingOpen);
+        el('scheduled-list-toolbar')?.classList.toggle('hidden', editingOpen || calendarView);
         el('scheduled-automation-compose')?.classList.toggle('hidden', editingOpen);
+        el('automation-new')?.classList.toggle('hidden', editingOpen);
+        el('automation-presets-btn')?.classList.toggle('hidden', editingOpen);
         const toolbar = el('scheduled-calendar-toolbar');
-        if (toolbar) {
-            toolbar.classList.toggle('hidden', editingOpen);
-            if (!editingOpen) {
-                toolbar.classList.toggle('list-mode', !calendarView);
-                const toggleButton = el('scheduled-view-toggle');
-                if (toggleButton && toggleButton.parentElement !== toolbar) toolbar.appendChild(toggleButton);
-            }
-        }
-        document.querySelectorAll('[data-scheduled-view]').forEach((button) => {
-            const active = button.dataset.scheduledView === state.view;
-            button.classList.toggle('active', active);
-            button.setAttribute('aria-pressed', String(active));
-        });
+        if (toolbar) toolbar.classList.toggle('hidden', editingOpen || !calendarView);
+        const scheduledWs = el('scheduled-workspace');
+        const calendarWs = el('calendar-workspace');
+        if (scheduledWs) scheduledWs.classList.toggle('hidden', calendarView && !editingOpen);
+        if (calendarWs) calendarWs.classList.toggle('hidden', !calendarView || editingOpen);
         renderStatusFilter();
         if (editingOpen) {
             renderAutomationEditor();
@@ -1087,7 +1109,7 @@ export function createAutomations({ context, actions, el }) {
                 actions.toast('Schedule saved.');
                 closeEditModal();
                 await actions.refreshShell({ preserveConversation: true });
-                if (['automations', 'automation_rules'].includes(context.workspaceMode)) renderScheduledWorkspace();
+                if (isScheduledSurface()) renderScheduledWorkspace();
             } catch (err) {
                 error.textContent = err.message || 'Could not save the schedule.';
             }
@@ -1223,13 +1245,15 @@ export function createAutomations({ context, actions, el }) {
     function automationWorkspacePath(automationId) {
         const base = context.workspaceMode === 'automation_rules'
             ? '/development/automation-rules/'
-            : '/development/automations/';
+            : context.workspaceMode === 'calendar'
+              ? '/development/calendar/'
+              : '/development/automations/';
         return automationId ? `${base}?automation=${encodeURIComponent(automationId)}` : base;
     }
 
     function requestedAutomationId() {
         const path = new URL(window.location.href).pathname;
-        if (!/(?:^|\/)development\/(?:automations|automation-rules|scheduled-actions)\/?$/.test(path)) return '';
+        if (!/(?:^|\/)(?:calendar|development\/(?:automations|automation-rules|scheduled-actions|calendar))\/?$/.test(path)) return '';
         return (new URL(window.location.href).searchParams.get('automation') || '').trim();
     }
 
@@ -1818,7 +1842,7 @@ export function createAutomations({ context, actions, el }) {
             setAutomationLocation(automationWorkspacePath(saved.id || existingId), { replace: true });
             const root = el('scheduled-automation-editor');
             if (root) root.dataset.editingId = String(saved.id || existingId);
-            if (['automations', 'automation_rules'].includes(context.workspaceMode)) {
+            if (isScheduledSurface()) {
                 await actions.refreshShell({ preserveConversation: true });
             }
         } catch (error) {
@@ -1886,7 +1910,7 @@ export function createAutomations({ context, actions, el }) {
     // Kept under the old name for callers: shows the automation read-only on this page.
     function openAutomationDialog(automation) {
         if (!automation) return;
-        if (!['automations', 'automation_rules'].includes(context.workspaceMode) && actions.setWorkspaceMode) {
+        if (!isScheduledSurface() && actions.setWorkspaceMode) {
             actions.setWorkspaceMode('automations');
         }
         openHistoryModal(automation.id);
@@ -1897,8 +1921,8 @@ export function createAutomations({ context, actions, el }) {
             const result = await actions.api(`/automations/${encodeURIComponent(automationId)}/run`, { method: 'POST', body: {} });
             actions.toast(result.run?.summary || 'Automation started.');
             delete state.automationRuns[String(automationId)];
-            await actions.refreshShell({ preserveConversation: ['automations', 'automation_rules'].includes(context.workspaceMode) });
-            if (['automations', 'automation_rules'].includes(context.workspaceMode)) renderScheduledWorkspace();
+            await actions.refreshShell({ preserveConversation: isScheduledSurface() });
+            if (isScheduledSurface()) renderScheduledWorkspace();
         } catch (error) {
             actions.toast(error.message || 'Could not run the automation.', 'error');
         }
@@ -1909,7 +1933,7 @@ export function createAutomations({ context, actions, el }) {
             await actions.api(`/automations/${encodeURIComponent(automationId)}/${action}`, { method: 'POST', body: {} });
             actions.toast(action === 'pause' ? 'Automation paused.' : 'Automation resumed.');
             await actions.refreshShell({ preserveConversation: true });
-            if (['automations', 'automation_rules'].includes(context.workspaceMode)) renderScheduledWorkspace();
+            if (isScheduledSurface()) renderScheduledWorkspace();
         } catch (error) {
             actions.toast(error.message || 'Could not update the automation.', 'error');
         }
@@ -1949,8 +1973,8 @@ export function createAutomations({ context, actions, el }) {
 
     function bindEvents() {
         if (location.hash === '#calendar' && !requestedAutomationId()) {
-            state.view = 'calendar';
-            writeSession(VIEW_KEY, 'calendar');
+            if (actions.setWorkspaceMode) actions.setWorkspaceMode('calendar');
+            else window.location.replace('/development/calendar/');
         }
         let resizeTimer = 0;
         window.addEventListener('resize', () => {
@@ -1984,16 +2008,6 @@ export function createAutomations({ context, actions, el }) {
                 closeCalendarMenu();
             }
         });
-        const toolbar = el('scheduled-calendar-toolbar');
-        const toggleButton = el('scheduled-view-toggle');
-        if (toolbar && toggleButton && toggleButton.parentElement !== toolbar) toolbar.appendChild(toggleButton);
-        document.querySelectorAll('[data-scheduled-view]').forEach((button) =>
-            button.addEventListener('click', () => {
-                state.view = button.dataset.scheduledView === 'calendar' ? 'calendar' : 'list';
-                writeSession(VIEW_KEY, state.view);
-                renderScheduledWorkspace();
-            })
-        );
         bindStatusDropdown();
         el('scheduled-calendar-previous')?.addEventListener('click', () => moveCalendar(-1));
         el('scheduled-calendar-next')?.addEventListener('click', () => moveCalendar(1));

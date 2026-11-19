@@ -5,6 +5,24 @@ import { splitClientDraft } from './client-draft.js?v=20261112-message-client';
 // Owns threads transcript rendering, interactions, and private view state.
 export function createThreadsTranscript({ context, actions, el, token }) {
     const activityDisclosureState = new Map();
+    function currentWorkflowRunner() {
+        const runId = actions.workflowRunId?.(context.currentWorkflowRun);
+        return runId ? el('message-list').querySelector(`[data-workflow-runner][data-run-id="${runId}"]`) : null;
+    }
+    el('thread-workflow-jump')?.addEventListener('click', () => {
+        const runner = currentWorkflowRunner();
+        if (!runner) return;
+        const disclosure = runner.closest('details');
+        if (disclosure) disclosure.open = true;
+        const conversation = el('conversation');
+        const offset = (disclosure || runner).getBoundingClientRect().top - conversation.getBoundingClientRect().top - 8;
+        conversation.scrollTo({ top: conversation.scrollTop + offset, behavior: 'instant' });
+        const region = runner.querySelector('[role="region"]');
+        if (region) {
+            region.tabIndex = -1;
+            region.focus({ preventScroll: true });
+        }
+    });
     function activityKey(value) {
         return `${context.currentChat?.id || ''}:${value}`;
     }
@@ -16,7 +34,7 @@ export function createThreadsTranscript({ context, actions, el, token }) {
     function restoreActivityState(root, focusedKey) {
         let focusTarget = null;
         root.querySelectorAll('details[data-activity-key]').forEach((node) => {
-            node.open = activityDisclosureState.get(node.dataset.activityKey) || false;
+            node.open = activityDisclosureState.get(node.dataset.activityKey) ?? node.open;
             if (focusedKey === node.dataset.activityKey) focusTarget = node.querySelector(':scope > summary');
         });
         focusTarget?.focus({ preventScroll: true });
@@ -1037,7 +1055,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const currentStepId = Number(run?.current_step_id || run?.step_id || event.step_id || 0);
         const currentIndex = steps.findIndex((step) => Number(step.id) === currentStepId);
         const completed = ['completed', 'success', 'succeeded', 'done', 'cancelled', 'canceled'].includes(runStatus);
-        const failed = ['failed', 'error'].includes(runStatus);
+        const failed = ['failed', 'error', 'blocked'].includes(runStatus);
         return steps.map((step, index) => {
             if (completed) return { ...step, status: 'done' };
             if (!currentStepId && !runStatus) return { ...step, status: 'pending' };
@@ -1070,7 +1088,15 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         );
         const title = workflow?.name || event.workflow_name || 'Workflow';
         const stepRoutes = run?.step_routes || {};
-        const routeDataFor = (step) => stepRoutes[String(step.id)] || stepRoutes[step.id] || {};
+        const routeDataFor = (step) => {
+            if (step.action_type === 'run_command') {
+                const route = step.config?.command_model_route;
+                return route?.provider && route?.model
+                    ? { backend: route.provider, model: route.model, source: 'command', rationale: 'The command calls this model directly.' }
+                    : { backend: 'Shell command', rationale: 'The command controls any model it calls.' };
+            }
+            return stepRoutes[String(step.id)] || stepRoutes[step.id] || {};
+        };
         const routeFor = (step) => {
             const route = routeDataFor(step);
             return [route.backend || route.backend_id, route.model || step.model].filter(Boolean).join(' · ');
@@ -1109,7 +1135,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             outputFor,
             ariaLabel: `${title} steps`
         });
-        const runId = String(run?.id || event.run_id || '');
+        const runId = String(actions.workflowRunId?.(run) || event.run_id || '');
         const interaction = (context.controlState?.interactions || []).find((item) => String(item.run_id || '') === runId) || null;
         const interactionActions = Array.isArray(interaction?.allowed_actions) ? interaction.allowed_actions : [];
         const actionable = interactionActions.filter((action) => action !== 'feedback');
@@ -1165,7 +1191,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             emptyHtml: '',
             buttonAttrs: stepButtonAttrs
         });
-        return `<article class="studio-message workflow-runner" data-workflow-runner="${mode}" data-run-id="${actions.escapeHtml(String(run?.id || event.run_id || ''))}">
+        return `<article class="studio-message workflow-runner" data-workflow-runner="${mode}" data-run-id="${actions.escapeHtml(runId)}">
             <div class="thread-workflow-runner ${mode}" data-view="${viewMode}" data-status="${actions.escapeHtml(runStatus)}" role="region" aria-label="${actions.escapeHtml(title)} workflow" aria-live="${mode === 'live' ? 'polite' : 'off'}">
                 <div class="thread-workflow-runner-head"><strong>${actions.escapeHtml(title)}</strong><div class="thread-workflow-runner-tools"><span class="thread-workflow-status-badge ${actions.escapeHtml(runStatus)}">${actions.escapeHtml(runBadge)}</span>${workflowViewSwitchHtml(viewMode, { attr: 'data-thread-workflow-view', className: 'workflow-view-switch thread-workflow-view-switch' })}</div></div>
                 ${checkpoint}
@@ -1230,30 +1256,35 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
     }
 
     function liveWorkflowRunnerHtml() {
-        const run = context.currentRun;
+        const run = context.currentWorkflowRun;
         const workflow = context.currentWorkflow;
-        if (!run || run.direct || !workflow || !actions.isActiveAgentRun?.(run)) return '';
+        if (!workflow || !actions.isActiveAgentRun?.(run)) return '';
         return workflowRunnerHtml({ workflow, run, mode: 'live' });
     }
 
-    function workflowMessageHtml(message, index = 0, messages = []) {
+    function workflowMessageHtml(message, index = 0, messages = [], inHistory = false) {
         const event = message.workflow_event || {};
-        if (actions.isActiveAgentRun?.(context.currentRun) && context.currentWorkflow && !context.currentRun?.direct) {
+        const eventRunId = Number(event.run_id || 0);
+        const currentWorkflowRun = context.currentWorkflowRun;
+        const matchesCurrent = eventRunId && actions.workflowRunId?.(currentWorkflowRun) === eventRunId;
+        if (matchesCurrent && context.currentWorkflow && actions.isActiveAgentRun?.(currentWorkflowRun)) {
             return '';
         }
-        const eventRunId = Number(event.run_id || 0);
         if (eventRunId) {
             let lastIndex = -1;
+            let terminalIndex = -1;
             messages.forEach((item, itemIndex) => {
-                if ((item.role || '') === 'workflow' && Number(item.workflow_event?.run_id || 0) === eventRunId) lastIndex = itemIndex;
+                if (item.role !== 'workflow' || Number(item.workflow_event?.run_id || 0) !== eventRunId) return;
+                lastIndex = itemIndex;
+                if (['completed', 'failed', 'blocked', 'cancelled', 'canceled'].includes(item.workflow_event?.status)) terminalIndex = itemIndex;
             });
-            if (lastIndex >= 0 && lastIndex !== index) return '';
+            const displayIndex = matchesCurrent || terminalIndex < 0 ? lastIndex : terminalIndex;
+            if (displayIndex >= 0 && displayIndex !== index) return '';
         }
         const workflow = workflowDefinitionFor(event);
-        const matchingRun =
-            context.currentRun && !context.currentRun.direct && Number(actions.workflowRunId?.(context.currentRun) || 0) === eventRunId
-                ? context.currentRun
-                : { status: event.status, current_step_id: event.step_id, step_id: event.step_id };
+        const matchingRun = matchesCurrent
+            ? currentWorkflowRun
+            : { status: event.status, current_step_id: event.step_id, step_id: event.step_id };
         const done = !['initializing', 'queued', 'running', 'waiting', 'paused'].includes(String(matchingRun.status || event.status || '').toLowerCase());
         const runner = workflowRunnerHtml({
             workflow: workflow || { name: event.workflow_name || 'Workflow', steps: [] },
@@ -1261,17 +1292,19 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             event,
             mode: done ? 'done' : 'live'
         });
+        const status = String(matchingRun.status || event.status || '');
+        const label = inHistory ? `Run #${eventRunId} · ${status === 'failed' ? 'Failed' : actions.statusLabel(status)}` : 'View workflow';
         return done
-            ? `<details class="turn-activity-disclosure" data-activity-key="${actions.escapeHtml(activityKey(`workflow:${eventRunId || index}`))}"><summary>View workflow<span class="turn-activity-chevron" aria-hidden="true">›</span></summary>${runner}</details>`
+            ? `<details class="turn-activity-disclosure" data-activity-key="${actions.escapeHtml(activityKey(`workflow:${eventRunId || index}`))}"${matchesCurrent ? ' open' : ''}><summary>${actions.escapeHtml(label)}<span class="turn-activity-chevron" aria-hidden="true">›</span></summary>${runner}</details>`
             : runner;
     }
 
     function completedWorkflowHistoryHtml(chat, messages) {
-        const run = context.currentRun;
+        const run = context.currentWorkflowRun;
         const workflow = context.currentWorkflow;
         const runId = Number(actions.workflowRunId?.(run) || 0);
-        if (!runId || !workflow || run.direct || Number(run.chat_id) !== Number(chat.id)
-            || !['completed', 'failed', 'cancelled'].includes(String(run.status || '').toLowerCase())) return '';
+        if (!runId || !workflow || Number(run.chat_id) !== Number(chat.id)
+            || !['completed', 'failed', 'blocked', 'cancelled', 'canceled', 'completed_noop'].includes(String(run.status || '').toLowerCase())) return '';
         if (messages.some((message) => message.role === 'workflow' && Number(message.workflow_event?.run_id) === runId)) return '';
         // Some chats expose workflow events only in root metadata, not as
         // transcript messages. Keep the completed own run inspectable anyway.
@@ -1281,7 +1314,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const result = run.summary
             ? `<section class="thread-workflow-feedback message-body" data-workflow-run-result="${runId}"><strong>Run result</strong><div class="message-markdown">${assistantMarkdown(run.summary)}</div></section>`
             : '';
-        return `<details class="turn-activity-disclosure" data-activity-key="${actions.escapeHtml(activityKey(`workflow:${runId}`))}"><summary>View workflow<span class="turn-activity-chevron" aria-hidden="true">›</span></summary>${runner}${result}</details>`;
+        return `<details class="turn-activity-disclosure" data-activity-key="${actions.escapeHtml(activityKey(`workflow:${runId}`))}" open><summary>View workflow<span class="turn-activity-chevron" aria-hidden="true">›</span></summary>${runner}${result}</details>`;
     }
 
     function liveLegacyActivityEvents(chat) {
@@ -1297,6 +1330,66 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
                 event_type: status === 'failed' ? 'tool_failed' : status === 'running' ? 'tool_started' : 'tool_completed',
                 detail: tool.detail || tool.result_detail || '', metadata: {...tool.metadata, tool_name: tool.tool_name || tool.title || 'tool'}}];
         });
+    }
+
+
+    let streamText = '';
+    let streamPaintTimer = 0;
+
+    function streamNearBottom() {
+        const conversation = el('conversation');
+        if (!conversation) return true;
+        return conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight <= 48;
+    }
+
+    function paintStreamDraft() {
+        streamPaintTimer = 0;
+        const list = el('message-list');
+        if (!list || !streamText) return;
+        const nearBottom = streamNearBottom();
+        let article = list.querySelector('.active-turn');
+        if (!article) {
+            const assistantIdentity = window.DecisionsAssistantIdentity?.html() || '<span class="assistant-avatar-fallback" aria-hidden="true"></span>';
+            list.insertAdjacentHTML('beforeend', `<article class="studio-message active-turn"><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body"><div class="active-turn-draft message-markdown" data-thread-stream></div></div></article>`);
+            article = list.querySelector('.active-turn');
+        }
+        let draft = article.querySelector('.active-turn-draft');
+        if (!draft) {
+            const body = article.querySelector('.message-body') || article;
+            body.insertAdjacentHTML('afterbegin', '<div class="active-turn-draft message-markdown" data-thread-stream></div>');
+            draft = article.querySelector('.active-turn-draft');
+        }
+        draft.innerHTML = assistantMarkdown(streamText);
+        if (nearBottom) {
+            const conversation = el('conversation');
+            if (conversation) conversation.scrollTop = conversation.scrollHeight;
+        }
+    }
+
+    function appendStreamToken(token) {
+        const next = String(token || '');
+        if (!next) return;
+        if (!streamText || next.startsWith(streamText)) streamText = next;
+        else if (streamText.endsWith(next) || streamText.includes(next)) return;
+        else streamText += next;
+        if (!streamPaintTimer) streamPaintTimer = window.setTimeout(paintStreamDraft, 40);
+    }
+
+    function syncStreamFromRun() {
+        const run = context.currentRun || {};
+        const active = ['initializing', 'queued', 'running'].includes(String(run.status || '').toLowerCase());
+        const official = String(run.streamed_output || '');
+        if (!active) {
+            streamText = '';
+            if (streamPaintTimer) {
+                window.clearTimeout(streamPaintTimer);
+                streamPaintTimer = 0;
+            }
+            return;
+        }
+        if (official.length > streamText.length && (!streamText || official.startsWith(streamText))) {
+            streamText = official;
+        }
     }
 
     function durableTurnActivity(chat) {
@@ -1352,12 +1445,12 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const [currentLabel, currentDetail, currentCommand] = proactiveSummary
             ? [proactiveSummary, '']
             : currentTurnAction(latest, label, detail);
-        const draft = String(run.streamed_output || '').trim();
+        const draft = String(streamText || run.streamed_output || '').trim();
         const stop = proactiveSummary && run.can_stop
             ? '<button type="button" class="header-button danger proactive-turn-stop" data-stop-proactive-turn>Stop</button>'
             : '';
         return `<article class="studio-message active-turn"><div class="message-avatar" data-assistant-identity>${assistantIdentity}</div><div class="message-body">
-            ${draft ? `<div class="active-turn-draft message-markdown">${assistantMarkdown(draft)}</div>` : ''}
+            ${draft ? `<div class="active-turn-draft message-markdown" data-thread-stream>${assistantMarkdown(draft)}</div>` : ''}
             ${activeEvents.filter(event => event?.metadata?.approval_request?.status === 'pending').map(event => approvalCardHtml(event.metadata.approval_request)).join('')}
             <details class="turn-activity-disclosure live-activity" data-activity-key="${actions.escapeHtml(activityKey(`turn:${active?.turn_id || run.turn_id || 'live'}`))}"><summary class="active-turn-summary"><span class="loading-message ${label.toLowerCase()}" role="status" aria-live="polite"><span>${actions.escapeHtml(currentLabel)} <small>${actions.escapeHtml(currentDetail)}</small></span></span><span class="turn-activity-chevron" aria-hidden="true">›</span></summary><div class="turn-event-stream">${turnEventRowsHtml(activeEvents.filter(event => !event?.metadata?.approval_request), { includeRunning: true, active: true }) || '<p class="activity-empty">Waiting for the first activity update.</p>'}${currentCommand ? `<code class="active-command">${actions.escapeHtml(currentCommand)}</code>` : ''}</div></details>
             ${stop}
@@ -1365,6 +1458,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
     }
 
     function syncDurableTurnActivity() {
+        syncStreamFromRun();
         if (!context.currentChat) return;
         const list = el('message-list'); list.__lastRenderedHtml = null; // in-place edit: next full render must not be skipped
         const focusedKey = captureActivityState(list);
@@ -1425,6 +1519,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
     }
 
     function renderConversation(chat, { preserveReadingPosition = false } = {}) {
+        syncStreamFromRun();
         const conversation = el('conversation');
         const readingPosition = preserveReadingPosition &&
             conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight > 24
@@ -1440,6 +1535,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         }
         el('studio-empty').classList.add('hidden');
         const list = el('message-list');
+        const workflowNavigation = el('thread-workflow-navigation');
         const focusedKey = captureActivityState(list);
         const messages = chronologicalNotices((chat.messages || [])
             .filter((message) => !isDevelopmentConversationNoise(message, chat)))
@@ -1468,8 +1564,24 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
                 .map((message) => [String(message.chat_row_id), userMessagePresentation(message).content])
         );
         const completedWorkflowHistory = completedWorkflowHistoryHtml(chat, messages);
+        const currentRunId = actions.workflowRunId?.(context.currentWorkflowRun);
+        const previousAttempts = new Map();
+        if (currentRunId && context.currentWorkflow) {
+            messages.forEach((message, index) => {
+                const event = message.workflow_event;
+                if (message.role !== 'workflow' || Number(event?.workflow_id) !== Number(context.currentWorkflow.id)
+                    || !Number(event.run_id) || Number(event.run_id) === currentRunId) return;
+                previousAttempts.set(index, workflowMessageHtml(message, index, messages, true));
+            });
+        }
+        const attempts = Array.from(previousAttempts.values()).filter(Boolean);
+        const previousRuns = attempts.length
+            ? `<details class="turn-activity-disclosure" data-activity-key="${actions.escapeHtml(activityKey(`workflow-history:${context.currentWorkflow.id}`))}"><summary>Earlier workflow runs (${attempts.length})<span class="turn-activity-chevron" aria-hidden="true">›</span></summary>${attempts.join('')}</details>`
+            : '';
+        const historyIndex = previousAttempts.keys().next().value;
         const nextHtml = `${messages
             .map((message, index) => {
+                if (previousAttempts.has(index)) return index === historyIndex ? previousRuns : '';
                 const rowId = message.chat_row_id == null ? '' : String(message.chat_row_id);
                 return `${index === latestAssistantIndex ? completedWorkflowHistory : ''}${messageHtml(message, index, latestAssistantIndex, turnsByRow.get(rowId), instructionsByRow.get(rowId) || '', durableActivityKeys, messages)}`;
             })
@@ -1480,18 +1592,26 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         list.__lastRenderedHtml = nextHtml;
         list.innerHTML = nextHtml;
         restoreActivityState(list, focusedKey);
+        workflowNavigation?.classList.toggle('hidden', !currentWorkflowRunner());
         list.classList.remove('hidden');
         actions.bindConversationActions(list, messages);
         bindWorkflowStepRails(list);
-        const runner = list.querySelector('[data-workflow-runner="live"]');
+        const workflowRunId = actions.workflowRunId?.(context.currentWorkflowRun);
+        const focusedRunner = () => workflowRunId && list.querySelector(
+            `[data-workflow-runner="live"][data-run-id="${workflowRunId}"], details[open] [data-workflow-runner="done"][data-run-id="${workflowRunId}"]`
+        );
+        const runner = focusedRunner();
         const runId = runner?.dataset.runId || '';
         if (readingPosition !== null) {
             conversation.scrollTop = readingPosition;
         } else if (runId && list.dataset.workflowFocusRunId !== runId) {
-            list.dataset.workflowFocusRunId = runId;
             window.setTimeout(() => {
-                if (!runner.isConnected) return;
-                conversation.scrollTop += runner.getBoundingClientRect().top - conversation.getBoundingClientRect().top - 8;
+                const currentRunner = focusedRunner();
+                if (currentRunner?.dataset.runId !== runId || list.dataset.workflowFocusRunId === runId) return;
+                list.dataset.workflowFocusRunId = runId;
+                const anchor = currentRunner.closest('details') || currentRunner;
+                const offset = anchor.getBoundingClientRect().top - conversation.getBoundingClientRect().top - 8;
+                conversation.scrollTo({ top: conversation.scrollTop + offset, behavior: 'instant' });
             }, 80);
         } else if (!runner && !list.querySelector('.turn-activity-disclosure[open]')) {
             window.requestAnimationFrame(() => {
@@ -1501,6 +1621,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
     }
     return {
         appendSpokenMessage,
+        appendStreamToken,
         playSpokenButtonHtml,
         assistantMarkdown,
         gitStatusEntries,

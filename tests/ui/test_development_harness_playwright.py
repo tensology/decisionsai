@@ -73,6 +73,8 @@ def _install_api(
     legacy_skill_message: bool = False,
     lane_move_notice: bool = False,
     stale_workflow_on_direct_thread: bool = False,
+    workflow_linked_by_messages: bool = False,
+    workflow_retry_history: bool = False,
     url_activity: bool = False,
     long_whatsapp_thread: bool = False,
     automation_thread_chat_id: int | None = None,
@@ -157,7 +159,7 @@ def _install_api(
         "autonomy_level": autonomy_level,
         "development": ({"execution": direct_run, "ticket_id": 42} if direct_execution else True),
         "development_source_type": "prompt",
-        "development_workflow_id": 44 if (not direct_execution or stale_workflow_on_direct_thread) else None,
+        "development_workflow_id": 44 if (not direct_execution or stale_workflow_on_direct_thread) and not workflow_linked_by_messages else None,
         "development_execution": direct_run,
         "development_time_running": running_timer,
         "development_time_seconds": 5 if running_timer else 125,
@@ -239,9 +241,17 @@ def _install_api(
             ],
         }] if (completed_activity or durable_url_activity) else []),
     }
+    if direct_execution:
+        chat['messages'] = [message for message in chat['messages'] if message['role'] != 'workflow']
+    if workflow_retry_history:
+        chat["messages"][1:1] = [
+            {"role": "workflow", "workflow_event": {
+                "run_id": run_id, "workflow_id": 44, "status": "failed", "step_id": 1,
+                "summary": "Scene validation failed",
+            }}
+            for run_id in (97, 98)
+        ]
     if activity_events is not None:
-        if direct_execution:
-            chat['messages'] = [message for message in chat['messages'] if message['role'] != 'workflow']
         if live_activity:
             chat['active_turn']['events'] = activity_events
         elif chat['turns']:
@@ -277,6 +287,10 @@ def _install_api(
         "steps": workflow_steps,
         "run_settings": {"studio": {"ticket_id": 42}},
     }
+    if workflow_retry_history:
+        workflow["steps"][0].update(action_type="run_command", config={"command_model_route": {
+            "provider": "OpenRouter", "model": "deepseek/deepseek-v4.1-flash-1017",
+        }})
     workflow_rows = [workflow]
     thread_time = {
         "chat_id": 17,
@@ -778,7 +792,7 @@ def _install_api(
                 "open_url": "/development/threads/17/",
                 "related_ticket_url": "/kanban/?ticket_id=42",
                 "cancellation_target": {"kind": "workflow", "url": "/api/workflows/44/cancel-run/99"},
-            }] if (pending_interaction or live_activity) and not (workflow_cancelled or (complete_after_refresh and active_run_reads > 1)) else [])
+            }] if (pending_interaction or live_activity) and not direct_execution and not (workflow_cancelled or (complete_after_refresh and active_run_reads > 1)) else [])
         elif path == "/api/workflows/44/runs":
             payload = ([{"id": 99, "workflow_id": 44, "status": "completed"}]
                        if workflow_cancelled or (complete_after_refresh and active_run_reads > 1) else [])
@@ -2824,6 +2838,7 @@ def test_direct_development_agent_is_not_misrepresented_as_a_workflow(page: Page
     page.goto(URL)
 
     expect(page.locator(".active-turn-summary")).to_have_text(re.compile(r"Working|Updating|Running"))
+    expect(page.get_by_role("button", name="Jump to workflow")).to_be_hidden()
     _open_details(page)
     expect(page.locator("#inspector-content")).to_contain_text("Conversation")
     expect(page.locator("#inspector-content")).to_contain_text("Route receipt")
@@ -3472,13 +3487,11 @@ def test_workflow_stop_reconciles_without_a_permanent_spinner(page: Page):
     page.goto(URL)
 
     page.locator("#sidebar-workflows-toggle").click()
-    card = page.locator("[data-workflow-card='44']")
-    expect(card.get_by_role("button", name="Stop Development execution")).to_be_visible()
-    card.get_by_role("button", name="Stop Development execution").click()
+    row = page.locator('[data-active-execution="99"]')
+    row.get_by_label("What you can do with this run").click()
+    row.get_by_role("button", name="Cancel").click()
 
-    expect(card.get_by_role("button", name="Start Development execution")).to_be_visible()
-    expect(card.locator(".workflow-spinner")).to_have_count(0)
-    expect(card.locator(".workflow-state")).not_to_have_class(re.compile(r"running"))
+    expect(row).to_have_count(0)
     assert ("POST", "/api/workflows/44/cancel-run/99") in requests
     assert requests.count(("GET", "/api/workflows/active-runs")) >= 2
 
@@ -3535,6 +3548,85 @@ def test_workflows_three_dot_menu_routes_workflow_cancel(page: Page):
     row.get_by_role("button", name="Cancel").click()
 
     assert ("POST", "/api/workflows/44/cancel-run/99") in requests
+
+
+def test_workflow_remains_visible_when_a_direct_turn_and_workflow_overlap(page: Page, tmp_path: Path):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests, live_activity=True, seven_step_workflow=True, workflow_linked_by_messages=True, workflow_retry_history=True)
+    state = {"workflow_status": "running", "direct": False}
+
+    def workflow_run():
+        return {"id": 99, "workflow_id": 44, "chat_id": 17, "status": state["workflow_status"], "current_step_id": 2}
+
+    def active_runs(route):
+        runs = [workflow_run()] if state["workflow_status"] == "running" else []
+        route.fulfill(json=runs)
+
+    def execution(route):
+        direct = {"direct": True, "job_id": "preflight", "chat_id": 17, "status": "running"}
+        route.fulfill(json=direct if state["direct"] else {"direct": False, **workflow_run()})
+
+    page.route("**/api/workflows/active-runs*", active_runs)
+    def workflow_history(route):
+        assert parse_qs(urlparse(route.request.url).query)["chat_id"] == ["17"]
+        route.fulfill(json=[{**workflow_run(), "id": 100, "chat_id": 18}, workflow_run()])
+
+    page.route("**/api/workflows/44/runs?*", workflow_history)
+    page.route("**/api/workflows/studio/tasks/17/execution", execution)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(URL)
+    runner = page.locator('[data-workflow-runner="live"]')
+    expect(runner).to_be_visible()
+    jump = page.get_by_role("button", name="Jump to workflow")
+    expect(jump).to_be_in_viewport()
+    jump.click()
+    expect(runner.locator('[role="region"]')).to_be_focused()
+    command_step = runner.locator('.thread-workflow-ring').get_by_role("tab", name=re.compile("Understand"))
+    expect(command_step).to_have_attribute("data-step-backend", "OpenRouter")
+    expect(command_step).to_have_attribute("data-step-model", "deepseek/deepseek-v4.1-flash-1017")
+    page.screenshot(path=str(tmp_path / "workflow-running.png"))
+
+    with page.expect_response("**/api/workflows/studio/tasks/17/execution", timeout=12000):
+        state["direct"] = True
+    expect(runner).to_be_visible()
+
+    state["workflow_status"] = "blocked"
+    disclosure = page.locator('details[data-activity-key="17:workflow:99"]')
+    expect(disclosure.locator(".thread-workflow-runner")).to_be_visible(timeout=12000)
+    expect(runner).to_have_count(0)
+    expect(page.locator("#message-list summary").filter(has_text=re.compile("^View workflow"))).to_have_count(1)
+    history = page.locator('details[data-activity-key="17:workflow-history:44"]')
+    expect(history.locator(":scope > summary")).to_have_text(re.compile("Earlier workflow runs \\(2\\)"))
+    history.locator(":scope > summary").click()
+    expect(history.get_by_text("Run #97 · Failed")).to_be_visible()
+    expect(history.get_by_text("Run #98 · Failed")).to_be_visible()
+    page.screenshot(path=str(tmp_path / "workflow-retry-history.png"))
+    history.locator(":scope > summary").click()
+    expect(disclosure).to_have_attribute("open", "")
+    disclosure.scroll_into_view_if_needed()
+    page.screenshot(path=str(tmp_path / "workflow-blocked.png"))
+    page.set_viewport_size({"width": 740, "height": 900})
+    disclosure.scroll_into_view_if_needed()
+    page.screenshot(path=str(tmp_path / "workflow-blocked-narrow.png"))
+
+    disclosure.locator("summary").click()
+    with page.expect_response("**/api/workflows/studio/tasks/17/execution", timeout=12000):
+        state["direct"] = False
+    expect(disclosure.locator(".thread-workflow-runner")).to_be_hidden()
+    expect(disclosure.locator("summary")).to_be_visible()
+    expect(jump).to_be_in_viewport()
+    jump.click()
+    expect(disclosure).to_have_attribute("open", "")
+    expect(disclosure.locator(".thread-workflow-runner-head")).to_be_in_viewport()
+    page.screenshot(path=str(tmp_path / "workflow-jump-narrow.png"))
+
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.reload()
+    expect(jump).to_be_in_viewport()
+    jump.click()
+    expect(disclosure.locator(".thread-workflow-runner-head")).to_be_in_viewport()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=str(tmp_path / "workflow-jump-mobile.png"))
 
 
 def test_thread_shows_readable_workflow_step_rail_while_run_is_active(page: Page):
@@ -3603,11 +3695,22 @@ def test_thread_shows_readable_workflow_step_rail_while_run_is_active(page: Page
         page.goto(URL)
         expect(page.locator('[data-workflow-runner="live"]')).to_be_visible()
         page.wait_for_timeout(200)
-        runner_y = page.locator('[data-workflow-runner="live"]').bounding_box()["y"]
-        conversation_y = page.locator("#conversation").bounding_box()["y"]
-        assert conversation_y <= runner_y <= conversation_y + 20
+        runner = page.locator('[data-workflow-runner="live"]').bounding_box()
+        conversation = page.locator("#conversation")
+        offset = runner["y"] - conversation.bounding_box()["y"]
+        assert offset >= 0
+        if offset > 20:
+            assert conversation.evaluate("node => node.scrollHeight - node.clientHeight - node.scrollTop <= 1")
+            assert runner["y"] + runner["height"] <= page.locator(".studio-composer:visible").bounding_box()["y"]
         assert page.locator("body").evaluate("node => node.scrollWidth <= document.documentElement.clientWidth")
         page.locator('[data-thread-workflow-view="loop"]').click()
+        assert page.locator(".thread-workflow-ring .workflow-loop-node > button").evaluate_all("""nodes => {
+            const boxes = nodes.map(node => node.getBoundingClientRect());
+            return boxes.every((box, index) => boxes.slice(index + 1).every(other =>
+                box.right <= other.left || other.right <= box.left ||
+                box.bottom <= other.top || other.bottom <= box.top
+            ));
+        }""")
         page.screenshot(path=f"/private/tmp/decisions-workflow-runner-{width}.png", full_page=False)
         page.locator(".thread-workflow-ring").get_by_role("tab", name=re.compile("Build")).click()
         expect(dialog).to_be_visible()

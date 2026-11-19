@@ -1,4 +1,10 @@
-from distr.core.agent.tool_intents import forced_tool_names_for_text, is_workflow_follow_up
+from distr.core.agent.tool_intents import (
+    forced_tool_names_for_text,
+    is_explicit_create_action_request,
+    is_saved_action_run_or_list_request,
+    is_workflow_follow_up,
+    pair_saved_action_tools,
+)
 
 
 def test_screenshot_intent_forces_screenshot_analyzer() -> None:
@@ -55,6 +61,16 @@ def test_calendar_event_follow_ups_are_recognized():
     assert is_workflow_follow_up("First option.")
     assert is_workflow_follow_up("I want you to perform the second option")
     assert not is_workflow_follow_up("Create a ticket for this bug")
+
+
+def test_action_follow_ups_allow_leading_so_then_okay_yes():
+    assert is_workflow_follow_up("run it")
+    assert is_workflow_follow_up("do that")
+    assert is_workflow_follow_up("Okay, can you run it?")
+    assert is_workflow_follow_up("So do that.")
+    assert is_workflow_follow_up("yes run it")
+    assert is_workflow_follow_up("then do that")
+    assert is_workflow_follow_up("okay, do that")
 
 
 def test_forces_file_convert_automation_and_exit_tools():
@@ -197,3 +213,52 @@ def test_forces_cursor_ticket_for_decisionsai_ticket_only_in_debug(monkeypatch):
 
     assert "create_ticket" in forced
     assert "create_cursor_ticket" not in forced
+
+
+_TONIGHT_LIST_OR_RUN = (
+    "What's the list of actions that I can actually run?",
+    "I want to list the list of actions that you have and that I've created, you know, custom actions.",
+    "Okay, can you run it?",
+)
+
+
+def test_tonight_action_utterances_force_list_and_play_action():
+    for request in _TONIGHT_LIST_OR_RUN:
+        forced = forced_tool_names_for_text(request)
+        assert "list_actions" in forced, request
+        assert "play_action" in forced, request
+
+
+def test_run_it_follow_ups_force_list_and_play_action():
+    for request in ("Okay, can you run it?", "yes run it", "run it"):
+        forced = forced_tool_names_for_text(request)
+        assert "list_actions" in forced, request
+        assert "play_action" in forced, request
+
+
+def test_so_do_that_is_a_run_or_list_follow_up_not_a_create():
+    assert is_workflow_follow_up("So do that.")
+    assert is_saved_action_run_or_list_request("So do that.")
+    assert not is_explicit_create_action_request("So do that.")
+    assert "list_actions" not in forced_tool_names_for_text("So do that.")
+
+
+def test_pair_saved_action_tools_includes_both():
+    assert pair_saved_action_tools(["list_actions"]) == ["list_actions", "play_action"]
+    assert pair_saved_action_tools(["play_action"]) == ["play_action", "list_actions"]
+    assert pair_saved_action_tools(["run_workflow"]) == ["run_workflow"]
+
+
+def test_saved_action_rules_do_not_steal_unrelated_runs_or_creates():
+    assert "play_action" not in forced_tool_names_for_text("Run ticket 42")
+    assert "list_actions" not in forced_tool_names_for_text("list scheduled actions")
+    assert "play_action" not in forced_tool_names_for_text("list scheduled actions")
+    assert "list_actions" not in forced_tool_names_for_text("Create an action named Morning setup")
+    assert "play_action" not in forced_tool_names_for_text("Create an action named Morning setup")
+    assert is_explicit_create_action_request("Create an action named Morning setup")
+
+
+def test_tonight_list_and_run_requests_are_saved_action_run_or_list():
+    for request in _TONIGHT_LIST_OR_RUN + ("So do that.",):
+        assert is_saved_action_run_or_list_request(request), request
+        assert not is_explicit_create_action_request(request), request

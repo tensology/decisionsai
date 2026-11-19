@@ -1,4 +1,4 @@
-"""autofilter 2026-10-22: status filter + List/Calendar segmented toggle on the Automations page."""
+"""autofilter 2026-10-22: status filter on the Automations list toolbar."""
 import re
 from pathlib import Path
 
@@ -7,14 +7,15 @@ JS = ROOT / "distr/gui/web/static/development/automations/index.js"
 HTML = ROOT / "distr/gui/web/templates/development/automations/workspace.html"
 
 
-def test_toolbar_markup_has_filter_and_segmented_toggle():
+def test_toolbar_markup_has_filter_and_three_zones():
     html = HTML.read_text()
     assert 'id="scheduled-status-filter"' in html and '<select id="scheduled-status-filter"' not in html
     assert 'aria-haspopup="listbox"' in html and 'role="listbox"' in html
     assert 'class="scheduled-status-filter-label" id="scheduled-status-filter-label">Status</span>' in html
     assert 'studio-dropdown-chevron' in html
-    assert 'data-scheduled-view="list"' in html and 'data-scheduled-view="calendar"' in html
-    assert 'aria-pressed="true">List' in html and 'aria-pressed="false">Calendar' in html
+    assert 'id="scheduled-toolbar-left"' in html and 'id="scheduled-toolbar-center"' in html and 'id="scheduled-toolbar-right"' in html
+    assert 'id="automation-presets-btn"' in html and 'id="automation-new"' in html
+    assert 'data-scheduled-view="list"' not in html and 'data-scheduled-view="calendar"' not in html
     assert "scheduled-view-toggle-label" not in html
 
 
@@ -26,11 +27,11 @@ def test_statuses_come_from_listing_groups_only():
     assert "automationGroup(automation) === state.statusFilter" in body
 
 
-def test_view_toggle_syncs_aria_and_session():
+def test_status_filter_syncs_session():
     js = JS.read_text()
-    assert "button.setAttribute('aria-pressed', String(active));" in js
-    assert "writeSession(VIEW_KEY, state.view)" in js and "writeSession(STATUS_KEY, state.statusFilter)" in js
-    assert re.search(r"view: readSession\(VIEW_KEY, 'list'\) === 'calendar'", js)
+    assert "writeSession(STATUS_KEY, state.statusFilter)" in js
+    assert "function placeToolbarControls" in js
+    assert "scheduled-toolbar-center" in js
     assert "scheduled-view-toggle-label" not in js
 
 

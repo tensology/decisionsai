@@ -5,7 +5,7 @@ and Build stores one analysis row (work_reports) per request.
 """
 import asyncio
 from datetime import datetime
-from fastapi import Query
+from fastapi import Query, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict
 
@@ -181,6 +181,7 @@ def register_routes(router, templates):
 
     @router.get("/workflows/studio/reports/period")
     async def development_period_report(
+        request: Request,
         month: str | None = Query(None, description="YYYY-MM calendar month"),
         start: str | None = Query(None, description="YYYY-MM-DD (Africa/Johannesburg)"),
         end: str | None = Query(None, description="YYYY-MM-DD inclusive"),
@@ -189,14 +190,20 @@ def register_routes(router, templates):
         include_automations: bool = Query(False),
         calendar_only: bool = Query(False, description="Live time-entry refresh: reuse recent local collation, re-read Tensology"),
     ):
-        from distr.core.reports.month import get_period_report
+        from distr.core.reports.month import get_period_report, period_report_etag
 
         period, project_ids = _period_args(month, start, end, projects)
         _, saved_project_ids = _period_args(month, start, end, saved_projects) if saved_projects is not None else (period, None)
+        etag = period_report_etag(
+            period, project_ids, saved_project_ids=saved_project_ids,
+            include_automations=include_automations, calendar_only=calendar_only)
+        headers = {"Cache-Control": "private, max-age=0, must-revalidate", "ETag": etag}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
         return JSONResponse(await _calendar_call(
             get_period_report, period, project_ids, saved_project_ids=saved_project_ids, include_automations=include_automations,
             calendar_only=calendar_only),
-            headers={"Cache-Control": "no-store"})
+            headers=headers)
 
     @router.post("/workflows/studio/reports/period/build")
     async def development_period_report_build(data: PeriodReportBuild):

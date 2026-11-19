@@ -958,6 +958,9 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
             "in complete conversational sentences: no preamble, restated request, raw logs, or closing offers."
         )
     if not task.adapter_options.get('disable_tools') and not task.adapter_options.get('read_only_expected'):
+        # Pi restores the last tool declarations when resuming a session. An
+        # earlier assessment must not leave a later repair without coding tools.
+        command.extend(['--tools', '+read,+bash,+edit,+write,+grep,+find,+ls'])
         command.extend(['--extension', str(Path(__file__).resolve().parent / 'pi_extensions' / 'checked_bash.ts')])
     # Development image attachments go in as real image input (pi ``@file``
     # arguments), so a vision-capable model sees them in the first message
@@ -3330,6 +3333,34 @@ def _compact_execution_value(value: Any, *, depth: int = 0) -> Any:
     return value
 
 
+
+def _live_assistant_text_delta(event: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return a turn-sink copy of a streaming text_delta, or None.
+
+    Development execution records compact and throttle ``message_update``
+    events before they reach Mission Control and SQLite. The live
+    Development thread still needs the raw delta so cli_harness can emit
+    OUTPUT_DELTA mid-turn. Planning proposal mode never uses that wrapper
+    and already forwards these events unchanged.
+    """
+    if not isinstance(event, dict) or str(event.get("type") or "").strip().lower() != "message_update":
+        return None
+    assistant = event.get("assistantMessageEvent")
+    if not isinstance(assistant, dict) or str(assistant.get("type") or "") != "text_delta":
+        return None
+    delta = str(assistant.get("delta") or "")
+    if not delta:
+        return None
+    live = {
+        "type": "message_update",
+        "assistantMessageEvent": {"type": "text_delta", "delta": delta},
+    }
+    session_id = event.get("execution_session_id")
+    if session_id is not None:
+        live["execution_session_id"] = session_id
+    return live
+
+
 def _compact_execution_event(event: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(event, dict):
         return {"value": str(event)[:4000]}
@@ -3943,6 +3974,12 @@ async def run_project_task(
         safe_event = redact_handoff_payload(event)
         if not isinstance(safe_event, dict):
             safe_event = {}
+        # Forward text deltas to the turn sink before persistence throttling
+        # and compacting, which intentionally drop token text.
+        live_delta = _live_assistant_text_delta(safe_event)
+        if live_delta:
+            live_delta["execution_session_id"] = int(execution_session_id)
+            _emit(on_event, live_delta)
         message = _execution_event_message(safe_event)
         now = time.monotonic()
         if _is_duplicate_progress_event(

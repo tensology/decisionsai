@@ -2,6 +2,7 @@
 import os
 import time
 from threading import Event
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -175,8 +176,12 @@ def test_motion_starts_before_decode_finishes_and_waits_at_buffer_end(app, monke
         release.set()
         wait_for(app, lambda: player._decode_task is None)
         assert len(player._frames) == 3
+        now = player._last_advance_at
+        monkeypatch.setattr(webm, "time", SimpleNamespace(monotonic=lambda: now))
+        now += 0.045
         player._advance()
         assert player._current_index == 2
+        now += 0.041
         player._advance()
         assert player._current_index == 1
         assert not player._forward
@@ -185,3 +190,32 @@ def test_motion_starts_before_decode_finishes_and_waits_at_buffer_end(app, monke
         webm._decode_pool.waitForDone(3000)
         player.stop()
         app.processEvents()
+
+
+@pytest.mark.parametrize(("playback", "expected_index"), [("loop", 5), ("pingpong", 3)])
+def test_webm_render_cap_preserves_source_speed(app, monkeypatch, playback, expected_index):
+    monkeypatch.setattr(
+        webm, "_extract_frames_imageio",
+        lambda path, prepare_frame: ([prepare_frame(image()) for _ in range(10)], 25),
+    )
+    now = 0.0
+    monkeypatch.setattr(webm, "time", SimpleNamespace(monotonic=lambda: now))
+    player = webm.WebMPlayer()
+    player.load_async("oracle.webm", playback=playback)
+    wait_for(app, lambda: player._decode_task is None)
+    try:
+        player.play()
+        assert player._timer.interval() == 66
+        for tick in range(1, 10):
+            now = tick * 0.066
+            player._advance()
+        # 594 ms at 25 fps advances 14 source frames in nine renders.
+        assert player._current_index == 4
+        now = 0.599
+        player._advance()
+        assert player._current_index == 4
+        now = 0.625
+        player._advance()
+        assert player._current_index == expected_index
+    finally:
+        player.stop()

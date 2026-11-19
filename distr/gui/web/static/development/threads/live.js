@@ -1,5 +1,5 @@
 // Owns the selected thread socket, reconnect delay and coalesced refresh timer.
-export function createThreadLiveUpdates({ token, isActive, refresh }) {
+export function createThreadLiveUpdates({ token, isActive, refresh, onStreamToken }) {
     let socket = null,
         reconnect = null,
         refreshTimer = null;
@@ -31,6 +31,10 @@ export function createThreadLiveUpdates({ token, isActive, refresh }) {
             try {
                 const message = JSON.parse(event.data);
                 if (message.type === 'pong' || Number(message.chat_id || id) !== id) return;
+                if (message.event === 'stream_token' && message.token) {
+                    onStreamToken?.(id, String(message.token));
+                    return;
+                }
                 // Automatic sounds belong to new Incoming proposals. Thread
                 // progress and completion refresh the UI without a chime.
                 clearTimeout(refreshTimer);

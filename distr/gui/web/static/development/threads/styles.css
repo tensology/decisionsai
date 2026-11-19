@@ -206,6 +206,8 @@ html.dev-board-route #chrome-play-group #development-kanban-more { display: grid
 .conversation { min-height: 0; overflow: auto; scroll-behavior: smooth; scrollbar-width: thin; background: var(--studio-bg); }
 .thread-conversation { grid-row: 2; display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--studio-bg); }
 .thread-conversation:has(> .conversation.hidden) { display: none; }
+.thread-workflow-navigation { width: min(780px, calc(100% - 42px)); margin: 8px auto 0; }
+.thread-workflow-navigation .header-button { min-height: 32px; }
 .thread-attachment-warning { width: min(780px, calc(100% - 42px)); margin: 8px auto 0; padding: 8px 12px; border: 1px solid rgba(255,120,120,.45); border-radius: 8px; color: var(--studio-danger-text, #fca5a5); font-size: 12px; overflow-wrap: anywhere; }
 .thread-telegram-status, .thread-queue-handoff { width: min(780px, calc(100% - 42px)); margin: 8px auto 0; padding: 8px 12px; border: 1px solid var(--studio-line); border-radius: 8px; color: var(--studio-muted); font-size: 12px; overflow-wrap: anywhere; }
 .thread-queue-handoff { border-color: rgba(245,158,11,.46); color: var(--studio-text); }
@@ -1433,8 +1435,9 @@ html.dev-board-route #chrome-play-group #development-kanban-more { display: grid
     .thread-workflow-runner-head strong { white-space: normal; }
     .thread-workflow-runner-tools { justify-content: space-between; }
     .thread-workflow-ring .workflow-loop-map.compact { height: 210px; min-height: 210px; }
-    .thread-workflow-ring .workflow-loop-node { width: 76px; }
-    .thread-workflow-ring .workflow-loop-node > button { gap: 4px; padding: 5px; }
+    .thread-workflow-ring .workflow-loop-node,
+    .thread-workflow-ring .workflow-loop-map.dense .workflow-loop-node { width: clamp(44px, 20%, 68px); }
+    .thread-workflow-ring .workflow-loop-node > button { gap: 4px; padding: 4px 5px; }
     .thread-workflow-ring .workflow-loop-node > button > strong { font-size: 9px; }
     .thread-workflow-feedback-head { align-items: flex-start; }
     .thread-workflow-live-feedback { flex-wrap: wrap; }

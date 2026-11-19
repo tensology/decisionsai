@@ -2,6 +2,7 @@
 Projects routes — /projects/*, /browse-folder
 """
 from fastapi import HTTPException, File, UploadFile, Form, Request, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from starlette.requests import ClientDisconnect
 from typing import Optional, Any
@@ -1820,6 +1821,32 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error(f"Failed to create project: {e}", exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/projects/import-tensology")
+    async def import_tensology_project(request: Request):
+        from distr.core.tensology_project_import import MAX_MANIFEST_BYTES, StarterImportError, import_starter, parse_manifest
+        from distr.gui.web.security import is_allowed_local_origin, require_internal_token_request
+
+        require_internal_token_request(request)
+        origin = request.headers.get("origin")
+        if not is_allowed_local_origin(origin) or origin != f"{request.url.scheme}://{request.url.netloc}":
+            raise HTTPException(status_code=403, detail="Open Projects in your local DecisionsAI app to import this file.")
+        if request.headers.get("content-type", "").partition(";")[0].strip() != "application/json":
+            raise HTTPException(status_code=415, detail="Choose the JSON project file downloaded from Tensology.")
+        payload = bytearray()
+        async for chunk in request.stream():
+            if len(chunk) + len(payload) > MAX_MANIFEST_BYTES:
+                raise HTTPException(status_code=413, detail="Choose a Tensology project file smaller than 8 KB.")
+            payload.extend(chunk)
+        try:
+            manifest = parse_manifest(bytes(payload))
+            project_id, created = await run_in_threadpool(import_starter, manifest)
+        except StarterImportError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("Tensology project import failed")
+            raise HTTPException(status_code=500, detail="The project could not be imported. Try again.") from exc
+        return {"id": project_id, "created": created}
 
     @router.patch("/projects/{project_id}")
     async def update_project(project_id: int, request: Request):

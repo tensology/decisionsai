@@ -297,6 +297,25 @@ async def create_request(request: Request):
         return JSONResponse(_view(row), headers=_NO_STORE)
 
 
+@router.get("")
+async def list_requests(request: Request, chat_id: int, include_recent: bool = False):
+    """Approval cards for one Chat / group thread (no secrets). Pending ones, plus
+    ones decided in the last few minutes when include_recent is set."""
+    _require_token(request)
+    from distr.core.db import DevApprovalRequest, get_session
+    with get_session() as session:
+        rows = (session.query(DevApprovalRequest)
+                .filter(DevApprovalRequest.chat_id == int(chat_id))
+                .order_by(DevApprovalRequest.id.desc()).limit(20).all())
+        out = []
+        recent = _now() - timedelta(minutes=5)
+        for row in rows:
+            _expire(session, row)
+            if row.status == "pending" or (include_recent and (row.decided_date or row.expires_at) >= recent):
+                out.append(_view(row))
+        return JSONResponse({"approvals": list(reversed(out))}, headers=_NO_STORE)
+
+
 @router.get("/{request_id}")
 async def get_request(request_id: str, request: Request):
     _require_token(request)

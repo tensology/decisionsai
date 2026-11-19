@@ -720,7 +720,8 @@ class EventHandlerMixin:
         if event == 'oracle_change':
             filename = data.get('filename')
             if filename:
-                signal_manager.direct_oracle_change.emit(filename)
+                from distr.core.services.settings_service import update_oracle_skin
+                update_oracle_skin(filename)
             else:
                 logger.warning(f"[EVENT QUEUE] oracle_change event missing filename: {data}")
         elif event == 'change_oracle':

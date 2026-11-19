@@ -49,7 +49,12 @@ class OpenAICompatibleLLMService(BaseLLMService):
     _MAX_GENERATION_TIME_WITHOUT_TOOL = 15.0
     _FOLLOW_UP_STREAM_TIMEOUT_SEC = 60.0
     _TOOL_EXECUTION_TIMEOUT_SEC = 90.0
-    _LONG_RUNNING_TOOL_TIMEOUTS = {"save_audio": 1800.0}
+    # Tools that may wait for Paul's in-chat Approve/Deny card (15 min, then deny)
+    # need an outer ceiling above that wait, or a late click could act after the
+    # turn has moved on.
+    _LONG_RUNNING_TOOL_TIMEOUTS = {"save_audio": 1800.0, "message_agent": 180.0,
+                                   "playwright_browser": 1200.0, "web_browser": 1020.0,
+                                   "calendar_blocks": 1020.0, "snippets": 1020.0}
     _tool_execution_in_progress = False
     _DIRECT_SPEECH_TOOLS = {"speak_on_desktop"}
     _GENERIC_TOOL_COMPLETIONS = {"done", "done.", "finished", "finished."}
@@ -95,10 +100,22 @@ class OpenAICompatibleLLMService(BaseLLMService):
         tickets_verified: bool = False,
     ) -> str:
         """Reject a cross-domain mutation when the user's intent is deterministic."""
+        try:
+            from distr.core.agent_capabilities import tool_block_reason
+
+            capability_block = tool_block_reason(func_name)
+            if capability_block:
+                return capability_block
+        except Exception:
+            logger.debug("Could not evaluate agent capability guard", exc_info=True)
         if not str(last_user_message or "").strip():
             return ""
         try:
-            from distr.core.agent.tool_intents import forced_tool_names_for_text
+            from distr.core.agent.tool_intents import (
+                forced_tool_names_for_text,
+                is_explicit_create_action_request,
+                is_saved_action_run_or_list_request,
+            )
 
             ticket_scope_required = "create_ticket" in forced_tool_names_for_text(
                 last_user_message
@@ -137,6 +154,15 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     "Blocked wrong-domain mutation: this request is about durable tickets. "
                     "Use create_ticket and require its returned ticket id; create_action creates "
                     "a desktop macro Action, not project work."
+                )
+            if (
+                func_name == "create_action"
+                and is_saved_action_run_or_list_request(last_user_message)
+                and not is_explicit_create_action_request(last_user_message)
+            ):
+                return (
+                    "Blocked wrong-domain mutation: this request is to run or list an "
+                    "existing saved action. Use play_action."
                 )
             if func_name == "pi_agent" and ticket_scope_required and not tickets_verified:
                 return (

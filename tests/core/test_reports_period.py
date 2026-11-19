@@ -123,6 +123,7 @@ def test_split_by_sast_day_cuts_at_local_midnight():
 
 @pytest.fixture()
 def report_db(tmp_path, monkeypatch):
+    month.clear_report_memo_for_tests()
     engine = create_engine(f"sqlite:///{tmp_path / 'reports.db'}")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -590,3 +591,264 @@ def test_auto_paused_thread_timer_links_to_execution_without_hiding_manual_entry
     assert sorted(b['source'] for b in result['blocks']) == ['decisions_thread', 'pi_decisions']
     run = next(b for b in result['blocks'] if b['source'] == 'pi_decisions')
     assert run['related_refs'] == [f'chat:{item.chat_id}'] and run['seconds'] == 109
+
+
+def test_session_activity_is_cached_by_path_mtime_and_size(tmp_path, monkeypatch):
+    month.clear_report_memo_for_tests()
+    path = tmp_path / "session.jsonl"
+    path.write_text(
+        json.dumps({"type": "session", "id": "s", "timestamp": "2026-10-15T06:00:00.000Z", "cwd": "/tmp/w"}) + "\n"
+        + json.dumps({"type": "message", "id": "m", "timestamp": "2026-10-15T06:00:05.000Z",
+                      "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}}) + "\n"
+    )
+    reads = {"n": 0}
+    real = month._read_session_activity
+
+    def counted(p, *, kind):
+        reads["n"] += 1
+        return real(p, kind=kind)
+
+    monkeypatch.setattr(month, "_read_session_activity", counted)
+    first = month._session_activity(path, kind="pi")
+    second = month._session_activity(path, kind="pi")
+    assert reads["n"] == 1
+    assert first[0]["id"] == second[0]["id"] == "s"
+    assert first[1] == second[1]
+    path.write_text(path.read_text() + json.dumps(
+        {"type": "message", "id": "m2", "timestamp": "2026-10-15T06:10:00.000Z",
+         "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}}) + "\n")
+    third = month._session_activity(path, kind="pi")
+    assert reads["n"] == 2
+    assert len(third[1]) >= len(first[1])
+
+
+def test_get_period_report_reuses_snapshot_until_revision_changes(monkeypatch):
+    month.clear_report_memo_for_tests()
+    period = month.month_period("2026-10", today=date(2026, 11, 6))
+    revision = ["local-1", "tensology-1"]
+    calls = {"collate": 0, "project_report": 0}
+
+    monkeypatch.setattr(month, "_report_memo_allowed", lambda kwargs: True)
+    monkeypatch.setattr(month, "report_data_revision", lambda *a, **k: tuple(revision))
+    monkeypatch.setattr(month, "collate", lambda *a, **k: (calls.__setitem__("collate", calls["collate"] + 1) or {
+        "period": {"start": "2026-10-01", "end": "2026-10-31", "kind": "month", "label": "Oct 2026"},
+        "blocks": [], "by_project": [], "by_day": [], "projects": [], "sources": [],
+        "totals": {"seconds": 0}, "invoice_summary": {},
+    }))
+
+    def fake_project_report(snapshot, period):
+        calls["project_report"] += 1
+        return snapshot
+
+    monkeypatch.setattr("distr.core.reports.calendar_sync.project_report", fake_project_report)
+    monkeypatch.setattr(month, "latest_report", lambda *a, **k: None)
+    monkeypatch.setattr(month, "default_model", lambda: {"provider": "x", "model": "y"})
+    monkeypatch.setattr(month, "period_options", lambda: [])
+    monkeypatch.setattr(month, "attach_report_extras", lambda snapshot, ids: snapshot)
+
+    first = month.get_period_report(period, None)
+    second = month.get_period_report(period, None)
+    assert calls["collate"] == 1
+    assert calls["project_report"] == 1
+    assert first["totals"] == second["totals"]
+    # A Tensology-only change keeps local collation and rebuilds the merged snapshot.
+    revision[1] = "tensology-2"
+    month.get_period_report(period, None)
+    assert calls["collate"] == 1
+    assert calls["project_report"] == 2
+    # A local data change recomputes both.
+    revision[0] = "local-2"
+    month.get_period_report(period, None)
+    assert calls["collate"] == 2
+    assert calls["project_report"] == 3
+    assert month.period_report_etag(period, None) != month.period_report_etag(period, [1])
+
+
+def test_calendar_only_refresh_reuses_collation_but_rereads_tensology(monkeypatch):
+    month.clear_report_memo_for_tests()
+    period = month.month_period("2026-10", today=date(2026, 11, 6))
+    calls = {"collate": 0, "project_report": 0}
+    monkeypatch.setattr(month, "_report_memo_allowed", lambda kwargs: True)
+    monkeypatch.setattr(month, "report_data_revision", lambda *a, **k: ("rev", 7))
+    monkeypatch.setattr(month, "collate", lambda *a, **k: (calls.__setitem__("collate", calls["collate"] + 1) or {
+        "period": {"start": "2026-10-01", "end": "2026-10-31", "kind": "month", "label": "Oct 2026"},
+        "blocks": [], "by_project": [], "by_day": [], "projects": [], "sources": [],
+        "totals": {"seconds": 0}, "invoice_summary": {},
+    }))
+
+    def fake_project_report(snapshot, period):
+        calls["project_report"] += 1
+        snapshot = dict(snapshot)
+        snapshot["calendar_pass"] = calls["project_report"]
+        return snapshot
+
+    monkeypatch.setattr("distr.core.reports.calendar_sync.project_report", fake_project_report)
+    monkeypatch.setattr(month, "latest_report", lambda *a, **k: None)
+    monkeypatch.setattr(month, "default_model", lambda: {"provider": "x", "model": "y"})
+    monkeypatch.setattr(month, "period_options", lambda: [])
+    monkeypatch.setattr(month, "attach_report_extras", lambda snapshot, ids: snapshot)
+
+    month.get_period_report(period, None)
+    month.get_period_report(period, None, calendar_only=True)
+    month.get_period_report(period, None, calendar_only=True)
+    assert calls["collate"] == 1
+    assert calls["project_report"] == 3
+
+
+@pytest.fixture
+def report_disk(tmp_path):
+    from distr.core.reports import disk_cache
+    folder = tmp_path / "reports-cache"
+    disk_cache.set_report_cache_dir(folder)
+    month.clear_report_memo_for_tests()
+    yield folder
+    disk_cache.set_report_cache_dir(None)
+    month.clear_report_memo_for_tests()
+
+
+def test_session_activity_reloads_from_disk_after_memory_is_cleared(report_disk, tmp_path, monkeypatch):
+    path = tmp_path / "session.jsonl"
+    path.write_text(
+        json.dumps({"type": "session", "id": "s", "timestamp": "2026-10-15T06:00:00.000Z", "cwd": "/tmp/w"}) + "\n"
+        + json.dumps({"type": "message", "id": "m", "timestamp": "2026-10-15T06:00:05.000Z",
+                      "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}}) + "\n"
+    )
+    reads = {"n": 0}
+    real = month._read_session_activity
+
+    def counted(p, *, kind):
+        reads["n"] += 1
+        return real(p, kind=kind)
+
+    monkeypatch.setattr(month, "_read_session_activity", counted)
+    first = month._session_activity(path, kind="pi")
+    assert reads["n"] == 1
+    assert any(report_disk.joinpath("sessions").glob("*.json.gz"))
+    month.clear_report_memo_for_tests()
+    second = month._session_activity(path, kind="pi")
+    assert reads["n"] == 1
+    assert first[0]["id"] == second[0]["id"] == "s"
+    assert first[1] == second[1]
+
+
+def test_corrupt_or_old_session_disk_cache_is_ignored_and_rebuilt(report_disk, tmp_path, monkeypatch):
+    from distr.core.reports.disk_cache import CACHE_VERSION, session_cache_path
+    path = tmp_path / "session.jsonl"
+    path.write_text(
+        json.dumps({"type": "session", "id": "s", "timestamp": "2026-10-15T06:00:00.000Z", "cwd": "/tmp/w"}) + "\n"
+    )
+    reads = {"n": 0}
+    real = month._read_session_activity
+
+    def counted(p, *, kind):
+        reads["n"] += 1
+        return real(p, kind=kind)
+
+    monkeypatch.setattr(month, "_read_session_activity", counted)
+    month._session_activity(path, kind="pi")
+    assert reads["n"] == 1
+    st = path.stat()
+    key = (str(path), st.st_mtime_ns, st.st_size, "pi")
+    cached = session_cache_path(key)
+    cached.write_bytes(b"this is not a gzip cache")
+    month.clear_report_memo_for_tests()
+    month._session_activity(path, kind="pi")
+    assert reads["n"] == 2
+    # Old version is also ignored.
+    import gzip
+    cached.write_bytes(gzip.compress(json.dumps({"version": CACHE_VERSION - 1, "kind": "session", "key": [], "meta": {}, "stamps": []}).encode()))
+    month.clear_report_memo_for_tests()
+    month._session_activity(path, kind="pi")
+    assert reads["n"] == 3
+
+
+def test_session_disk_cache_invalidates_when_mtime_or_size_changes(report_disk, tmp_path, monkeypatch):
+    path = tmp_path / "session.jsonl"
+    path.write_text(json.dumps({"type": "session", "id": "s", "timestamp": "2026-10-15T06:00:00.000Z", "cwd": "/tmp/w"}) + "\n")
+    reads = {"n": 0}
+    real = month._read_session_activity
+
+    def counted(p, *, kind):
+        reads["n"] += 1
+        return real(p, kind=kind)
+
+    monkeypatch.setattr(month, "_read_session_activity", counted)
+    month._session_activity(path, kind="pi")
+    path.write_text(path.read_text() + json.dumps(
+        {"type": "message", "id": "m2", "timestamp": "2026-10-15T06:10:00.000Z",
+         "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}}) + "\n")
+    month.clear_report_memo_for_tests()
+    month._session_activity(path, kind="pi")
+    assert reads["n"] == 2
+
+
+def test_period_snapshot_reloads_from_disk_after_memory_is_cleared(report_disk, monkeypatch):
+    month.clear_report_memo_for_tests()
+    period = month.month_period("2026-10", today=date(2026, 11, 6))
+    revision = ["local-1", "tensology-1"]
+    calls = {"collate": 0, "project_report": 0}
+    monkeypatch.setattr(month, "_report_memo_allowed", lambda kwargs: True)
+    monkeypatch.setattr(month, "report_data_revision", lambda *a, **k: tuple(revision))
+    monkeypatch.setattr("distr.core.reports.calendar_sync.time_entry_change_version", lambda: 0)
+    monkeypatch.setattr(month, "collate", lambda *a, **k: (calls.__setitem__("collate", calls["collate"] + 1) or {
+        "period": {"start": "2026-10-01", "end": "2026-10-31", "kind": "month", "label": "Oct 2026"},
+        "blocks": [], "by_project": [], "by_day": [], "projects": [], "sources": [],
+        "totals": {"seconds": 0}, "invoice_summary": {},
+    }))
+
+    def fake_project_report(snapshot, period):
+        calls["project_report"] += 1
+        return snapshot
+
+    monkeypatch.setattr("distr.core.reports.calendar_sync.project_report", fake_project_report)
+    monkeypatch.setattr(month, "latest_report", lambda *a, **k: None)
+    monkeypatch.setattr(month, "default_model", lambda: {"provider": "x", "model": "y"})
+    monkeypatch.setattr(month, "period_options", lambda: [])
+    monkeypatch.setattr(month, "attach_report_extras", lambda snapshot, ids: snapshot)
+
+    first = month.get_period_report(period, None)
+    assert calls["collate"] == 1
+    assert any(report_disk.joinpath("periods").glob("*.json.gz"))
+    leftover = list(report_disk.rglob("*.part"))
+    assert leftover == []
+    month.clear_report_memo_for_tests()
+    second = month.get_period_report(period, None)
+    assert calls["collate"] == 1
+    assert calls["project_report"] == 1
+    assert first["totals"] == second["totals"]
+    # Startup load also hydrates a cleared process.
+    month.clear_report_memo_for_tests()
+    from distr.core.reports import disk_cache
+    disk_cache._period_preloaded.clear()
+    assert month.load_report_disk_cache() >= 1
+    third = month.get_period_report(period, None)
+    assert calls["collate"] == 1
+    assert third["totals"] == first["totals"]
+
+
+def test_corrupt_period_disk_cache_is_rebuilt(report_disk, monkeypatch):
+    period = month.month_period("2026-10", today=date(2026, 11, 6))
+    calls = {"collate": 0}
+    monkeypatch.setattr(month, "_report_memo_allowed", lambda kwargs: True)
+    monkeypatch.setattr(month, "report_data_revision", lambda *a, **k: ("local-1", "tensology-1"))
+    monkeypatch.setattr("distr.core.reports.calendar_sync.time_entry_change_version", lambda: 0)
+    monkeypatch.setattr(month, "collate", lambda *a, **k: (calls.__setitem__("collate", calls["collate"] + 1) or {
+        "period": {"start": "2026-10-01", "end": "2026-10-31", "kind": "month", "label": "Oct 2026"},
+        "blocks": [], "by_project": [], "by_day": [], "projects": [], "sources": [],
+        "totals": {"seconds": 0}, "invoice_summary": {},
+    }))
+    monkeypatch.setattr("distr.core.reports.calendar_sync.project_report", lambda snapshot, period: snapshot)
+    monkeypatch.setattr(month, "latest_report", lambda *a, **k: None)
+    monkeypatch.setattr(month, "default_model", lambda: {"provider": "x", "model": "y"})
+    monkeypatch.setattr(month, "period_options", lambda: [])
+    monkeypatch.setattr(month, "attach_report_extras", lambda snapshot, ids: snapshot)
+
+    month.get_period_report(period, None)
+    assert calls["collate"] == 1
+    for item in report_disk.joinpath("periods").glob("*.json.gz"):
+        item.write_bytes(b"broken")
+    month.clear_report_memo_for_tests()
+    from distr.core.reports import disk_cache
+    disk_cache._period_preloaded.clear()
+    month.get_period_report(period, None)
+    assert calls["collate"] == 2

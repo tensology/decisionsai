@@ -154,6 +154,85 @@ def test_create_project_also_creates_its_development_board():
         assert [lane.name for lane in board.lanes] == ["Backlog", "In Progress", "QA", "Complete"]
 
 
+def test_import_tensology_starter_creates_project_and_replays_without_overwriting(tmp_path, monkeypatch):
+    from distr.core import tensology_project_import
+
+    factory = _make_factory()
+    client = _make_client(factory)
+    customer_project = "08a00e08-a82e-4c75-944a-b72da77ea096"
+    preview = f"https://www.tensology.com/dashboard/trial-store?preview=1&project={customer_project}"
+    manifest = {
+        "version": 1,
+        "starter": "ecommerce",
+        "project_id": customer_project,
+        "name": "Northwind Store",
+        "preview_url": preview,
+    }
+    local = "http://127.0.0.1:8765"
+    token = "test-only-internal-token"
+    headers = {"Origin": local, "X-DecisionsAI-Internal-Token": token}
+    monkeypatch.setenv("DECISIONSAI_INTERNAL_API_TOKEN", token)
+    monkeypatch.setattr(tensology_project_import, "_projects_dir", lambda: tmp_path / "projects")
+    monkeypatch.setattr("distr.core.db.get_session", lambda: _session_ctx(factory))
+
+    def request(body=manifest, request_headers=headers):
+        return client.post(local + "/api/projects/import-tensology", json=body, headers=request_headers)
+
+    assert request(request_headers={"Origin": local}).status_code == 401
+    assert request(request_headers={**headers, "Origin": "https://www.tensology.com"}).status_code == 403
+    assert request({**manifest, "command": "touch unexpected"}).status_code == 422
+    assert request({**manifest, "preview_url": preview + "&preview=1"}).status_code == 422
+    assert request({**manifest, "preview_url": preview.replace(customer_project, "other")}).status_code == 422
+    assert not (tmp_path / "projects").exists()
+
+    imported = request()
+    assert imported.status_code == 200, imported.text
+    project_id = imported.json()["id"]
+    assert imported.json()["created"] is True
+    with factory() as session:
+        project = session.get(Project, project_id)
+        assert project.name == "Northwind Store"
+        assert project.coding_backend == "codex"
+        assert project.context_items[0].content == preview
+        assert session.get(KanbanBoard, project.kanban_board_id).default_project_id == project_id
+        folder = Path(project.folder_location)
+    assert (folder / "backend" / "manage.py").is_file()
+    assert (folder / "frontend" / "package.json").is_file()
+    (folder / "README.md").write_text("my local change", encoding="utf-8")
+    assert request().json() == {"id": project_id, "created": False}
+    assert (folder / "README.md").read_text(encoding="utf-8") == "my local change"
+
+
+def test_import_tensology_starter_keeps_an_unrelated_folder(tmp_path, monkeypatch):
+    from distr.core import tensology_project_import
+
+    factory = _make_factory()
+    monkeypatch.setattr("distr.core.db.get_session", lambda: _session_ctx(factory))
+    monkeypatch.setattr(tensology_project_import, "_projects_dir", lambda: tmp_path)
+    customer_project = "08a00e08-a82e-4c75-944a-b72da77ea096"
+    existing = tmp_path / f"tensology-{customer_project}"
+    existing.mkdir()
+    original = existing / "README.md"
+    original.write_text("local work", encoding="utf-8")
+    manifest = tensology_project_import.parse_manifest(
+        (
+            '{"version":1,"starter":"ecommerce","name":"Northwind","project_id":"'
+            + customer_project
+            + '","preview_url":"https://tensology.com/dashboard/trial-store?preview=1&project='
+            + customer_project
+            + '"}'
+        ).encode()
+    )
+    try:
+        tensology_project_import.import_starter(manifest)
+    except tensology_project_import.StarterImportError as error:
+        assert "already exists" in str(error)
+    else:
+        raise AssertionError("An unrelated folder was accepted")
+    assert original.read_text(encoding="utf-8") == "local work"
+    assert list(existing.iterdir()) == [original]
+
+
 def test_terminal_status_returns_shared_startup_and_shell_state():
     factory = _make_factory()
     client = _make_client(factory)

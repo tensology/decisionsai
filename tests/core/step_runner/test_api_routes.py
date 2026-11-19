@@ -229,6 +229,8 @@ class TestResultsHistory:
 
         mock_run = MagicMock()
         mock_run.id = 10
+        mock_run.workflow_id = 1
+        mock_run.chat_id = 20
         mock_run.started_at = None
         mock_run.completed_at = None
         mock_run.status = "running"
@@ -271,6 +273,8 @@ class TestResultsHistory:
         rows = get_run_history(1, limit=5)
         assert len(rows) == 1
         assert rows[0]["id"] == 10
+        assert rows[0]["workflow_id"] == 1
+        assert rows[0]["chat_id"] == 20
         assert rows[0]["phase"] == "execution"
         assert rows[0]["source_type"] == "kanban"
         assert rows[0]["board_id"] == 7

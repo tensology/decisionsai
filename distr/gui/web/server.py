@@ -245,10 +245,17 @@ def create_app() -> FastAPI:
                 "/skills/static/", "/projects/static/", "/oauth/static/",
                 "/static/shared/", "/static/development/",
             ]):
-                # Revalidate with ETag/Last-Modified (304) instead of no-store so
-                # Cmd+R can reuse unchanged development JS/CSS from disk cache.
-                response.headers["Cache-Control"] = "private, no-cache"
-                response.headers["Pragma"] = "no-cache"
+                # Versioned assets (?v=) can be cached for a long time: a content
+                # change bumps the query key. Unversioned files still revalidate.
+                if request.query_params.get("v"):
+                    response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+                    if "pragma" in response.headers:
+                        del response.headers["Pragma"]
+                else:
+                    # Revalidate with ETag/Last-Modified (304) instead of no-store so
+                    # Cmd+R can reuse unchanged development JS/CSS from disk cache.
+                    response.headers["Cache-Control"] = "private, no-cache"
+                    response.headers["Pragma"] = "no-cache"
             return response
     
     app.add_middleware(NoCacheMiddleware)
@@ -1030,6 +1037,18 @@ def create_app() -> FastAPI:
             _template_context(request, "/development"),
         )
 
+    @app.get("/calendar/", response_class=HTMLResponse)
+    async def calendar_page(request: Request):
+        return page_templates.TemplateResponse(
+            request,
+            "workflows/studio.html",
+            _template_context(request, "/calendar"),
+        )
+
+    @app.get("/calendar", response_class=HTMLResponse)
+    async def calendar_redirect():
+        return RedirectResponse(url="/calendar/", status_code=302)
+
     @app.get("/workflows/", response_class=HTMLResponse)
     async def workflows_page(request: Request):
         template = (
@@ -1180,6 +1199,20 @@ def create_app() -> FastAPI:
                 logger.warning("Incoming proposals cache warm failed", exc_info=True)
 
         asyncio.create_task(warm())
+
+    @app.on_event("startup")
+    async def _load_reports_disk_cache():
+        """Hydrate the Reports period snapshot cache so the first open after restart is warm."""
+        import asyncio
+
+        async def load():
+            try:
+                from distr.core.reports.month import load_report_disk_cache
+                await asyncio.to_thread(load_report_disk_cache)
+            except Exception:
+                logger.warning("Reports disk cache load failed", exc_info=True)
+
+        asyncio.create_task(load())
 
     @app.on_event("startup")
     async def _cancel_orphaned_workflow_runs():

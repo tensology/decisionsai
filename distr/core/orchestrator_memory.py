@@ -403,6 +403,11 @@ def extract_and_record_user_memories_from_text(
     project_id: int | None = None,
 ) -> list[str]:
     memory_ids: list[str] = []
+    # Memories learned in an agent's own conversation belong to that agent.
+    scope, scope_id = "global", None
+    agent_id = _agent_id_for_chat(source_chat_id)
+    if agent_id:
+        scope, scope_id = "agent", agent_id
     for candidate in extract_memory_candidates_from_text(text):
         memory_id = record_user_memory(
             str(candidate.get("content") or ""),
@@ -413,10 +418,53 @@ def extract_and_record_user_memories_from_text(
             project_id=project_id,
             tags=list(candidate.get("tags") or []),
             confidence=float(candidate.get("confidence") or 0.6),
+            scope=scope,
+            scope_id=scope_id,
         )
         if memory_id:
             memory_ids.append(memory_id)
     return memory_ids
+
+
+def _agent_id_for_chat(chat_id: int | None) -> int | None:
+    if not chat_id:
+        return None
+    try:
+        from distr.core.chat_agents import agent_for_conversation
+
+        with get_session() as session:
+            agent = agent_for_conversation(session, int(chat_id))
+            return int(agent.id) if agent else None
+    except Exception:
+        return None
+
+
+def list_agent_memories(agent_id: int, *, limit: int = 200) -> list[dict[str, Any]]:
+    """One agent's own (scope=agent) database memories, newest first."""
+    ensure_orchestrator_memory_tables()
+    with get_session() as session:
+        rows = (
+            session.query(OrchestratorUserMemory)
+            .filter(OrchestratorUserMemory.scope == "agent", OrchestratorUserMemory.scope_id == int(agent_id))
+            .filter(OrchestratorUserMemory.enabled == 1)
+            .order_by(OrchestratorUserMemory.updated_at.desc(), OrchestratorUserMemory.id.desc())
+            .limit(max(1, min(int(limit), 500)))
+            .all()
+        )
+        return [_serialize_memory(row) for row in rows]
+
+
+def delete_agent_memories(agent_id: int, memory_uid: str | None = None) -> int:
+    """Delete one (memory_uid) or all of an agent's own memories. Never touches shared rows."""
+    ensure_orchestrator_memory_tables()
+    with get_session() as session:
+        query = session.query(OrchestratorUserMemory).filter(
+            OrchestratorUserMemory.scope == "agent", OrchestratorUserMemory.scope_id == int(agent_id))
+        if memory_uid:
+            query = query.filter(OrchestratorUserMemory.memory_uid == str(memory_uid))
+        count = query.delete(synchronize_session=False)
+        session.commit()
+        return int(count or 0)
 
 
 def list_user_memories(
@@ -751,8 +799,12 @@ def build_memory_context(
     board_id: int | None = None,
     workflow_id: int | None = None,
     run_id: int | None = None,
+    agent_id: int | None = None,
 ) -> str:
     memories = list_user_memories(limit=limit * 3, include_disabled=False)
+    # Another agent's private memories never leak into this context.
+    memories = [m for m in memories if (m.get("scope") or "global") != "agent"
+                or (agent_id and m.get("scope_id") == agent_id)]
     if not memories:
         return ""
 
@@ -760,6 +812,8 @@ def build_memory_context(
         scope = (memory.get("scope") or "global").strip().lower()
         scope_id = memory.get("scope_id")
         if scope == "global" or not scope:
+            return True
+        if scope == "agent":
             return True
         if scope == "project" and project_id and scope_id == project_id:
             return True

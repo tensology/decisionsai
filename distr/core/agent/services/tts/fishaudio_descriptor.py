@@ -148,7 +148,30 @@ class FishAudioDescriptor(TTSProviderDescriptor):
                     session.close()
             except Exception:
                 logger.debug("Could not resolve Fish Audio display name", exc_info=True)
+            name = self._fish_voice_name(raw)
+            if name:
+                return name
         return raw or DEFAULT_FISHAUDIO_AGENT
+
+    _voice_names: dict = {}
+    _voice_names_at: float = 0.0
+
+    def _fish_voice_name(self, raw: str) -> str:
+        """Look the id up in the Fish voices list (cached for 10 minutes)."""
+        import time
+
+        cls = type(self)
+        if not cls._voice_names or time.monotonic() - cls._voice_names_at > 600:
+            try:
+                voices = self.get_voices() or []
+            except Exception:
+                voices = []
+            names = {str(v.get("id") or "").strip(): str(v.get("name") or "").strip()
+                     for v in voices if isinstance(v, dict)}
+            names = {k: v for k, v in names.items() if k and v and v != k}
+            if names:
+                cls._voice_names, cls._voice_names_at = names, time.monotonic()
+        return cls._voice_names.get(raw, "")
 
     def normalize_voice(self, raw_voice: str, settings: dict) -> str:
         return self.resolve_reference_id(raw_voice, settings or {})

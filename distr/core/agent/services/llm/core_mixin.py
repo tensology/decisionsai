@@ -760,8 +760,10 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             # session, so message-window truncation cannot discard the tools
             # needed to finish the user's original instruction.
             from distr.core.agent.tool_intents import (
+                SAVED_ACTION_TOOLS,
                 forced_tool_names_for_text,
                 is_workflow_follow_up,
+                pair_saved_action_tools,
             )
 
             forced_names = forced_tool_names_for_text(last_user_message)
@@ -786,6 +788,23 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 self._active_workflow_tool_names = set()
 
             for name in active_workflow_names:
+                tool = self._tools_dict.get(name)
+                if tool is not None and name not in retrieved_names:
+                    retrieved.append(tool)
+                    retrieved_names.add(name)
+
+            if any(name in retrieved_names or name in forced_names for name in SAVED_ACTION_TOOLS):
+                self._active_saved_action_tool_names = set(SAVED_ACTION_TOOLS)
+            elif getattr(self, "_active_saved_action_tool_names", None) and is_workflow_follow_up(
+                last_user_message
+            ):
+                pass
+            else:
+                self._active_saved_action_tool_names = set()
+
+            for name in pair_saved_action_tools(
+                list(retrieved_names | set(getattr(self, "_active_saved_action_tool_names", set())))
+            ):
                 tool = self._tools_dict.get(name)
                 if tool is not None and name not in retrieved_names:
                     retrieved.append(tool)

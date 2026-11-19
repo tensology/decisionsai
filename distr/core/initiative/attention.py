@@ -17,8 +17,9 @@ Rules every caller follows:
 * A client who is *waiting* on an ignored project or an ignored client is never
   dropped silently: :func:`waiting_tensions` turns it into a "you asked me to set this
   aside, but X is waiting" item that recommendations, Own intake and automations surface.
-* Email address links (``link_address``) route future mail for that address to a
-  project locally. They never override a non-empty link from the Tensology server.
+* Exact email address edits use the shared sender-link exchange when Tensology
+  is connected. Failed synchronization never saves a conflicting local edit.
+  Domain routing remains a local fallback, below explicit shared sender links.
 """
 
 from __future__ import annotations
@@ -448,7 +449,7 @@ def record_ask(fingerprint: str, summary: str = "", *, now: datetime | None = No
 
 
 # ---------------------------------------------------------------------------
-# Email address -> project links (local; never overrides a non-empty server link)
+# Email address -> project links (shared sender edits when Tensology is connected)
 # ---------------------------------------------------------------------------
 
 def _address_key(address: str) -> str:
@@ -464,7 +465,7 @@ def _address_key(address: str) -> str:
 
 
 def link_address(address: str, project: Any, *, note: str = "") -> dict[str, Any]:
-    """Route future mail from or to this address (or @domain) to a project."""
+    """Route future sender mail, confirming shared exact-address edits first."""
     from distr.core.db import get_session
 
     key = _address_key(address)
@@ -473,38 +474,56 @@ def link_address(address: str, project: Any, *, note: str = "") -> dict[str, Any
         if row is None:
             raise ValueError(f"I couldn't find exactly one project called {project!r}.")
         pid, name = int(row.id), str(row.name or "")
+    synced = {}
+    if key.startswith('email:'):
+        from distr.core.incoming.project_links import sync_address_projects
+        synced = sync_address_projects(key.removeprefix('email:'), [pid])
     with _LOCK:
         data = load()
         entry = dict(data["address_links"].get(key) or {"address": key.split(":", 1)[1], "project_ids": [], "created": _now_iso()})
-        entry["project_ids"] = sorted({*entry.get("project_ids", []), pid})
+        entry["project_ids"] = synced.get('project_ids', sorted({*entry.get("project_ids", []), pid}))
+        entry['explicit_empty'] = False
         entry["note"] = note or entry.get("note", "")
         data["address_links"][key] = entry
         _save(data)
     _audit("attention_address_linked", address=key, project=name, project_id=pid, status="linked",
            conflict=len(entry["project_ids"]) > 1)
-    return {**entry, "key": key, "project": name, "conflict": len(entry["project_ids"]) > 1}
+    return {**entry, "key": key, "project": name, "conflict": len(entry["project_ids"]) > 1, **({'synced': synced['synced']} if synced else {})}
 
 
 def unlink_address(address: str, project: Any = None) -> bool:
     key = _address_key(address)
+    pid = None
+    if project is not None:
+        from distr.core.db import get_session
+        with get_session() as db:
+            row = _find_project(db, project)
+            if row is None:
+                raise ValueError(f"I couldn't find exactly one project called {project!r}.")
+            pid = int(row.id)
+    synced = {}
+    if key.startswith('email:'):
+        from distr.core.incoming.project_links import sync_address_projects
+        synced = sync_address_projects(key.removeprefix('email:'), [pid] if pid is not None else None, remove=True)
     with _LOCK:
         data = load()
         entry = data["address_links"].get(key)
-        if not entry:
+        if not entry and not synced.get('synced'):
             return False
-        if project is None:
-            data["address_links"].pop(key)
+        remaining = synced.get('project_ids', [value for value in (entry or {}).get('project_ids', []) if project is not None and value != pid])
+        if key.startswith('email:'):
+            # An explicit empty assignment blocks stale learned/domain fallback.
+            entry = dict(entry or {'address': key.removeprefix('email:'), 'created': _now_iso()})
+            entry.update(project_ids=remaining, explicit_empty=not remaining)
+            data['address_links'][key] = entry
+            for learned in data['learned_thread_links'].values():
+                if learned.get('via') == key:
+                    learned['project_ids'] = remaining
+        elif remaining:
+            entry['project_ids'] = remaining
         else:
-            from distr.core.db import get_session
-
-            with get_session() as db:
-                row = _find_project(db, project)
-            pid = int(row.id) if row is not None else None
-            entry["project_ids"] = [p for p in entry.get("project_ids", []) if p != pid]
-            if not entry["project_ids"]:
-                data["address_links"].pop(key)
-        # Learned thread links that came from this address are re-derived on the next pass.
-        data["learned_thread_links"] = {k: v for k, v in data["learned_thread_links"].items() if v.get("via") != key}
+            data['address_links'].pop(key, None)
+            data['learned_thread_links'] = {k: v for k, v in data['learned_thread_links'].items() if v.get('via') != key}
         _save(data)
     return True
 
@@ -513,24 +532,41 @@ def address_links() -> dict[str, dict[str, Any]]:
     return dict(load()["address_links"])
 
 
+def set_sender_projects(email: str, project_ids: Iterable[int]) -> None:
+    """Retain explicit empty sender assignments so stale thread/domain links stay removed."""
+    key = _address_key(email)
+    ids = sorted(set(map(int, project_ids)))
+    with _LOCK:
+        data = load()
+        entry = dict(data['address_links'].get(key) or {'address': email, 'created': _now_iso()})
+        entry.update(project_ids=ids, explicit_empty=not ids)
+        data['address_links'][key] = entry
+        for learned in data['learned_thread_links'].values():
+            if learned.get('via') == key:
+                learned['project_ids'] = ids
+        _save(data)
+
+
 def address_project_ids(*addresses: Any) -> tuple[set[int], str]:
     """Project ids linked to any of these addresses (exact address wins over domain)."""
     links = load()["address_links"]
     exact: set[int] = set()
     domain: set[int] = set()
     via = ""
+    explicit_empty = False
     for value in addresses:
         for email in _EMAIL_RE.findall(str(value or "")):
             e = email.lower()
             hit = links.get(f"email:{e}")
             if hit:
                 exact |= set(hit.get("project_ids") or [])
+                explicit_empty |= bool(hit.get('explicit_empty') and not hit.get('project_ids'))
                 via = via or f"email:{e}"
             dhit = links.get(f"domain:{e.split('@', 1)[1]}")
             if dhit:
                 domain |= set(dhit.get("project_ids") or [])
                 via = via or f"domain:{e.split('@', 1)[1]}"
-    return (exact or domain), via
+    return (exact if exact or explicit_empty else domain), via
 
 
 def learn_thread_link(source: str, thread_id: str, project_ids: Iterable[int], via: str) -> None:
@@ -545,11 +581,13 @@ def learn_thread_link(source: str, thread_id: str, project_ids: Iterable[int], v
         _save(data)
 
 
-def learned_thread_links() -> dict[tuple[str, str], set[int]]:
+def learned_thread_links(sender_links=None) -> dict[tuple[str, str], set[int]]:
     out: dict[tuple[str, str], set[int]] = {}
     for key, entry in load()["learned_thread_links"].items():
         source, _, thread = key.partition("|")
-        out[(source, thread)] = set(entry.get("project_ids") or [])
+        via = str(entry.get('via') or '')
+        email = via.removeprefix('email:') if via.startswith('email:') else None
+        out[(source, thread)] = set(sender_links[email] if sender_links is not None and email in sender_links else entry.get("project_ids") or [])
     return out
 
 

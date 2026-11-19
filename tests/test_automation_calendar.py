@@ -152,7 +152,7 @@ def test_drag_reschedule_mapping_and_snap():
 
 def test_frontend_wiring():
     js = (ROOT / "distr/gui/web/static/development/automations/index.js").read_text()
-    html = (ROOT / "distr/gui/web/templates/development/automations/workspace.html").read_text()
+    html = (ROOT / "distr/gui/web/templates/development/calendar/workspace.html").read_text()
     assert 'data-scheduled-calendar-mode="day"' in html
     assert "/occurrences/ignore" in js and "showUndoToast" in js and "data-cal-now" in js
-    assert "60000" in js and "placeStatusFilter" in js
+    assert "60000" in js and "placeToolbarControls" in js

@@ -17,6 +17,7 @@ import hashlib
 import os
 import re
 import subprocess
+import copy
 import threading
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
@@ -718,7 +719,42 @@ def session_interval_context(meta: dict, start: datetime, end: datetime, matcher
             'scheduled_automation': bool(latest_user and scheduled_instruction(latest_user['text']))}
 
 
+_SESSION_ACTIVITY_CACHE: dict = {}
+_SESSION_ACTIVITY_CACHE_LOCK = threading.Lock()
+_SESSION_ACTIVITY_CACHE_LIMIT = 512
+
+
 def _session_activity(path: Path, *, kind: str) -> tuple[dict, list[datetime]]:
+    """Read one session file, reusing a parse keyed by path, mtime and size."""
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size, kind)
+    except OSError:
+        return _read_session_activity(path, kind=kind)
+    with _SESSION_ACTIVITY_CACHE_LOCK:
+        cached = _SESSION_ACTIVITY_CACHE.get(key)
+    if cached is not None:
+        meta, stamps = cached
+        return copy.deepcopy(meta), list(stamps)
+    from distr.core.reports.disk_cache import load_session_activity, save_session_activity
+    loaded = load_session_activity(key)
+    if loaded is not None:
+        meta, stamps = loaded
+        with _SESSION_ACTIVITY_CACHE_LOCK:
+            if len(_SESSION_ACTIVITY_CACHE) >= _SESSION_ACTIVITY_CACHE_LIMIT:
+                _SESSION_ACTIVITY_CACHE.clear()
+            _SESSION_ACTIVITY_CACHE[key] = (copy.deepcopy(meta), list(stamps))
+        return copy.deepcopy(meta), list(stamps)
+    meta, stamps = _read_session_activity(path, kind=kind)
+    with _SESSION_ACTIVITY_CACHE_LOCK:
+        if len(_SESSION_ACTIVITY_CACHE) >= _SESSION_ACTIVITY_CACHE_LIMIT:
+            _SESSION_ACTIVITY_CACHE.clear()
+        _SESSION_ACTIVITY_CACHE[key] = (copy.deepcopy(meta), list(stamps))
+    save_session_activity(key, meta, stamps)
+    return meta, stamps
+
+
+def _read_session_activity(path: Path, *, kind: str) -> tuple[dict, list[datetime]]:
     """Return (meta, timestamps) for one JSONL session file without loading it whole."""
     meta: dict = {"cwd": "", "prompt": "", "summary": "", "last_assistant": "", "task_complete": "", "id": path.stem}
     meta['activity'] = []
@@ -1626,35 +1662,181 @@ def attach_report_extras(snapshot: dict, project_ids: list[int] | None) -> dict:
 # Live time-entry sync (2026-11-13): local collation takes ~9 s, the Tensology calendar
 # ~1.5 s. A pushed time-entry change reloads with calendar_only=True, which reuses the
 # last local collation (up to _COLLATE_REUSE_SECONDS old) and re-reads Tensology live.
+# A normal Reports GET also reuses the snapshot when report_data_revision() is unchanged,
+# so a refresh no longer re-reads gigabytes of local CLI sessions or the Tensology API.
 _COLLATE_REUSE_SECONDS = 900.0
 _COLLATE_CACHE: dict = {}
+_PERIOD_REPORT_CACHE: dict = {}
 _COLLATE_CACHE_LOCK = threading.Lock()
 
 
-def _collate_for_report(period: Period, project_ids: list[int] | None, *, calendar_only: bool = False, **kwargs) -> dict:
-    import copy
-    import time as _time
+def _mtime_ns(path: Path) -> int:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
 
-    if kwargs.get('get_session') is not None:
-        return collate(period, project_ids, **kwargs)
-    key = (period.start.isoformat(), period.end.isoformat(), tuple(sorted(project_ids or ())),
-           tuple(sorted((name, repr(value)) for name, value in kwargs.items())))
-    if calendar_only:
+
+def _database_revision() -> tuple:
+    from distr.core.db import db_path
+    root = Path(db_path)
+    return (_mtime_ns(root), _mtime_ns(Path(str(root) + "-wal")), _mtime_ns(Path(str(root) + "-shm")))
+
+
+def _review_revision() -> tuple:
+    from distr.core.reports.calendar_review import review_path
+    path = review_path()
+    return (_mtime_ns(path), _mtime_ns(path.with_name("time_drafts.json")))
+
+
+def _session_files_fingerprint(lo: datetime, *, pi_root=None, codex_root=None) -> str:
+    """Stat session files in the period window. Does not read file contents."""
+    home = Path.home()
+    roots = (
+        ("pi", Path(pi_root) if pi_root else home / ".pi" / "agent" / "sessions", "pi"),
+        ("codex", Path(codex_root) if codex_root else home / ".codex" / "sessions", "codex"),
+    )
+    parts: list[str] = []
+    for name, root, kind in roots:
+        if not root.is_dir():
+            parts.append(f"{name}:missing")
+            continue
+        for path in _session_files(root, lo, kind=kind):
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            parts.append(f"{path}:{st.st_mtime_ns}:{st.st_size}")
+    return f"{len(parts)}:{hashlib.sha256(chr(10).join(parts).encode()).hexdigest()}"
+
+
+def report_data_revision(period: Period, *, pi_root=None, codex_root=None) -> tuple:
+    """Cheap fingerprint of the inputs a period report reads.
+
+    Covers settings.db (and WAL), calendar review/draft files, local CLI session
+    mtimes and sizes, and the in-process Tensology time-entry change version.
+    """
+    from distr.core.reports.calendar_sync import time_entry_change_version
+    lo, _ = period.bounds_utc()
+    return (
+        period.start.isoformat(),
+        period.end.isoformat(),
+        period.kind,
+        _database_revision(),
+        _review_revision(),
+        _session_files_fingerprint(lo, pi_root=pi_root, codex_root=codex_root),
+        time_entry_change_version(),
+    )
+
+
+def period_report_etag(period: Period, project_ids: list[int] | None, *, saved_project_ids: list[int] | None = None,
+                       include_automations: bool = False, calendar_only: bool = False, **kwargs) -> str:
+    payload = (
+        report_data_revision(period, pi_root=kwargs.get("pi_root"), codex_root=kwargs.get("codex_root")),
+        project_key(project_ids),
+        project_key(saved_project_ids) if saved_project_ids is not None else project_key(project_ids),
+        bool(include_automations),
+        bool(calendar_only),
+        bool(kwargs.get("invoice_only")),
+    )
+    return f'"{hashlib.sha256(repr(payload).encode()).hexdigest()}"'
+
+
+def _report_memo_allowed(kwargs: dict) -> bool:
+    # Tests use a temporary session and must not share a process-wide snapshot.
+    if kwargs.get("get_session") is not None:
+        return False
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+    return True
+
+
+def clear_report_memo_for_tests() -> None:
+    with _COLLATE_CACHE_LOCK:
+        _COLLATE_CACHE.clear()
+        _PERIOD_REPORT_CACHE.clear()
+    with _SESSION_ACTIVITY_CACHE_LOCK:
+        _SESSION_ACTIVITY_CACHE.clear()
+
+
+def _collate_cache_key(period: Period, project_ids: list[int] | None, *, calendar_only: bool, kwargs: dict) -> tuple:
+    revision = report_data_revision(period, pi_root=kwargs.get("pi_root"), codex_root=kwargs.get("codex_root"))
+    # Collation does not read Tensology; drop the change version so a live calendar
+    # refresh can reuse the same local snapshot.
+    local_revision = revision[:-1]
+    extras = tuple(sorted((name, repr(value)) for name, value in kwargs.items() if name != "get_session"))
+    return (period.start, period.end, period.kind, project_key(project_ids), local_revision, extras)
+
+
+def _collate_for_report(period: Period, project_ids: list[int] | None, *, calendar_only: bool = False, **kwargs) -> dict:
+    import time as _time
+    allow = _report_memo_allowed(kwargs)
+    key = _collate_cache_key(period, project_ids, calendar_only=calendar_only, kwargs=kwargs) if allow else None
+    if key is not None:
         with _COLLATE_CACHE_LOCK:
             cached = _COLLATE_CACHE.get(key)
-        if cached and _time.monotonic() - cached[0] <= _COLLATE_REUSE_SECONDS:
+        if cached:
             return copy.deepcopy(cached[1])
     snapshot = collate(period, project_ids, **kwargs)
-    with _COLLATE_CACHE_LOCK:
-        if len(_COLLATE_CACHE) >= 8:
-            _COLLATE_CACHE.clear()
-        _COLLATE_CACHE[key] = (_time.monotonic(), copy.deepcopy(snapshot))
+    if key is not None:
+        with _COLLATE_CACHE_LOCK:
+            if len(_COLLATE_CACHE) >= 8:
+                _COLLATE_CACHE.clear()
+            _COLLATE_CACHE[key] = (_time.monotonic(), copy.deepcopy(snapshot))
     return snapshot
+
+
+def _period_cache_key(period: Period, project_ids, saved_project_ids, kwargs: dict) -> tuple:
+    return (
+        report_data_revision(period, pi_root=kwargs.get("pi_root"), codex_root=kwargs.get("codex_root")),
+        project_key(project_ids),
+        project_key(saved_project_ids) if saved_project_ids is not None else project_key(project_ids),
+        bool(kwargs.get("include_automations", False)),
+        bool(kwargs.get("invoice_only", False)),
+    )
+
+
+def _period_disk_key(period: Period, project_ids, saved_project_ids, kwargs: dict) -> tuple:
+    """Period disk key omits the in-process Tensology change version, which resets to 0 on restart."""
+    revision = report_data_revision(period, pi_root=kwargs.get("pi_root"), codex_root=kwargs.get("codex_root"))
+    return (
+        revision[:-1],
+        project_key(project_ids),
+        project_key(saved_project_ids) if saved_project_ids is not None else project_key(project_ids),
+        bool(kwargs.get("include_automations", False)),
+        bool(kwargs.get("invoice_only", False)),
+    )
+
+
+def load_report_disk_cache() -> int:
+    """Load valid period snapshots from ~/.decisions/cache/reports into memory."""
+    from distr.core.reports.disk_cache import load_report_disk_cache as _load
+    return _load()
 
 
 def get_period_report(period: Period, project_ids: list[int] | None, *, saved_project_ids: list[int] | None = None,
                       calendar_only: bool = False, **kwargs) -> dict:
     """Live collation plus the newest saved analysis for this period, projects and automation choice."""
+    allow = _report_memo_allowed(kwargs) and not calendar_only
+    key = _period_cache_key(period, project_ids, saved_project_ids, kwargs) if allow else None
+    disk_key = _period_disk_key(period, project_ids, saved_project_ids, kwargs) if allow else None
+    if key is not None:
+        with _COLLATE_CACHE_LOCK:
+            cached = _PERIOD_REPORT_CACHE.get(key)
+        if cached is not None:
+            return copy.deepcopy(cached)
+        # Disk is a restart bootstrap only. After a live Tensology event in this
+        # process, change_version is no longer 0 and the calendar must be rebuilt.
+        from distr.core.reports.calendar_sync import time_entry_change_version
+        from distr.core.reports.disk_cache import load_period_snapshot, save_period_snapshot
+        if time_entry_change_version() == 0:
+            loaded = load_period_snapshot(disk_key)
+            if loaded is not None:
+                with _COLLATE_CACHE_LOCK:
+                    if len(_PERIOD_REPORT_CACHE) >= 8:
+                        _PERIOD_REPORT_CACHE.clear()
+                    _PERIOD_REPORT_CACHE[key] = copy.deepcopy(loaded)
+                return copy.deepcopy(loaded)
     snapshot = _collate_for_report(period, project_ids, calendar_only=calendar_only, **kwargs)
     from distr.core.reports.calendar_sync import project_report
     if kwargs.get('get_session') is None:
@@ -1667,6 +1849,13 @@ def get_period_report(period: Period, project_ids: list[int] | None, *, saved_pr
         snapshot['period_options'][0] = {**snapshot['period_options'][0], 'label': period.label,
                                          'start': period.start.isoformat(), 'end': period.end.isoformat()}
     attach_report_extras(snapshot, project_ids)
+    if key is not None:
+        with _COLLATE_CACHE_LOCK:
+            if len(_PERIOD_REPORT_CACHE) >= 8:
+                _PERIOD_REPORT_CACHE.clear()
+            _PERIOD_REPORT_CACHE[key] = copy.deepcopy(snapshot)
+        from distr.core.reports.disk_cache import save_period_snapshot
+        save_period_snapshot(disk_key, snapshot)
     return snapshot
 
 

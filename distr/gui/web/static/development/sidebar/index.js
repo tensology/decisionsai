@@ -349,9 +349,7 @@ export function createSidebar({ context, actions, el }) {
         el('sidebar-incoming-toggle').classList.toggle('active', incomingMode);
         el('sidebar-incoming-toggle').setAttribute('aria-current', incomingMode ? 'page' : 'false');
         el('sidebar-incoming-count').textContent = String(
-            actions
-                .incomingConversations(null)
-                .filter((conversation) => ['whatsapp', 'gmail', 'mailshot'].includes(conversation.source) && conversation.pendingCount).length
+            actions.incomingProposalCount()
         );
         const workflowMode = context.workspaceMode === 'workflows';
         el('sidebar-workflows-toggle').classList.toggle('active', workflowMode);

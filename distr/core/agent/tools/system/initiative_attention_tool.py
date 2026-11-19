@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -37,6 +38,7 @@ class InitiativeAttentionTool(BaseTool):
     def _run(self, action: str = "list", client: str = "", project: str = "", email: str = "", note: str = "",
              whole_domain: bool = False, **kwargs: Any) -> str:
         from distr.core.initiative import attention
+        from distr.core.tensology_client import TensologyApiError
 
         act = (action or "list").strip().lower().replace("-", "_").replace(" ", "_")
         try:
@@ -82,11 +84,11 @@ class InitiativeAttentionTool(BaseTool):
                 result = attention.snapshot()
                 spoken = (f"{len(result['ignored_clients'])} client(s) and {len(result['ignored_project_ids'])} "
                           f"project(s) set aside; {len(result['address_links'])} email link(s).")
-        except ValueError as exc:
+        except (ValueError, TensologyApiError) as exc:
             return str(exc)
         from distr.core.agent.tool_voice_format import voice_then_reference
 
         return voice_then_reference(spoken, json.dumps(result, ensure_ascii=False, indent=2, default=str))
 
     async def _arun(self, **kwargs: Any) -> str:
-        return self._run(**kwargs)
+        return await asyncio.to_thread(self._run, **kwargs)

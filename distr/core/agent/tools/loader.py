@@ -158,6 +158,12 @@ def _get_tool_definitions(
         # Select / open a thread in the web UI sidebar (2026-10-22 selthread)
         ("SelectThreadTool", {}),
         ("OpenThreadTool", {}),
+        # Multi-agent: talk to another agent; workspace tools gated per agent capability set
+        ("MessageAgentTool", {}),
+        ("CalendarBlocksTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
+        ("SnippetsTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
+        ("DevelopmentOverviewTool", {}),
+        ("ChatBrowserTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
         # Mermaid diagram viewer
         ("ShowMermaidDiagramTool", dict(chat_manager=chat_manager)),
         # yt-dlp downloads with progress UI
@@ -558,6 +564,11 @@ TOOL_REGISTRY = {
     "OpenPageTool":            ("chat.open_page", "OpenPageTool"),
     "SelectThreadTool":        ("chat.select_thread", "SelectThreadTool"),
     "OpenThreadTool":          ("chat.select_thread", "OpenThreadTool"),
+    "MessageAgentTool":        ("system.agent_workspace_tools", "MessageAgentTool"),
+    "CalendarBlocksTool":      ("system.agent_workspace_tools", "CalendarBlocksTool"),
+    "SnippetsTool":            ("system.agent_workspace_tools", "SnippetsTool"),
+    "DevelopmentOverviewTool": ("system.agent_workspace_tools", "DevelopmentOverviewTool"),
+    "ChatBrowserTool":         ("system.agent_workspace_tools", "ChatBrowserTool"),
     "ShowMermaidDiagramTool":  ("chat.show_mermaid_diagram", "ShowMermaidDiagramTool"),
     "YtdlpDownloadTool":       ("integrations.ytdlp_download", "YtdlpDownloadTool"),
     "TensologyWorkspaceTool":  ("integrations.tensology_workspace", "TensologyWorkspaceTool"),
@@ -707,9 +718,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "ContinueWorkflowTool": "Resume a paused or waiting workflow run, optionally providing user input.",
     "StartRecordingTool": "Start recording user interactions to create a replayable macro action.",
     "StopRecordingTool": "Stop the current macro recording session and save the recorded action.",
-    "PlayActionTool": "Play back a previously recorded macro action to repeat a sequence of interactions.",
+    "PlayActionTool": "Run a saved custom action by name, or play back a recorded action.",
     "StopActionTool": "Stop a currently playing macro action mid-execution.",
-    "ListActionsTool": "List all saved macro actions available for playback.",
+    "ListActionsTool": "List my custom actions, including saved and recorded actions I can run.",
     "FindSkillTool": "Search and find skills by capability, or list all skills. Use when: find a skill for X, suggest a skill, what skills do we have, is there a skill for Docker/testing/security. No query = list all; with query = relevance-scored search.",
     "PushSkillTool": "Push a skill to a project's CLI (pi default). Copies SKILL.md to .pi/skills/. Pass instructions with the user's how-to-use wording (USER_INTENT.md); ask one question if they have not said how they want to use it. Same flow as Skills UI push.",
     # chat/
@@ -719,6 +730,11 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "OpenPageTool": "Open a specific page in the DecisionsAI app: chat, settings, preferences, actions, skills, projects, workflows, docs, activity log, audio, models, skins, or about. For the generic ticket board page only. To open a specific local/Jira/Trello board, use create_ticket action=open_board instead.",
     "SelectThreadTool": "Select and highlight a thread (latest, id, or title words) in the web UI left sidebar, Development by default or Chat; opens it in the browser if no tab is open. Use for 'select the latest thread', 'select thread 1798'.",
     "OpenThreadTool": "Open a thread page (latest, id, or title words) in the default browser, Development by default or Chat. Use for 'open my most recent thread' or when the web UI is not open.",
+    "MessageAgentTool": "Send a message to another Decisions agent by name and get its reply (ask, tell, check with, delegate to another agent).",
+    "CalendarBlocksTool": "List, create, update or delete time blocks on the Decisions Calendar (/calendar).",
+    "SnippetsTool": "List, read, create, update or delete Paul's text snippets.",
+    "ChatBrowserTool": "Drive a real signed-in Chrome: open a website or URL, read or extract the page, screenshot, click or type (with approval).",
+    "DevelopmentOverviewTool": "Read-only overview of Development: projects, recent threads, work items, lanes and timers.",
     "ShowMermaidDiagramTool": "Open the Mermaid diagram viewer. With mermaid_code: render that diagram. With empty mermaid_code: open the viewer (last diagram or blank editor). Use open_page page='diagram viewer' when the user only asks to open the viewer.",
     "YtdlpDownloadTool": "Download YouTube or video URLs with yt-dlp and open Download Manager for live progress, speed, and ETA. Use when user asks to download videos or save YouTube links.",
     # system/

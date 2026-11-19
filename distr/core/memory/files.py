@@ -371,3 +371,52 @@ def try_load_system_prompt_template() -> str | None:
     except Exception:
         logger.debug("try_load_system_prompt_template: unavailable", exc_info=True)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Per-agent private memory. Shared AGENT.md/USER.md/MEMORY.md stay readable by
+# every agent; each agent also owns agents/<id>/MEMORY.md that only it sees.
+# ---------------------------------------------------------------------------
+
+
+def agent_memory_path(agent_id: int, *, root: Path | None = None) -> Path:
+    base = root if root is not None else default_memory_dir()
+    return base / "agents" / str(int(agent_id)) / MEMORY_MD
+
+
+def agent_memory_sections(agent_id: int, *, root: Path | None = None) -> list[str]:
+    text = _read_utf8(agent_memory_path(agent_id, root=root)).strip()
+    if not text:
+        return []
+    return [part.strip() for part in SECTION_SPLIT_RE.split(text) if part.strip()]
+
+
+def write_agent_memory_sections(agent_id: int, sections: list[str], *, root: Path | None = None) -> None:
+    path = agent_memory_path(agent_id, root=root)
+    body = SECTION_JOIN.join(s.strip() for s in sections if s and s.strip())
+    if not body:
+        if path.exists():
+            path.unlink()
+        return
+    atomic_write_text(path, enforce_cap(body + "\n", CAP_MEMORY_BYTES, "sections"))
+
+
+def append_agent_memory(agent_id: int, section_body: str, *, root: Path | None = None) -> None:
+    """Append a private section for one agent (never dual-written to shared recall)."""
+    block = (section_body or "").strip()
+    if not block:
+        return
+    write_agent_memory_sections(agent_id, agent_memory_sections(agent_id, root=root) + [block], root=root)
+
+
+def agent_memory_snippet(agent_id: int, *, max_sections: int = 8, max_bytes: int = 4000, root: Path | None = None) -> str:
+    sections = agent_memory_sections(agent_id, root=root)[-max(1, max_sections):]
+    return prune_suffix_bytes(SECTION_JOIN.join(sections), max_bytes).strip() if sections else ""
+
+
+def delete_agent_memory(agent_id: int, *, root: Path | None = None) -> None:
+    import shutil
+
+    folder = agent_memory_path(agent_id, root=root).parent
+    if folder.is_dir():
+        shutil.rmtree(folder, ignore_errors=True)

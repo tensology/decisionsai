@@ -859,6 +859,8 @@ def test_direct_development_can_use_native_runtime_without_workflow_identity(tmp
     monkeypatch.setenv("DECISIONSAI_DEVELOPMENT_TURN_RUNTIME", "native")
     monkeypatch.setattr("distr.core.turn_runtime.service._create_native_execution_session", lambda request: None)
     monkeypatch.setattr("distr.core.turn_runtime.service.get_turn_runtime", lambda runtime_id, request=None: FakeNativeRuntime())
+    published = []
+    monkeypatch.setattr("distr.gui.web.routes.chat.publish_chat_event_threadsafe", lambda payload: published.append(payload))
     result = harness.dispatch_development_prompt(
         chat_id,
         "Implement natively",
@@ -878,6 +880,12 @@ def test_direct_development_can_use_native_runtime_without_workflow_identity(tmp
     assert result["summary"] == "100% done. Native turn complete."
     assert captured["streamed_during"] == "Native partial response."
     assert result["streamed_output"] == ""
+    assert any(
+        item.get("event") == "stream_token"
+        and item.get("chat_id") == chat_id
+        and item.get("token") == "Native partial response."
+        for item in published
+    )
 
 
 def test_project_without_a_folder_gets_an_organized_development_workspace(tmp_path, monkeypatch):

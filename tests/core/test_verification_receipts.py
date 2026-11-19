@@ -52,6 +52,18 @@ def test_grouped_checks_and_virtualenv_commands_have_distinct_receipts():
     assert check_keys('set -e\nnpm test\nnpm run build') == ['npm test', 'npm run build']
 
 
+def test_proposal_checks_find_django_scripts_below_the_project_root():
+    receipts = VerificationReceipts('Run the tests')
+    base = 'cd /project && rtk proxy $HOME/.virtualenvs/project/bin/python backend/webapp/manage.py test'
+    observe(receipts, base + ' devices --keepdb 2>&1 | tail -20', 1, pipefail=True)
+    observe(receipts, base + ' devices.test_iridium_status_wait --keepdb', 0)
+    report = receipts.report()
+    assert report['status'] == 'failed'
+    assert [row['status'] for row in report['checks']] == ['failed', 'passed']
+    observe(receipts, base + ' devices --keepdb', 0)
+    assert receipts.report()['status'] == 'passed'
+
+
 @pytest.mark.parametrize('command', ['npm test || true', 'npm test; true'])
 def test_explicit_failure_mask_is_not_passing_evidence(command):
     receipts = VerificationReceipts('Run tests')

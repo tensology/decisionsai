@@ -136,6 +136,7 @@ def test_automation_instruction_draft_endpoint_returns_an_executable_draft(monke
 
 def test_automation_hub_is_plain_crud_scheduler_surface():
     html = (ROOT / "distr/gui/web/templates/development/automations/workspace.html").read_text(encoding="utf-8")
+    calendar = (ROOT / "distr/gui/web/templates/development/calendar/workspace.html").read_text(encoding="utf-8")
     js = (ROOT / "distr/gui/web/static/development/automations/index.js").read_text(encoding="utf-8")
     server = (ROOT / "distr/gui/web/server.py").read_text(encoding="utf-8")
 
@@ -145,9 +146,14 @@ def test_automation_hub_is_plain_crud_scheduler_surface():
     assert "Add Automation" in html
     assert 'id="automation-presets-btn"' in html
     assert 'id="automation-preset-menu"' in html
-    assert 'data-scheduled-view="list"' in html
-    assert 'data-scheduled-view="calendar"' in html
-    assert 'data-scheduled-calendar-mode="day"' in html
+    assert 'id="scheduled-list-toolbar"' in html
+    assert 'id="scheduled-toolbar-left"' in html
+    assert 'id="scheduled-toolbar-center"' in html
+    assert 'id="scheduled-toolbar-right"' in html
+    assert 'data-scheduled-view="list"' not in html
+    assert 'data-scheduled-view="calendar"' not in html
+    assert 'id="calendar-workspace"' in calendar
+    assert 'data-scheduled-calendar-mode="day"' in calendar
     assert "function openAutomationEditor" in js
     assert "function openNewAutomation" in js
     assert "function payloadFromForm" in js

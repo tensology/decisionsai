@@ -2000,14 +2000,12 @@ def apply_run_harness_steer(run_id: int, message: str, *, source: str = "workflo
     }
 
 
-def get_run_history(workflow_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+def get_run_history(workflow_id: int, limit: int = 10, chat_id: Optional[int] = None) -> List[Dict[str, Any]]:
     with get_session() as db:
-        rows = (
-            db.query(AutoWorkflowRun)
-            .filter(AutoWorkflowRun.workflow_id == workflow_id)
-            .order_by(AutoWorkflowRun.started_at.desc())
-            .limit(limit).all()
-        )
+        query = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.workflow_id == workflow_id)
+        if chat_id is not None:
+            query = query.filter(AutoWorkflowRun.chat_id == chat_id)
+        rows = query.order_by(AutoWorkflowRun.started_at.desc(), AutoWorkflowRun.id.desc()).limit(limit).all()
         run_ids = [r.id for r in rows if r.id is not None]
         corrections_by_run: Dict[int, List[Dict[str, Any]]] = {}
         if run_ids:
@@ -2028,6 +2026,8 @@ def get_run_history(workflow_id: int, limit: int = 10) -> List[Dict[str, Any]]:
             enriched = _enrich_run_record(db, r, run_data)
             out.append({
                 "id": r.id,
+                "workflow_id": r.workflow_id,
+                "chat_id": r.chat_id,
                 "started_at": r.started_at.isoformat() if r.started_at else None,
                 "completed_at": r.completed_at.isoformat() if r.completed_at else None,
                 "status": r.status,

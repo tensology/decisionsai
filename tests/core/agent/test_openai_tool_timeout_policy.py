@@ -208,3 +208,28 @@ def test_only_concrete_ticket_result_counts_as_evidence():
     assert not OpenAICompatibleLLMService._is_verified_ticket_result(
         "create_ticket", "Failed to create ticket #42"
     )
+
+
+
+def test_create_action_blocked_when_listing_or_running_saved_actions():
+    utterances = (
+        "What's the list of actions that I can actually run?",
+        "I want to list the list of actions that you have and that I've created, you know, custom actions.",
+        "Okay, can you run it?",
+        "So do that.",
+    )
+    for request in utterances:
+        reason = OpenAICompatibleLLMService._tool_intent_block_reason(
+            "create_action", request
+        )
+        assert "play_action" in reason, request
+        assert "existing saved action" in reason, request
+
+
+def test_explicit_create_action_request_is_still_allowed():
+    assert OpenAICompatibleLLMService._tool_intent_block_reason(
+        "create_action", "Create an action named Morning setup"
+    ) == ""
+    assert OpenAICompatibleLLMService._tool_intent_block_reason(
+        "create_action", "Start recording a new action"
+    ) == ""

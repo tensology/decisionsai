@@ -227,6 +227,7 @@ class TestWebMPlayerResourceLimits:
         player.load("small-oracle.webm")
 
         assert player._interval_ms == 66
+        assert player._source_interval_ms == pytest.approx(1000 / 60)
         assert len(player._frames) == 2
         assert player._source_images == []
 
@@ -368,13 +369,13 @@ def test_decoder_prepares_each_frame_before_reading_the_next(monkeypatch):
 
     # imageio is optional; production can use the cv2 fallback instead.
     iio = SimpleNamespace(
-        improps=lambda *a, **k: SimpleNamespace(fps=24),
+        immeta=lambda *a, **k: {"fps": 25},
         imiter=frames,
         imread=lambda *a, **k: pytest.fail("whole-video allocation"),
     )
     monkeypatch.setitem(sys.modules, "imageio", SimpleNamespace(v3=iio))
     monkeypatch.setitem(sys.modules, "imageio.v3", iio)
     images, fps = _extract_frames_imageio("test.webm", prepare_frame=prepare)
-    assert fps == 24
+    assert fps == 25
     assert len(images) == 2
     assert [(img.width(), img.height()) for img in images] == [(4, 4), (4, 4)]

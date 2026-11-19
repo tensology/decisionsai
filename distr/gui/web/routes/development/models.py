@@ -349,6 +349,11 @@ class PlanInterfaceShotRequest(BaseModel):
     screen_id: str = Field(min_length=1, max_length=64)
     route: str = Field(default="", max_length=300)
     lane: str = Field(default="", max_length=20)
+    force: bool = False
+
+
+class PlanInterfaceLayoutRequest(BaseModel):
+    nodes: dict = Field(default_factory=dict)
 
 
 class PlanChatCreateRequest(BaseModel):

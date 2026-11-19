@@ -31,6 +31,7 @@ _PAGE_MAP = {
     "incoming":       "/development/incoming/",
     "automations":    "/development/automations/",
     "automation":     "/development/automations/",
+    "calendar":       "/development/calendar/",
     "terminals":      "/development/terminals/",
     "terminal":       "/development/terminals/",
     "reports":        "/development/reports/",

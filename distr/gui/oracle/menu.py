@@ -1594,9 +1594,9 @@ class MenuTrayMixin:
             return
         if target.lower() == self._current_skin_folder():
             return
-        if hasattr(self, "_on_direct_oracle_change"):
-            self._on_direct_oracle_change(target)
-            logger.info("Oracle menu: activated skin %s", target)
+        from distr.core.services.settings_service import update_oracle_skin
+        update_oracle_skin(target)
+        logger.info("Oracle menu: activated skin %s", target)
 
     def _skin_previous_from_menu(self) -> None:
         if not self._check_eula_accepted():

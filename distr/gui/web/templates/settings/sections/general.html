@@ -78,7 +78,7 @@
                 <label class="block md:col-span-2">
                     <span class="block text-sm font-medium text-[#ececf1] mb-2">Notification sound</span>
                     <div class="flex items-center gap-2">
-                        <select id="notification_sound" name="notification_sound" class="w-full bg-[#1a1f3a] border border-white/20 rounded-md px-4 py-2 text-white">
+                        <select id="notification_sound" name="notification_sound" class="min-w-0 w-full bg-[#1a1f3a] border border-white/20 rounded-md px-4 py-2 text-white">
                             <option value="bell">Bell</option>
                             <option value="chime">Chime</option>
                             <option value="dong">Dong</option>
@@ -88,7 +88,9 @@
                             <option value="achievement">Achievement</option>
                             <option value="none">Silent</option>
                         </select>
-                        <button type="button" id="notification_sound_preview" class="secondary-button whitespace-nowrap" title="Play the selected sound">Play</button>
+                        <button type="button" id="notification_sound_preview" class="notification-sound-preview" title="Play the selected sound" aria-label="Play the selected sound">
+                            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M8 5.5a1 1 0 0 1 1.5-.86l10 6a1 1 0 0 1 0 1.72l-10 6A1 1 0 0 1 8 17.5z" /></svg>
+                        </button>
                     </div>
                 </label>
                 <label class="block md:col-span-2">

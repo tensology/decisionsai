@@ -22,6 +22,10 @@ class SkinSizeUpdateRequest(BaseModel):
     sphere_size: int = Field(ge=4, le=10)
 
 
+class OracleBackgroundRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+
+
 def register_routes(router, templates):
 
     @router.get("/skins")
@@ -56,14 +60,32 @@ def register_routes(router, templates):
             })
 
         settings = load_settings_from_db()
+        from distr.core.services.settings_service import active_oracle_background
         selected = settings.get("selected_oracle", "oracle") or "oracle"
         sphere_size = settings.get("sphere_size", 180)
 
         return JSONResponse({
             "skins": skins,
             "selected_skin": selected,
+            "selected_oracle_background": active_oracle_background(),
             "sphere_size": sphere_size,
         })
+
+    @router.get("/skins/oracle/background")
+    async def get_oracle_background():
+        from distr.core.services.settings_service import active_oracle_background
+
+        return {"filename": active_oracle_background()}
+
+    @router.put("/skins/oracle/background")
+    async def set_oracle_background(data: OracleBackgroundRequest):
+        from distr.core.services.settings_service import update_oracle_background
+
+        try:
+            update_oracle_background(data.filename)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"filename": data.filename}
 
     @router.post("/skins/select")
     @route_handler("select skin")

@@ -1797,6 +1797,24 @@ textarea:focus-visible {
     .monk-site-actions { grid-column: 2; justify-content: flex-start; margin-top: 7px; }
 }
 
+.notification-sound-preview {
+    display: flex;
+    flex: 0 0 44px;
+    width: 44px;
+    height: 44px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #9ca3af;
+    border-radius: 50%;
+    background: #40414f;
+    color: #fff;
+    cursor: pointer;
+    transition: background-color 100ms;
+}
+.notification-sound-preview:hover { background: #565869; }
+.notification-sound-preview:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
+.notification-sound-preview svg { width: 20px; height: 20px; }
+
 /* 2026-10-22 llmsrouting: editable Complexity routing (shared table from workflow_exec_routing.js) */
 .llms-exec-routes { max-width: 56rem; margin: 0 auto; text-align: center; --wf-exec-accent: #10a37f; }
 .llms-exec-routes select {

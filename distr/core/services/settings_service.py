@@ -662,7 +662,7 @@ def update_elevenlabs_settings(
     return stability, similarity_boost, style, use_speaker_boost
 
 
-def update_oracle_skin(skin: str, *, persist_chat: bool = True) -> None:
+def update_oracle_skin(skin: str, *, persist_chat: bool = True, primary_only: bool = False) -> None:
     """Run migration, persist, and emit oracle skin change.
 
     Requirements: 11.2, 11.8
@@ -671,37 +671,94 @@ def update_oracle_skin(skin: str, *, persist_chat: bool = True) -> None:
 
     migrated = migrate_selected_oracle(skin)
     if persist_chat:
-        from distr.core.db import Chat, Settings, AgentConversation, get_session
-        from distr.core.chat_agents import primary_agent
-        from distr.core.chat_sidebar import set_chat_skin
-
-        with get_session() as session:
-            primary = primary_agent(session)
-            if primary:
-                primary.skin_name = migrated
-                settings_row = session.query(Settings).first()
-                if settings_row:
-                    settings_row.selected_oracle = migrated
-                for root in session.query(Chat).join(AgentConversation, AgentConversation.chat_id == Chat.id).filter(AgentConversation.agent_id == primary.id):
-                    set_chat_skin(root, migrated)
-                session.commit()
-                _safe_emit(_signal('direct_oracle_change'), migrated, label='direct_oracle_change')
-                return
-    update_setting("selected_oracle", migrated,
-                   signal=_signal("direct_oracle_change"),
-                   signal_args=(migrated,),
-                   signal_label="direct_oracle_change")
-    if persist_chat:
-        from distr.core.db import Chat, Settings, get_session
+        from distr.core.db import Settings, get_session
+        from distr.core.chat_agents import appearance_owner, primary_agent, set_agent_skin
         from distr.core.chat_sidebar import set_chat_skin
 
         with get_session() as session:
             settings = session.query(Settings).first()
-            chat_id = (settings.agent_current_chat_id or settings.last_chat_id) if settings else None
-            chat = session.get(Chat, chat_id) if chat_id else None
-            if chat is not None and chat.parent_id is None:
+            active, chat = appearance_owner(session, settings)
+            owner = primary_agent(session) if primary_only else active
+            chat_id = owner.main_chat_id if owner else chat.id if chat and not primary_only else None
+            if owner:
+                set_agent_skin(session, owner, migrated)
+            elif chat and not primary_only:
                 set_chat_skin(chat, migrated)
-                session.commit()
+            update_live_skin = not primary_only or owner == active
+            saved_live_skin = settings is not None and chat_id is not None and update_live_skin
+            if saved_live_skin:
+                settings.selected_oracle = migrated
+        _publish_oracle_appearance(chat_id)
+        if not update_live_skin:
+            return
+        if saved_live_skin:
+            _safe_emit(_signal("direct_oracle_change"), migrated, label="direct_oracle_change")
+            return
+    update_setting("selected_oracle", migrated,
+                   signal=_signal("direct_oracle_change"),
+                   signal_args=(migrated,),
+                   signal_label="direct_oracle_change")
+
+
+def active_oracle_background():
+    from distr.core.chat_agents import appearance_owner
+    from distr.core.chat_title_auto import _chat_additional_context
+    from distr.core.db import Settings, get_session
+
+    with get_session() as session:
+        settings = session.query(Settings).first()
+        owner, chat = appearance_owner(session, settings)
+        if owner:
+            return owner.oracle_background
+        if chat:
+            return _chat_additional_context(chat.additional_context).get("oracle_background")
+        return settings.default_oracle_background if settings else None
+
+
+def update_oracle_background(filename: str) -> None:
+    import json
+    from pathlib import Path
+    from distr.core.chat_agents import appearance_owner
+    from distr.core.chat_title_auto import _chat_additional_context
+    from distr.core.db import Settings, get_session
+    from distr.core.paths import AVATARS_DIR
+    from distr.core.skin_migration import migrate_selected_oracle
+
+    directory = Path(AVATARS_DIR) / "oracle"
+    file = Path(filename)
+    if file.name != filename or file.suffix.lower() not in {".webm", ".gif"} or not (directory / file).is_file():
+        raise ValueError("Choose an installed Oracle background")
+
+    with get_session() as session:
+        settings = session.query(Settings).first()
+        owner, chat = appearance_owner(session, settings)
+        chat_id = owner.main_chat_id if owner else chat.id if chat else None
+        if owner:
+            owner.oracle_background = filename
+        elif chat:
+            context = _chat_additional_context(chat.additional_context)
+            context["oracle_background"] = filename
+            chat.additional_context = json.dumps(context, ensure_ascii=False)
+        else:
+            if settings is None:
+                settings = Settings()
+                session.add(settings)
+            settings.default_oracle_background = filename
+        refresh = migrate_selected_oracle(settings.selected_oracle if settings else None) == "oracle"
+    if refresh:
+        _safe_emit(_signal("direct_oracle_change"), "oracle", label="direct_oracle_change")
+    _publish_oracle_appearance(chat_id)
+
+
+def _publish_oracle_appearance(chat_id):
+    if chat_id is None:
+        return
+    from distr.gui.web.routes.chat import publish_chat_event_threadsafe
+
+    try:
+        publish_chat_event_threadsafe({"event": "appearance_changed", "chat_id": chat_id})
+    except RuntimeError:
+        logger.debug("Oracle appearance will refresh when the web chat next loads its roster")
 
 
 POSITION_DISPLAY = {

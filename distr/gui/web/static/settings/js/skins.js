@@ -295,6 +295,11 @@ async function loadSkinsSettings() {
         var data = await responses[0].json();
         var general = responses[1].ok ? await responses[1].json() : {};
         _skinsList = data.skins || [];
+        var oracle = _skinsList.find(function(skin) { return skin.folder_name === 'oracle'; });
+        if (oracle && data.selected_oracle_background) {
+            oracle.idle_animation = data.selected_oracle_background;
+            oracle.preview_image = null;
+        }
         _selectedSkin = data.selected_skin || 'oracle';
         _loadedSkin = data.selected_skin || 'oracle';
         var rawSize = data.sphere_size !== undefined ? data.sphere_size : 180;
@@ -693,9 +698,10 @@ async function loadOracleEditor(folderName) {
     try {
         var r = await Promise.all([
             fetch('/api/skins/' + encodeURIComponent(folderName) + '/config'),
-            fetch('/api/skins/' + encodeURIComponent(folderName) + '/files')
+            fetch('/api/skins/' + encodeURIComponent(folderName) + '/files'),
+            fetch('/api/skins/oracle/background')
         ]);
-        if (!r[0].ok || !r[1].ok) throw new Error('Failed');
+        if (r.some(function(response) { return !response.ok; })) throw new Error('Failed');
         _editingSkin = folderName;
         _editingSkinConfig = await r[0].json();
         var allFiles = (await r[1].json()).files || [];
@@ -704,7 +710,7 @@ async function loadOracleEditor(folderName) {
         // Oracle skin files: numbered animations (webm or gif)
         var skinFiles = allFiles.filter(function(f) {
             var name = f.replace(/\.[^.]+$/, '');
-            return /^\d+$/.test(name);
+            return /^\d+$/.test(name) && /\.(webm|gif)$/i.test(f);
         });
         skinFiles.sort(function(a, b) {
             var na = parseInt(a.replace(/\.[^.]+$/, ''), 10);
@@ -715,13 +721,28 @@ async function loadOracleEditor(folderName) {
         var sel = document.getElementById('oracle_gif_select');
         sel.innerHTML = '';
         var cur = (_editingSkinConfig.events && _editingSkinConfig.events.idle) ? _editingSkinConfig.events.idle.animation : '0.webm';
+        var background = (await r[2].json()).filename;
+        if (skinFiles.includes(background)) cur = background;
         skinFiles.forEach(function(f, i) {
             var o = document.createElement('option');
             o.value = f; o.textContent = 'Background ' + (i + 1);
             if (f === cur) o.selected = true;
             sel.appendChild(o);
         });
-        sel.onchange = function() { previewOracleGif(this.value); saveOracleGif(this.value).then(function() { renderSkinsGrid(); }); };
+        sel.onchange = async function() {
+            sel.disabled = true;
+            try {
+                await saveOracleGif(sel.value);
+                cur = sel.value;
+                renderSkinsGrid();
+            } catch (error) {
+                sel.value = cur;
+                if (typeof showNotification === 'function') showNotification(error.message, 'error');
+            } finally {
+                sel.disabled = false;
+            }
+            previewOracleGif(cur);
+        };
 
         // Ping-pong checkbox
         var ppCb = document.getElementById('oracle_pingpong_checkbox');
@@ -813,16 +834,19 @@ function previewOracleGif(filename) {
 }
 
 async function saveOracleGif(filename) {
-    if (!_editingSkinConfig) return;
-    for (var h in _editingSkinConfig.events) _editingSkinConfig.events[h].animation = filename;
-    // Update local skins list so grid re-renders with the new animation
-    _skinsList.forEach(function(s) { if (s.folder_name === _editingSkin) s.idle_animation = filename; });
-    try {
-        await fetch('/api/skins/' + encodeURIComponent(_editingSkin) + '/config', {
-            method: 'PUT', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(_editingSkinConfig)
-        });
-    } catch (e) { console.error(e); }
+    var response = await fetch('/api/skins/oracle/background', {
+        method: 'PUT', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({filename: filename})
+    });
+    if (!response.ok) {
+        var error = await response.json().catch(function() { return {}; });
+        throw new Error(error.detail || 'Could not save Oracle background');
+    }
+    var skin = _skinsList.find(function(item) { return item.folder_name === 'oracle'; });
+    if (skin) {
+        skin.idle_animation = filename;
+        skin.preview_image = null;
+    }
 }
 
 async function saveOraclePlayback(mode) {

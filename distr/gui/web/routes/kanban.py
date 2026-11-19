@@ -7027,12 +7027,26 @@ source: kanban_ticket_{t.id}
 
     @router.post("/tickets/boards/{board_id}/whatsapp-links")
     async def add_whatsapp_link(board_id: int, payload: dict):
-        """Link a WhatsApp phone/group JID to this board (one JID -> one link)."""
+        """Link a WhatsApp conversation to this board without moving other project links."""
         from distr.core.kanban.whatsapp_jid import upsert_whatsapp_phone_link
+        from distr.core.incoming.project_links import sync_whatsapp_project_link
+        from distr.core.tensology_client import TensologyApiError
         phone_jid = payload.get("phone_jid", "")
-        if not phone_jid:
+        if not isinstance(phone_jid, str) or not phone_jid.strip():
             raise HTTPException(400, "phone_jid is required")
+        phone_jid = phone_jid.strip()
         with get_session() as s:
+            if s.get(KanbanBoard, board_id) is None:
+                raise HTTPException(404, "Board not found")
+        try:
+            synced = await asyncio.to_thread(sync_whatsapp_project_link, board_id, phone_jid)
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+        except TensologyApiError as error:
+            raise HTTPException(409 if error.status == 409 else 502, str(error)) from error
+        with get_session() as s:
+            if s.get(KanbanBoard, board_id) is None:
+                raise HTTPException(409, "The board changed while syncing. Refresh before linking it.")
             link, created = upsert_whatsapp_phone_link(
                 s,
                 board_id=board_id,
@@ -7041,11 +7055,13 @@ source: kanban_ticket_{t.id}
                 contact_name=payload.get("contact_name", ""),
                 auto_snapshot=payload.get("auto_snapshot", False),
                 move_board=True,
+                board_scoped=True,
             )
             return JSONResponse({
                 "success": True,
                 "id": link.id,
                 "created": created,
+                "synced": synced,
                 "message": "Linked" if created else "Updated existing link",
             })
 
@@ -7053,12 +7069,27 @@ source: kanban_ticket_{t.id}
     async def delete_whatsapp_link(board_id: int, link_id: int):
         """Unlink a WhatsApp phone number from this board."""
         from distr.core.db import WhatsAppPhoneLink
+        from distr.core.incoming.project_links import sync_whatsapp_project_link
+        from distr.core.tensology_client import TensologyApiError
         with get_session() as s:
             link = s.query(WhatsAppPhoneLink).filter_by(id=link_id, board_id=board_id).first()
             if not link:
                 raise HTTPException(404, "Link not found")
+            phone_jid = link.phone_jid
+        try:
+            synced = await asyncio.to_thread(sync_whatsapp_project_link, board_id, phone_jid, remove=True)
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+        except TensologyApiError as error:
+            raise HTTPException(409 if error.status == 409 else 502, str(error)) from error
+        with get_session() as s:
+            link = s.query(WhatsAppPhoneLink).filter_by(id=link_id, board_id=board_id).first()
+            if not link:
+                return JSONResponse({"success": True, "synced": synced})
+            if link.phone_jid != phone_jid:
+                raise HTTPException(409, "The conversation link changed. Refresh before removing it.")
             s.delete(link)
-            return JSONResponse({"success": True})
+            return JSONResponse({"success": True, "synced": synced})
 
     @router.patch("/tickets/boards/{board_id}/whatsapp-links/{link_id}")
     async def update_whatsapp_link(board_id: int, link_id: int, payload: dict):

@@ -494,7 +494,8 @@ export function createReports({ api, root, escapeHtml, getPinnedProjectIds }) {
         enter() {
             visible = true;
             setTab(tab);
-            load();
+            // History and Costs lists are not shown on Report/Stats; fetch them when those tabs open.
+            if (tab === 'costs' || tab === 'runs') load();
         },
         leave() {
             visible = false;

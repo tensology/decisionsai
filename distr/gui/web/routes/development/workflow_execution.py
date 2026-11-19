@@ -250,10 +250,10 @@ def register_routes(router, templates):
 
 
     @router.get("/workflows/{workflow_id}/runs")
-    async def workflow_runs(workflow_id: int, limit: int = 10):
+    async def workflow_runs(workflow_id: int, limit: int = 10, chat_id: Optional[int] = None):
         try:
             from distr.core.workflow.service import get_run_history
-            return JSONResponse(get_run_history(workflow_id, limit=limit))
+            return JSONResponse(get_run_history(workflow_id, limit=limit, chat_id=chat_id))
         except Exception as e:
             logger.error("Workflow runs failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)

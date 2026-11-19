@@ -980,6 +980,16 @@ def _update_execution(chat_id: int, *, job_id: str | None = None, expected_scope
             logger.warning("Could not queue the Telegram proposal outcome for thread %s. It will retry.", chat_id,
                            exc_info=True)
     _notify()
+    if output_delta:
+        try:
+            from distr.gui.web.routes.chat import publish_chat_event_threadsafe
+            publish_chat_event_threadsafe({
+                "event": "stream_token",
+                "chat_id": int(chat_id),
+                "token": output_delta,
+            })
+        except Exception:
+            logger.debug("Could not publish development stream token for chat %s", chat_id, exc_info=True)
     return execution
 
 
