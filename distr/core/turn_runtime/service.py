@@ -152,20 +152,20 @@ def get_turn_runtime(runtime_id: str = "", *, request: TurnRequest | None = None
     raise ValueError(f"Unknown Decisions turn runtime: {runtime_id}")
 
 
-def _configured_provider_fallback(request: TurnRequest) -> TurnRequest | None:
-    """Build the one configured Auto fallback without changing manual routes."""
+def _configured_provider_fallback(request: TurnRequest, error=None) -> TurnRequest | None:
+    """Use the route's configured fallback, else the global provider failover order."""
     options = dict(request.route.adapter_options)
     backend = str(options.get("fallback_backend") or "").strip().lower()
     model = str(options.get("fallback_model") or "").strip()
     if not backend or not model:
-        return None
+        return _provider_failover_request(request, error)
     provider = str(options.get("fallback_model_provider") or "").strip().lower()
     if (backend, model, provider) == (
         str(request.route.backend_id or "").strip().lower(),
         str(request.route.model or "").strip(),
         str(request.route.provider or "").strip().lower(),
     ):
-        return None
+        return _provider_failover_request(request, error)
     for key in ("fallback_backend", "fallback_model", "fallback_model_provider"):
         options.pop(key, None)
     return replace(
@@ -179,6 +179,10 @@ def _configured_provider_fallback(request: TurnRequest) -> TurnRequest | None:
         ),
         metadata={
             **request.metadata,
+            "failover_tried": [
+                *[tuple(item) for item in (request.metadata.get("failover_tried") or [])],
+                (str(request.route.provider or request.route.backend_id or ""), str(request.route.model or "")),
+            ],
             "auto_fallback_from": {
                 "backend": request.route.backend_id,
                 "provider": request.route.provider,
@@ -186,6 +190,99 @@ def _configured_provider_fallback(request: TurnRequest) -> TurnRequest | None:
             },
         },
     )
+
+
+_MAX_FAILOVER_ATTEMPTS = 3
+
+
+def _route_failed(error) -> bool:
+    try:
+        from distr.core.provider_failover import is_failover_error
+
+        return is_failover_error(error)
+    except Exception:
+        return False
+
+
+def _provider_failover_request(request: TurnRequest, error=None) -> TurnRequest | None:
+    """Every route (manual, automation, scheduled) fails over, not only Auto."""
+    try:
+        from distr.core.provider_failover import log_failover, next_failover
+    except Exception:
+        return None
+    tried = [tuple(item) for item in (request.metadata.get("failover_tried") or [])]
+    provider = str(request.route.provider or request.route.backend_id or "")
+    target = next_failover(provider, str(request.route.model or ""), tried=tried, error=error)
+    log_failover("development", provider, str(request.route.model or ""), error, target)
+    if target is None:
+        return None
+    options = dict(request.route.adapter_options)
+    options["model_provider"] = target.provider
+    for key in ("fallback_backend", "fallback_model", "fallback_model_provider"):
+        options.pop(key, None)
+    return replace(
+        request,
+        route=replace(request.route, provider=target.provider, model=target.model, adapter_options=options),
+        metadata={
+            **request.metadata,
+            "failover_tried": [*tried, (provider, str(request.route.model or ""))],
+            "auto_fallback_from": {
+                "backend": request.route.backend_id,
+                "provider": request.route.provider,
+                "model": request.route.model,
+            },
+        },
+    )
+
+
+def _emit_failover_notice(request, fallback_request, error, on_event, runtime_id) -> None:
+    if not on_event:
+        return
+    try:
+        from distr.core.provider_failover import FailoverTarget, provider_down_notice
+
+        summary = provider_down_notice(
+            str(request.route.provider or request.route.backend_id or ""),
+            str(request.route.model or ""),
+            error,
+            FailoverTarget(str(fallback_request.route.provider or fallback_request.route.backend_id), str(fallback_request.route.model)),
+        )
+    except Exception:
+        summary = "The model provider is unavailable. Continuing with the next configured provider."
+    on_event(
+        TurnEvent(
+            kind=TurnEventKind.STATUS,
+            status=TurnStatus.INITIALIZING,
+            summary=summary,
+            runtime_id=runtime_id,
+            execution_session_id=0,
+            details={
+                "provider_down_notice": True,
+                "fallback_from": {
+                    "backend": request.route.backend_id,
+                    "provider": request.route.provider,
+                    "model": request.route.model,
+                },
+                "fallback_to": {
+                    "backend": fallback_request.route.backend_id,
+                    "provider": fallback_request.route.provider,
+                    "model": fallback_request.route.model,
+                },
+            },
+        )
+    )
+
+
+def _with_provider_down_notice(request: TurnRequest, result: TurnResult, target, on_event) -> TurnResult:
+    """No keyed fallback left: replace the raw provider dump with one clear notice."""
+    try:
+        from distr.core.provider_failover import provider_down_notice
+
+        raw = str(result.error or result.output or "")
+        notice = provider_down_notice(str(request.route.provider or request.route.backend_id or ""), str(request.route.model or ""), raw, target)
+    except Exception:
+        return result
+    return replace(result, error=notice, evidence={**result.evidence, "provider_error": raw[:1000], "provider_down_notice": notice})
 
 
 async def execute_turn(
@@ -290,8 +387,35 @@ async def execute_turn(
                     should_fallback = _counts_as_model_health_failure(str(native_exc))
                 except Exception:
                     should_fallback = False
+                should_fallback = should_fallback or _route_failed(str(native_exc))
             if not should_fallback:
                 raise
+            provider_request = _configured_provider_fallback(request, error=native_exc)
+            if provider_request is not None:
+                # The provider itself is down (credits, DNS, ...). Re-running the
+                # same provider through the CLI harness would fail the same way,
+                # so continue on the next configured, keyed provider instead.
+                if execution_session_id:
+                    from distr.core.kanban.project_execution import complete_execution_session
+
+                    complete_execution_session(
+                        execution_session_id,
+                        success=False,
+                        output_packet={"runtime_id": "native", "fallback_model": provider_request.route.model},
+                        error=str(native_exc),
+                    )
+                    execution_session_id = None
+                fallback_runtime_id = select_turn_runtime_id(provider_request)
+                active.runtime_id = fallback_runtime_id
+                _emit_failover_notice(request, provider_request, native_exc, on_event, fallback_runtime_id)
+                fallback_runtime = get_turn_runtime(fallback_runtime_id, request=provider_request)
+                active.runtime = fallback_runtime
+                return await fallback_runtime.execute(
+                    provider_request,
+                    on_event=on_event,
+                    cancellation=token,
+                    steering=steering,
+                )
             if execution_session_id:
                 from distr.core.kanban.project_execution import complete_execution_session
 
@@ -342,8 +466,16 @@ async def execute_turn(
                 route_failed = _counts_as_model_health_failure(result.error or result.output)
             except Exception:
                 route_failed = False
-            fallback_request = _configured_provider_fallback(request) if route_failed else None
-            if fallback_request is not None:
+            route_failed = route_failed or _route_failed(result.error or result.output)
+            original_request = request
+            attempts = 0
+            fallback_request = (
+                _configured_provider_fallback(request, error=result.error or result.output) if route_failed else None
+            )
+            if route_failed and fallback_request is None:
+                result = _with_provider_down_notice(request, result, None, on_event)
+            while fallback_request is not None and attempts < _MAX_FAILOVER_ATTEMPTS:
+                attempts += 1
                 if execution_session_id:
                     from distr.core.kanban.project_execution import complete_execution_session
 
@@ -361,30 +493,7 @@ async def execute_turn(
                     execution_session_id = None
                 fallback_runtime_id = select_turn_runtime_id(fallback_request)
                 active.runtime_id = fallback_runtime_id
-                if on_event:
-                    source = request.route.provider or request.route.backend_id
-                    target = fallback_request.route.provider or fallback_request.route.backend_id
-                    on_event(
-                        TurnEvent(
-                            kind=TurnEventKind.STATUS,
-                            status=TurnStatus.INITIALIZING,
-                            summary=f"{source} is unavailable. Auto is continuing with {target}.",
-                            runtime_id=fallback_runtime_id,
-                            execution_session_id=0,
-                            details={
-                                "fallback_from": {
-                                    "backend": request.route.backend_id,
-                                    "provider": request.route.provider,
-                                    "model": request.route.model,
-                                },
-                                "fallback_to": {
-                                    "backend": fallback_request.route.backend_id,
-                                    "provider": fallback_request.route.provider,
-                                    "model": fallback_request.route.model,
-                                },
-                            },
-                        )
-                    )
+                _emit_failover_notice(request, fallback_request, result.error or result.output, on_event, fallback_runtime_id)
                 fallback_runtime = get_turn_runtime(fallback_runtime_id, request=fallback_request)
                 active.runtime = fallback_runtime
                 result = await fallback_runtime.execute(
@@ -399,9 +508,9 @@ async def execute_turn(
                         **result.evidence,
                         "auto_fallback": {
                             "from": {
-                                "backend": request.route.backend_id,
-                                "provider": request.route.provider,
-                                "model": request.route.model,
+                                "backend": original_request.route.backend_id,
+                                "provider": original_request.route.provider,
+                                "model": original_request.route.model,
                             },
                             "to": {
                                 "backend": fallback_request.route.backend_id,
@@ -411,6 +520,15 @@ async def execute_turn(
                         },
                     },
                 )
+                if result.success or native_mutation_started or native_output_started:
+                    break
+                if not _route_failed(result.error or result.output):
+                    break
+                request = fallback_request
+                fallback_request = _configured_provider_fallback(request, error=result.error or result.output)
+                if fallback_request is None:
+                    result = _with_provider_down_notice(request, result, None, on_event)
+            request = original_request
         if execution_session_id:
             from distr.core.kanban.project_execution import complete_execution_session
 

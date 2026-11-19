@@ -67,13 +67,105 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         """Return the provider name for chat persistence. Inferred from class name."""
         return self.__class__.__name__.replace("LLMService", "")
 
+    def _last_user_text_for_failover(self) -> str:
+        from distr.core.agent.services.llm.oracle_context import strip_rag_block
+
+        for message in reversed(getattr(self, "_messages", []) or []):
+            if message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, list):
+                content = " ".join(
+                    str(part.get("text") or "") for part in content if isinstance(part, dict)
+                )
+            return strip_rag_block(str(content or "")).strip()
+        return ""
+
+    def _try_provider_failover(self, exc):
+        """Hand a provider-down turn to the next keyed provider.
+
+        Returns ``(handled, notice)``. ``handled`` means the session swapped to
+        a fallback provider and is replaying the user's message there, so the
+        raw provider error must not be shown. ``notice`` is the single plain
+        provider-down sentence (also used when no fallback exists).
+        """
+        try:
+            from distr.core.provider_failover import (
+                classify_provider_error,
+                log_failover,
+                next_failover,
+                provider_down_notice,
+                FAILOVER_CATEGORIES,
+            )
+        except Exception:
+            return False, ""
+        category = classify_provider_error(exc)
+        if category not in FAILOVER_CATEGORIES:
+            return False, ""
+        provider = self._get_provider_name()
+        model = str(getattr(self, "_model_name", "") or "")
+        tried = list(getattr(self, "_failover_tried", []) or [])
+        target = next_failover(provider, model, tried=tried, error=exc)
+        log_failover("chat", provider, model, exc, target)
+        notice = provider_down_notice(provider, model, exc, target)
+        handler = getattr(self, "_provider_failover_handler", None)
+        user_text = self._last_user_text_for_failover()
+        if target is None or not callable(handler) or not user_text:
+            if target is not None:
+                notice = provider_down_notice(provider, model, exc, None)
+            return False, notice
+        chat_id = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+        try:
+            handled = bool(handler(
+                target=target,
+                text=user_text,
+                chat_id=chat_id,
+                notice=notice,
+                tried=[*tried, (provider, model)],
+                is_telegram=bool(getattr(self, "_is_telegram_request", False)),
+            ))
+        except Exception:
+            logger.warning("Provider failover handler failed", exc_info=True)
+            handled = False
+        if not handled:
+            return False, provider_down_notice(provider, model, exc, None)
+        return True, notice
+
+    def _post_provider_notice(self, notice: str) -> None:
+        """Show the provider-down notice once (per provider, per 30 minutes)."""
+        try:
+            from distr.core.provider_failover import classify_provider_error, should_emit_notice
+
+            if not should_emit_notice(self._get_provider_name(), classify_provider_error(notice) or "notice"):
+                return
+        except Exception:
+            pass
+        try:
+            if self.chat_manager:
+                current_chat = self.chat_manager.get_current_chat()
+                if current_chat:
+                    self.chat_manager.add_assistant_message(current_chat, notice)
+        except Exception:
+            logger.debug("Could not persist provider notice", exc_info=True)
+        if getattr(self, "event_queue", None):
+            chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+            try:
+                self.event_queue.put(("provider_down_notice", {"notice": notice, "chat_id": chat_id}), block=False)
+            except Exception:
+                pass
+
     async def _surface_model_error(self, exc, operation: str = "generate a response") -> str:
         """Show model/provider failures in chat; speak a short human line only."""
         from distr.core.agent.libs import ErrorFrame, TextFrame
         from distr.core.llm_errors import format_model_error, format_model_error_for_tts
         from distr.core.agent.services.llm.text_utils import clean_text_for_tts
 
-        msg = format_model_error(
+        handled, notice = self._try_provider_failover(exc)
+        if handled:
+            self._post_provider_notice(notice)
+            return ""
+
+        msg = notice or format_model_error(
             exc,
             provider=self._get_provider_name(),
             model=getattr(self, "_model_name", ""),
@@ -2200,7 +2292,10 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         elif image_path:
             logger.warning("Image path provided but file doesn't exist: %s", image_path)
 
-        self._messages.append({"role": "user", "content": user_message_content})
+        last = self._messages[-1] if self._messages else {}
+        replaying = bool(getattr(self, "_failover_replay", False)) or bool(getattr(self, "_failover_tried", None))
+        if not (replaying and last.get("role") == "user" and str(last.get("content")) == str(user_message_content)):
+            self._messages.append({"role": "user", "content": user_message_content})
 
         # Cancel any running background chain before starting new generation
         if hasattr(self, '_background_chain') and self._background_chain:
@@ -2215,6 +2310,23 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             except asyncio.CancelledError:
                 pass
             self._cancelled = False
+
+        try:
+            from distr.core.provider_failover import is_chat_capable_model
+
+            chat_capable = is_chat_capable_model(getattr(self, "_model_name", ""))
+        except Exception:
+            chat_capable = True
+        if not chat_capable:
+            # Batch-only / embedding / speech models can never answer a chat
+            # turn; fail over before calling the provider at all.
+            await self._surface_model_error(
+                RuntimeError(
+                    f"{getattr(self, '_model_name', '')} cannot be used with the chat/completions endpoint"
+                ),
+                operation="generate a response",
+            )
+            return
 
         self._generation_task = asyncio.create_task(self._generate_response())
 

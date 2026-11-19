@@ -901,7 +901,7 @@ def test_auto_route_uses_configured_provider_fallback_on_credit_failure(monkeypa
         ("claude_code", "anthropic", "opus"),
         ("pi", "ollama", "muse-glimmer:30b-mlx"),
     ]
-    assert "Auto is continuing with ollama" in events[-1].summary
+    assert "switched to Ollama · muse-glimmer:30b-mlx" in events[-1].summary
 
 
 def test_manual_route_without_fallback_returns_provider_credit_failure(monkeypatch):
@@ -921,7 +921,10 @@ def test_manual_route_without_fallback_returns_provider_credit_failure(monkeypat
     result = asyncio.run(turn_service.execute_turn(_request()))
 
     assert result.success is False
-    assert result.error == "Credit balance is too low"
+    # No keyed fallback exists in the test settings: one plain provider-down
+    # notice replaces the raw dump, and the raw text stays in evidence.
+    assert result.error.startswith("Kilo (free-model) is out of credits,")
+    assert result.evidence["provider_error"] == "Credit balance is too low"
 
 
 def test_service_cancellation_reaches_native_tool_runtime(monkeypatch):
