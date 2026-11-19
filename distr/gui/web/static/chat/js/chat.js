@@ -58,6 +58,13 @@ let loadedChatSkippedLoadInAgent = false;
 let _streamToken = 0;
 /** Sequence counter for selectChat — only the latest call renders its result. */
 let _selectSeq = 0;
+/** If desktop voice/PTT is talking through the starred agent while another thread is open, view the starred one so the transcript is visible. */
+function _ensureViewingLiveChatForVoice(chatId) {
+    if (chatId == null || loadedChatId == null) return;
+    if (Number(chatId) !== Number(loadedChatId)) return;
+    if (Number(currentChatId) === Number(chatId)) return;
+    selectChat(Number(chatId));
+}
 /** Guard against double-clicking "+" creating two chats simultaneously. */
 let _createChatGuard = false;
 let _agentModalInitialized = false;
@@ -568,6 +575,14 @@ document.addEventListener('DOMContentLoaded', () => {
     loadChats().then(async (data) => {
         const params = new URLSearchParams(window.location.search);
         const idParam = params.get('id');
+        const chats = (data && data.chats) || [];
+        const liveId = data && data.agent_current_chat_id != null ? Number(data.agent_current_chat_id) : null;
+        // Star = loaded = live agent. Restore that first so a viewed thread cannot look like the speaker.
+        if (liveId && !Number.isNaN(liveId) && chats.some(c => c.id === liveId)) {
+            loadedChatId = liveId;
+            agentCurrentChatId = liveId;
+            updateActiveChat();
+        }
         if (idParam) {
             const chatId = parseInt(idParam, 10);
             const fromCreate = params.get('from_create') === '1';
@@ -575,13 +590,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (fromCreate) await loadChat(chatId, { skipLoadInAgent: true });
                 else await selectChat(chatId);
             }
-        } else if (data && data.chats && data.chats.length === 0) {
+        } else if (chats.length === 0) {
             // Show empty state so user can select provider/model/voice before first chat
             showEmptyState();
-        } else if (data && data.last_chat_id != null && data.chats && data.chats.length) {
-            const lastId = Number(data.last_chat_id);
-            if (!isNaN(lastId) && data.chats.some(c => c.id === lastId)) {
+        } else {
+            // last_chat_id is the viewed thread only; never a live-agent fallback.
+            const lastId = data && data.last_chat_id != null ? Number(data.last_chat_id) : null;
+            if (!isNaN(lastId) && lastId && chats.some(c => c.id === lastId)) {
                 await selectChat(lastId);
+            } else if (liveId && chats.some(c => c.id === liveId)) {
+                await selectChat(liveId);
             }
         }
         syncKanbanSourceChatContext();
@@ -898,6 +916,7 @@ function startChatWebSocket(force) {
                     return;
                 }
                 if (msg.event === 'transcription_progress') {
+                    _ensureViewingLiveChatForVoice(msg.chat_id);
                     if (Number(msg.chat_id) === Number(currentChatId)) {
                         queueTranscriptionStatusUpdate(
                             msg.status != null ? msg.status : '',
@@ -909,7 +928,13 @@ function startChatWebSocket(force) {
                     return;
                 }
                 if (msg.type === 'agent_chat_changed') {
-                    // PUT /api/chat/current switched the Oracle's chat: refresh the "In agent" marker.
+                    // Oracle / voice / PUT /api/chat/current moved the live agent: star and loadedChatId follow.
+                    const liveId = msg.agent_current_chat_id != null ? Number(msg.agent_current_chat_id) : null;
+                    if (liveId && !Number.isNaN(liveId)) {
+                        loadedChatId = liveId;
+                        agentCurrentChatId = liveId;
+                        updateActiveChat();
+                    }
                     loadChats().catch(() => {});
                     return;
                 }
@@ -1695,6 +1720,7 @@ function repairMissingUserMessageForStream(chatId) {
 
 function handleChatEventStreamStarted(msg) {
     updatePrimaryAgentActivity(msg.chat_id, true);
+    _ensureViewingLiveChatForVoice(msg.chat_id);
     if (Number(msg.chat_id) !== Number(currentChatId)) return;
     const preview = document.getElementById('transcriptionStatus');
     // Realtime can create the response before input transcription completes.
@@ -2472,6 +2498,7 @@ function createChatItem(chat) {
             <span class="chat-item-preview">${escapeHtml(chat.latest_message || 'No messages yet')}</span>
         </span>
         <span class="chat-unread-dot" ${chat.unread ? '' : 'hidden'} aria-label="Unread replies"></span>
+        ${chat.agent_id != null ? `<button type="button" class="agent-star${chat.is_primary ? ' is-primary' : ''}" aria-pressed="${chat.is_primary ? 'true' : 'false'}" aria-label="${chat.is_primary ? 'Active agent' : 'Make this the active agent'}" title="${chat.is_primary ? 'Active agent' : 'Make this the active agent'}">${chat.is_primary ? '★' : '☆'}</button>` : ''}
     `;
     
     const skin = (sidebarSkins || []).find(skin => skin.folder_name === chat.skin_name);
@@ -2765,25 +2792,42 @@ function applyChatsData(data) {
     if (!data) return;
     agentCurrentChatId = data.agent_current_chat_id != null ? Number(data.agent_current_chat_id) : null;
     if (isNaN(agentCurrentChatId)) agentCurrentChatId = null;
-    // If the agent already has a chat loaded AND that chat still exists in the list,
-    // the web UI should treat it as loaded too.
+    // Star = loaded = live agent. Always keep loadedChatId in lockstep with the live chat.
     const chats = data.chats || [];
-    if (agentCurrentChatId != null && loadedChatId == null && chats.some(c => c.id === agentCurrentChatId)) {
+    if (agentCurrentChatId != null && chats.some(c => c.id === agentCurrentChatId)) {
         loadedChatId = agentCurrentChatId;
+    } else if (agentCurrentChatId == null) {
+        loadedChatId = null;
     }
     updateActiveChat();
     syncKanbanSourceChatContext();
 }
 
 function updateActiveChat() {
+    // One starred, loaded, live agent at a time. The star is that agent — not a viewing highlight.
+    if (loadedChatId != null && agentCurrentChatId != null && loadedChatId !== agentCurrentChatId) {
+        loadedChatId = agentCurrentChatId;
+    } else if (agentCurrentChatId != null && loadedChatId == null) {
+        loadedChatId = agentCurrentChatId;
+    }
+    const liveId = loadedChatId;
     document.getElementById('primaryAgentCard')?.classList.toggle('active', currentChatId === primaryAgentData?.main_conversation_id);
     document.querySelectorAll('.chat-item').forEach(item => {
         const id = parseInt(item.getAttribute('data-chat-id'), 10);
         item.classList.toggle('active', id === currentChatId);
         item.setAttribute('aria-selected', id === currentChatId ? 'true' : 'false');
-        item.classList.toggle('loaded', id === loadedChatId);
-        const inAgent = (id === agentCurrentChatId);
-        item.classList.toggle('in-agent', inAgent);
+        const isLive = liveId != null && id === liveId;
+        item.classList.toggle('loaded', isLive);
+        item.classList.toggle('in-agent', isLive);
+        item.classList.toggle('is-primary-agent', isLive && item.dataset.agentId);
+        const star = item.querySelector('.agent-star');
+        if (star) {
+            star.classList.toggle('is-primary', isLive);
+            star.setAttribute('aria-pressed', isLive ? 'true' : 'false');
+            star.setAttribute('aria-label', isLive ? 'Active agent' : 'Make this the active agent');
+            star.title = isLive ? 'Active agent' : 'Make this the active agent';
+            star.textContent = isLive ? '★' : '☆';
+        }
     });
 }
 
@@ -2808,8 +2852,6 @@ async function tryAdoptAgentFirstChat(data) {
     let chatId = null;
     if (agentId != null && !Number.isNaN(agentId) && chats.some((c) => c.id === agentId)) {
         chatId = agentId;
-    } else if (chats.length > 0) {
-        chatId = chats[0].id;
     }
     if (chatId == null) return false;
     stopEmptyStateAgentWatch();
@@ -2959,10 +3001,8 @@ async function loadEmptyStateDropdowns() {
             llmProviderEl.value = llmProvider;
             await loadEmptyStateLlmModels(llmProvider);
             const defaultModel = (modelsData.model || '').trim();
-            if (defaultModel && llmModelEl.options.length) {
-                const opt = Array.from(llmModelEl.options).find(o => o.value === defaultModel);
-                if (opt) llmModelEl.value = defaultModel;
-                else if (llmModelEl.options[0] && llmModelEl.options[0].value) llmModelEl.selectedIndex = 0;
+            if (defaultModel) {
+                keepSavedModelOption(llmModelEl, defaultModel);
             } else if (llmModelEl.options[0] && llmModelEl.options[0].value) llmModelEl.selectedIndex = 0;
         }
         populateChatVoiceProviderSelect(voiceProviderEl);
@@ -5210,6 +5250,20 @@ function escapeHtml(text) {
 }
 
 // Load LLM models for provider (settings API)
+/** Keep a saved model id visible even if it is missing from the current catalog. Never silently take the first option. */
+function keepSavedModelOption(modelSelectEl, savedModel) {
+    const preferred = (savedModel || '').trim();
+    if (!preferred || !modelSelectEl) return;
+    let opt = Array.from(modelSelectEl.options).find(o => o.value === preferred);
+    if (!opt) {
+        opt = document.createElement('option');
+        opt.value = preferred;
+        opt.textContent = preferred;
+        modelSelectEl.insertBefore(opt, modelSelectEl.firstChild);
+    }
+    modelSelectEl.value = preferred;
+}
+
 async function loadLlmModelsInto(modelSelectEl, provider, preferredModel) {
     if (!modelSelectEl) return;
     const providerId = providerIdFromDisplay(provider || '');
@@ -5232,10 +5286,8 @@ async function loadLlmModelsInto(modelSelectEl, provider, preferredModel) {
                 ? `<option value="${escapeHtml(preferred)}">${escapeHtml(preferred)}</option>`
                 : '<option value="">No models</option>');
         if (preferred) {
-            const opt = Array.from(modelSelectEl.options).find(o => o.value === preferred);
-            if (opt) modelSelectEl.value = preferred;
-        }
-        if (!modelSelectEl.value && modelSelectEl.options[0] && modelSelectEl.options[0].value) {
+            keepSavedModelOption(modelSelectEl, preferred);
+        } else if (!modelSelectEl.value && modelSelectEl.options[0] && modelSelectEl.options[0].value) {
             modelSelectEl.selectedIndex = 0;
         }
         await applyChatS2sLocksForModelSelect(modelSelectEl);
@@ -5516,10 +5568,8 @@ async function loadDefaultSettings() {
             llmProviderSelect.value = llmProvider;
             await loadLlmModels(llmProvider);
             const defaultModel = (modelsData.model || '').trim();
-            if (defaultModel && llmModelSelect.options.length) {
-                const opt = Array.from(llmModelSelect.options).find(o => o.value === defaultModel);
-                if (opt) llmModelSelect.value = defaultModel;
-                else if (llmModelSelect.options[0] && llmModelSelect.options[0].value) llmModelSelect.selectedIndex = 0;
+            if (defaultModel) {
+                keepSavedModelOption(llmModelSelect, defaultModel);
             } else if (llmModelSelect.options[0] && llmModelSelect.options[0].value) {
                 llmModelSelect.selectedIndex = 0;
             }
@@ -5560,10 +5610,8 @@ async function showNewChatModal() {
     newChatModal.style.display = 'flex';
     document.body.classList.add('agent-modal-open');
     modalClose.focus();
-    if (_agentModalInitialized) {
-        voiceProviderSelect.focus();
-        return;
-    }
+    // Always reload Settings defaults so the model pick is not a stale first-open value.
+    _agentModalInitialized = false;
     // Show loader, hide form
     const modalLoader = document.getElementById('modalLoader');
     const modalForm = document.getElementById('modalFormContent');
@@ -5580,6 +5628,12 @@ async function showNewChatModal() {
     const revealTimer = setTimeout(revealModal, 12000);
     try {
         await loadDefaultSettings();
+        // Show the form as soon as the model/voice picks exist. Skin thumbnails
+        // can finish after that; do not leave the controls hidden if skins stall.
+        revealModal();
+        if (newChatModal.style.display !== 'none' && voiceProviderSelect) {
+            voiceProviderSelect.focus();
+        }
         await loadModalSkins();
         _agentModalInitialized = Boolean(llmModelSelect.value && voiceModelSelect.value);
         toggleModalOllamaPullBtn();
@@ -5588,7 +5642,9 @@ async function showNewChatModal() {
     } finally {
         clearTimeout(revealTimer);
         revealModal();
-        if (newChatModal.style.display !== 'none') voiceProviderSelect.focus();
+        if (newChatModal.style.display !== 'none' && voiceProviderSelect) {
+            voiceProviderSelect.focus();
+        }
     }
 }
 

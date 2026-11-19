@@ -3068,3 +3068,22 @@
 @media (max-width:640px) {
     .agent-setup-layout { grid-template-columns:88px minmax(0,1fr); gap:12px; }
 }
+
+/* Active/loaded agent star in the sidebar list */
+.agent-star {
+    flex: 0 0 auto;
+    background: none;
+    border: 0;
+    padding: 2px 4px;
+    font-size: 16px;
+    line-height: 1;
+    color: rgba(236, 236, 241, 0.35);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s;
+}
+.chat-item:hover .agent-star, .chat-item:focus-within .agent-star, .agent-star.is-primary { opacity: 1; }
+.agent-star:hover { color: #fbbf24; }
+.agent-star.is-primary { color: #fbbf24; cursor: default; }
+.agent-star:focus-visible { opacity: 1; outline: 2px solid #f97316; outline-offset: 1px; border-radius: 4px; }
+

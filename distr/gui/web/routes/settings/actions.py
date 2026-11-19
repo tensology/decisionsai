@@ -178,7 +178,10 @@ def register_routes(router, templates):
     @router.put("/last-chat-id")
     @route_handler("save last_chat_id")
     async def set_last_chat_id(body: LastChatIdUpdate):
-        """Persist last-loaded chat ID so refresh restores it."""
+        """Persist the viewed chat ID so refresh can restore the open thread.
+
+        This does not change the live/starred agent (agent_current_chat_id).
+        """
         from distr.core.services.settings_service import update_setting
         update_setting("last_chat_id", body.last_chat_id)
         return JSONResponse({"success": True, "last_chat_id": body.last_chat_id})

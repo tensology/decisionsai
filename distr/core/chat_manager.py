@@ -170,7 +170,8 @@ class ChatManagerCore:
         # Load agent prompt (persona + system template)
         self.agent_prompt = self._load_agent_prompt()
 
-        # Load conversational LLM + last chat from settings
+        # Load conversational LLM + the live/starred agent chat from settings.
+        # last_chat_id is the viewed thread only and is not a restart fallback.
         with get_session() as session:
             settings = session.query(Settings).first()
             if settings:
@@ -197,10 +198,7 @@ class ChatManagerCore:
                         self.current_provider,
                     )
 
-                selected_chat_id = (
-                    getattr(settings, "agent_current_chat_id", None)
-                    or settings.last_chat_id
-                )
+                selected_chat_id = getattr(settings, "agent_current_chat_id", None)
                 if selected_chat_id:
                     chat = session.get(Chat, selected_chat_id)
                     from distr.core.workflow.development_threads import is_development_thread
@@ -209,7 +207,7 @@ class ChatManagerCore:
                         self._current_chat_id = chat.id
                         self._apply_chat_runtime_metadata(chat)
                         logger.info(
-                            "ChatManagerCore: Loading last chat ID from settings: %s",
+                            "ChatManagerCore: Loading live agent chat ID from settings: %s",
                             chat.id,
                         )
                     else:
@@ -219,14 +217,12 @@ class ChatManagerCore:
                                 chat.id,
                             )
                         settings.agent_current_chat_id = None
-                        if settings.last_chat_id == selected_chat_id:
-                            settings.last_chat_id = None
                         session.commit()
                         logger.info(
-                            "ChatManagerCore: Last saved chat not found in database"
+                            "ChatManagerCore: Last saved live chat not found in database"
                         )
                 else:
-                    logger.info("ChatManagerCore: No last chat ID found in settings")
+                    logger.info("ChatManagerCore: No live agent chat ID found in settings")
 
     # ---- event helpers ----
 
@@ -520,6 +516,11 @@ class ChatManagerCore:
                     settings.last_chat_id = chat_id
                     settings.agent_current_chat_id = chat_id
                     session.commit()
+            try:
+                from distr.core.chat_agents import sync_primary_to_live_chat
+                sync_primary_to_live_chat(chat_id)
+            except Exception:
+                logger.warning("ChatManagerCore: could not sync primary star to live chat %s", chat_id, exc_info=True)
 
             if changed:
                 self.emit("current_chat_changed", chat_id)

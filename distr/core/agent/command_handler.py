@@ -763,7 +763,15 @@ def _apply_requested_chat_for_input(session, params):
         return None
 
     session._agent_current_chat_id_from_signal = chat_id
-    _cmd_current_chat_changed(session, {"chat_id": chat_id})
+    swap_params = {"chat_id": chat_id}
+    # The chat row is the source of truth; request provider/model are applied
+    # only after that swap, and only when they were explicitly provided.
+    if isinstance(params, dict):
+        if params.get("provider"):
+            swap_params["provider"] = params.get("provider")
+        if params.get("model_name"):
+            swap_params["model_name"] = params.get("model_name")
+    _cmd_current_chat_changed(session, swap_params)
     return chat_id
 
 def _cmd_process_text_input(session, params):
@@ -1750,6 +1758,12 @@ def _cmd_current_chat_changed(session, params):
                 raw = (chat.provider or "").strip()
                 chat_provider = normalize_provider(raw) if raw else None
                 chat_model = (chat.model_name or "").strip() or None
+                req_provider = (params.get("provider") or "").strip() if isinstance(params, dict) else ""
+                req_model = (params.get("model_name") or "").strip() if isinstance(params, dict) else ""
+                if req_provider:
+                    chat_provider = normalize_provider(req_provider)
+                if req_model:
+                    chat_model = req_model
 
                 chat_voice_provider = _nvp(chat.voice_provider) if chat.voice_provider else None
                 chat_voice_model = (chat.voice_model or "").strip() if chat.voice_model else None
@@ -1869,6 +1883,27 @@ def _cmd_current_chat_changed(session, params):
 
     session.logger.debug("Load chat %s: provider=%s model=%s completions_model=%s voice=%s/%s need_llm_swap=%s",
                          chat_id, provider, raw_model, completions_model, chat_voice_provider, chat_voice_model, need_llm_swap)
+    try:
+        settings = session.settings or {}
+        viewed_id = settings.get("last_chat_id")
+        starred_id = settings.get("agent_current_chat_id")
+        request_model = (params.get("model_name") or "").strip() if isinstance(params, dict) else ""
+        if (
+            (viewed_id not in (None, "", chat_id) and int(viewed_id) != int(chat_id))
+            or (starred_id not in (None, "", chat_id) and int(starred_id) != int(chat_id))
+            or (request_model and request_model != (raw_model or ""))
+        ):
+            session.logger.info(
+                "Chat routing mismatch: viewed_chat_id=%s starred_chat_id=%s ran_chat_id=%s "
+                "request_model=%s ran_model=%s",
+                viewed_id,
+                starred_id,
+                chat_id,
+                request_model or None,
+                raw_model,
+            )
+    except Exception:
+        session.logger.debug("Chat routing mismatch log failed", exc_info=True)
 
     # ---------------------------------------------------------------
     # 5. Swap LLM if needed

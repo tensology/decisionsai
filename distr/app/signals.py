@@ -807,6 +807,10 @@ class SignalBridgeMixin:
                     'speak': False if origin_surface == 'remote' else speak_bool,
                     'chat_id': chat_id,
                 }
+                if provider:
+                    params['provider'] = provider
+                if model_name:
+                    params['model_name'] = model_name
                 if origin_surface == 'remote':
                     params['is_telegram'] = True
                     params['external_surface'] = 'remote'

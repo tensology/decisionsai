@@ -1702,52 +1702,23 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     "autonomy_level": chat.autonomy_level or "full",
                 }
 
-            # ── Persist chat selections to global settings so the next "new chat" ──
-            # defaults to these choices. Persist resolved values (not only explicit
-            # request fields) so provider/model and voice provider/voice stay in sync.
+            # Defaults for new chats come only from Settings. Do not copy this
+            # thread's provider/model into conversational_llm_model, llm_model or
+            # agent_model (or the matching provider keys). S2S ids are still
+            # stripped if they ever landed in globals.
             try:
-                from distr.core.settings import save_settings_to_db as _save_settings
-                _settings = load_settings_from_db()
-                _changed = False
-
-                # LLM provider & model — never write Realtime S2S ids into globals
                 from distr.core.openai_s2s import is_openai_s2s_model, strip_realtime_from_settings_models
-                if not is_openai_s2s_model(model_name):
-                    _settings["conversational_llm_provider"] = provider  # normalized
-                    _settings["llm_provider"] = provider
-                    _settings["agent_provider"] = provider
-                    _changed = True
-                    if model_name:
-                        _settings["conversational_llm_model"] = model_name
-                        _settings["llm_model"] = model_name
-                        _settings["agent_model"] = model_name
-                        _changed = True
-                else:
-                    strip_realtime_from_settings_models(_settings)
+                if is_openai_s2s_model(model_name):
+                    from distr.core.settings import save_settings_to_db as _save_settings
+                    _settings = load_settings_from_db()
+                    if strip_realtime_from_settings_models(_settings):
+                        _save_settings(_settings)
                     logger.info(
                         "Create chat: S2S model %s kept chat-scoped; globals Completions untouched",
                         model_name,
                     )
-
-                # TTS globals: skip when chat is S2S (Realtime voice is chat-scoped)
-                if voice_provider and voice_model and not is_openai_s2s_model(model_name):
-                    from distr.core.services.settings_service import (
-                        apply_voice_selection_to_settings,
-                    )
-
-                    if apply_voice_selection_to_settings(
-                        _settings, voice_provider, voice_model
-                    ):
-                        _changed = True
-
-                if _changed and request_data.agent_name is None:
-                    _save_settings(_settings)
-                    logger.info(
-                        "Create chat: persisted selections to global settings (provider=%s, model=%s, voice_provider=%s, voice_model=%s)",
-                        provider, model_name, voice_provider, voice_model,
-                    )
             except Exception as e:
-                logger.warning("Create chat: could not persist selections to settings: %s", e)
+                logger.warning("Create chat: could not tidy S2S settings: %s", e)
 
             try:
                 from distr.core.signals import signal_manager
@@ -1906,59 +1877,19 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     "autonomy_level": chat.autonomy_level or "full",
                 }
 
-            # ── Persist to global settings so next new chat defaults to these choices ──
+            # Defaults change only in Settings. PATCH must not overwrite
+            # conversational_llm_model, llm_model or agent_model (or provider keys).
             try:
-                _sett = load_settings_from_db()
-                _changed = False
-                if request_data.provider and request_data.provider.strip():
-                    from distr.core.chat import _normalize_provider, valid_llm_providers
-                    from distr.core.openai_s2s import is_openai_s2s_model
-                    # Provider globals only when not switching into S2S via model below
-                    if not (
-                        request_data.model_name
-                        and is_openai_s2s_model(request_data.model_name.strip())
-                    ):
-                        _sett["conversational_llm_provider"] = _normalize_provider(request_data.provider)
-                        _sett["llm_provider"] = _normalize_provider(request_data.provider)
-                        _sett["agent_provider"] = _normalize_provider(request_data.provider)
-                        _changed = True
                 if request_data.model_name and request_data.model_name.strip():
                     from distr.core.openai_s2s import is_openai_s2s_model, strip_realtime_from_settings_models
                     _m = request_data.model_name.strip()
                     if is_openai_s2s_model(_m):
-                        strip_realtime_from_settings_models(_sett)
-                    else:
-                        _sett["conversational_llm_model"] = _m
-                        _sett["llm_model"] = _m
-                        _sett["agent_model"] = _m
-                        _changed = True
-
-                # Voice globals: skip when chat is S2S (Realtime voice is chat-scoped)
-                voice_touched = (
-                    request_data.voice_provider is not None
-                    or request_data.voice_model is not None
-                )
-                _chat_model = (response_payload.get("model_name") or "").strip()
-                from distr.core.openai_s2s import is_openai_s2s_model as _is_s2s
-                if voice_touched and not _is_s2s(_chat_model):
-                    from distr.core.services.settings_service import (
-                        apply_voice_selection_to_settings,
-                    )
-
-                    vp_eff = (response_payload.get("voice_provider") or "").strip()
-                    vm_eff = (response_payload.get("voice_model") or "").strip()
-                    if vp_eff and vm_eff:
-                        if apply_voice_selection_to_settings(_sett, vp_eff, vm_eff):
-                            _changed = True
-
-                if _changed:
-                    from distr.core.settings import save_settings_to_db as _save_settings
-                    _save_settings(_sett)
-                    logger.info(
-                        "Update chat %s: persisted selections to global settings", chat_id
-                    )
+                        _sett = load_settings_from_db()
+                        if strip_realtime_from_settings_models(_sett):
+                            from distr.core.settings import save_settings_to_db as _save_settings
+                            _save_settings(_sett)
             except Exception as e:
-                logger.warning("Update chat: could not persist selections to settings: %s", e)
+                logger.warning("Update chat: could not tidy S2S settings: %s", e)
 
             if settings_fields_touched and updated:
                 from distr.core.agent.tool_audit import record_chat_settings_change
@@ -2397,8 +2328,10 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 settings["last_chat_id"] = chat_id
                 settings["agent_current_chat_id"] = chat_id
                 save_settings_to_db(settings)
+                from distr.core.chat_agents import sync_primary_to_live_chat
+                sync_primary_to_live_chat(chat_id)
                 logger.info(
-                    "Load-in-agent: persisted last_chat_id and agent_current_chat_id=%s",
+                    "Load-in-agent: persisted last_chat_id and agent_current_chat_id=%s and synced primary star",
                     chat_id,
                 )
             except Exception as e:
@@ -2540,6 +2473,39 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             # The agent command handler already sets agent_current_chat_id when
             # processing the hot-swap.  Doing a full settings round-trip on every
             # message adds ~50-100ms of unnecessary SQLite I/O.
+            viewed_chat_id = None
+            viewed_or_row_model = None
+            try:
+                settings = load_settings_from_db()
+                viewed_chat_id = settings.get("agent_current_chat_id")
+                last_viewed = settings.get("last_chat_id")
+            except Exception:
+                settings = {}
+                last_viewed = None
+            try:
+                with get_session() as session:
+                    live_row = session.get(Chat, int(chat_id))
+                    viewed_or_row_model = (live_row.model_name or "") if live_row else ""
+            except Exception:
+                viewed_or_row_model = ""
+            if (
+                (last_viewed not in (None, chat_id) and int(last_viewed or 0) != int(chat_id))
+                or (viewed_chat_id not in (None, chat_id) and int(viewed_chat_id or 0) != int(chat_id))
+                or (
+                    (model_name or "").strip()
+                    and viewed_or_row_model
+                    and (model_name or "").strip() != viewed_or_row_model.strip()
+                )
+            ):
+                logger.info(
+                    "Chat routing mismatch: viewed_chat_id=%s live_or_request_chat_id=%s "
+                    "starred_chat_id=%s request_model=%s ran_model=%s",
+                    last_viewed,
+                    chat_id,
+                    viewed_chat_id,
+                    model_name,
+                    viewed_or_row_model,
+                )
             logger.info(
                 "Send-to-agent: chat_id=%s, speak=%s, provider=%s, model=%s, display_len=%s, agent_len=%s",
                 chat_id,

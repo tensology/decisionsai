@@ -22,3 +22,4 @@ def test_set_current_chat_persists_agent_current_chat_id_for_context_selectors()
 
     assert "settings.last_chat_id = chat_id" in set_current_block
     assert "settings.agent_current_chat_id = chat_id" in set_current_block
+    assert "sync_primary_to_live_chat" in set_current_block

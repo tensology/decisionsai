@@ -50,6 +50,47 @@ def primary_agent_payload(agent):
             'main_conversation_id': agent.main_chat_id}
 
 
+def appearance_owner(session, settings):
+    """Target the loaded/live conversation, or the primary when no chat is loaded.
+
+    last_chat_id is the viewed thread only and must not be used as the live-agent fallback.
+    """
+    from distr.core.db import Chat
+
+    chat_id = getattr(settings, "agent_current_chat_id", None) if settings else None
+    chat = session.get(Chat, chat_id) if chat_id else None
+    if chat and chat.parent_id is None:
+        return agent_for_conversation(session, chat.id), chat
+    return primary_agent(session), None
+
+
+def sync_primary_to_live_chat(chat_id):
+    """Star the agent that owns this conversation so the star, loaded chat and live agent agree.
+
+    last_chat_id (the viewed thread) is left unchanged. Returns the primary payload, or None
+    when the chat has no agent profile.
+    """
+    if chat_id is None:
+        return None
+    try:
+        chat_id = int(chat_id)
+    except (TypeError, ValueError):
+        return None
+    if chat_id <= 0:
+        return None
+    with get_session() as session:
+        agent = agent_for_conversation(session, chat_id)
+        if not agent:
+            return None
+        row = session.get(PrimaryChatAgent, 1)
+        if row is None:
+            session.add(PrimaryChatAgent(id=1, agent_id=agent.id))
+        elif row.agent_id != agent.id:
+            row.agent_id = agent.id
+        session.commit()
+        return primary_agent_payload(agent)
+
+
 def validate_agent_profile(name, role=""):
     name, role = str(name or "").strip(), str(role or "").strip()
     if not name or len(name) > 80:
