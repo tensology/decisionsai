@@ -1,5 +1,6 @@
 """A real Python web app must produce source-backed planning inventory."""
 import json
+import re
 from pathlib import Path
 
 from distr.core.planning import project_scan as scan
@@ -101,11 +102,13 @@ def test_home_page_is_not_lost_during_sitemap_widening(tmp_path):
 
 
 def test_erd_limit_does_not_create_implicit_ghost_entities():
-    models=[{'name':f'Model{n:03d}', 'app':'app', 'fields':[], 'relations':[]} for n in range(61)]
+    # The ERD is capped by size, not count: 61 wide models overflow the budget and the last ones drop out.
+    fields=[{'name':f'field_{i:03d}_with_a_long_descriptive_name', 'mermaid':'string'} for i in range(40)]
+    models=[{'name':f'Model{n:03d}', 'app':'app', 'fields':fields, 'relations':[]} for n in range(61)]
     models[0]['relations']=[{'field':'outside_id','kind':'ForeignKey','target':'Model060'}]
     models[60]['relations']=[{'field':'inside_id','kind':'ForeignKey','target':'Model000'}]
     diagram=scan.build_erd(models)
-    assert 'Showing 60 of 61' in diagram
+    assert re.search(r'Diagram size limit: showing \d+ of 61 discovered models', diagram)
     assert 'Model060' not in diagram
     assert 'outside_id' not in diagram and 'inside_id' not in diagram
 

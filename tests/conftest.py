@@ -708,6 +708,10 @@ def _reset_leaked_running_loop(request):
     yield
     if threading.current_thread() is not threading.main_thread():
         return
+    # pytest-playwright's sync API keeps its own loop legitimately running on the main
+    # thread for the whole session; clearing it breaks every later Browser.new_context.
+    if {"page", "context", "browser", "playwright"} & set(request.fixturenames):
+        return
     leaked = asyncio._get_running_loop()
     if leaked is None:
         return

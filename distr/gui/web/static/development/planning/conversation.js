@@ -1,5 +1,5 @@
 import { parseWireframe, renderWireframe, explainWireframeDiagnostics } from './wireframe.js?v=20261119-page-designer';
-import { mountPageDesigner } from './page-designer.js?v=20261119-page-designer';
+import { mountPageDesigner } from './page-designer.js?v=20261119-designer-undo';
 import { createPlanPolling } from './polling.js';
 import { buildResultsHtml } from './build-results.js';
 import { layoutConnectedSitemap, pageAccessGroup, sitemapRouteKey, SITEMAP_ACCESS_GROUPS } from './sitemap.js?v=20261119-preview-routes';
@@ -496,6 +496,7 @@ export function createPlanConversation(host, root) {
                     <header class="plan-chat-header" id="plan-chat-header" aria-label="Chat"><button type="button" class="plan-chat-toggle" id="plan-chat-toggle" aria-controls="plan-conversation" aria-expanded="true" title="Hide chat" aria-label="Hide chat">${CHAT_ICON_COLLAPSE}<span class="plan-chat-toggle-label">Chat</span></button></header>
                     <div class="composer-drop-overlay plan-drop-overlay" id="plan-drop-overlay" hidden><strong>Drop images to attach</strong><span>PNG, JPEG or WebP, up to 10 MB each</span></div>
                     <div class="plan-messages" id="plan-messages" role="log" aria-label="Messages" aria-live="polite"></div>
+                    <div id="plan-operation-status" role="status" aria-live="polite"></div>
                     <div class="plan-composer-wrap">
                         <form class="studio-composer plan-language" id="plan-language">
                             <div id="plan-draft-assets" class="composer-context"></div>
@@ -624,6 +625,49 @@ export function createPlanConversation(host, root) {
             else button.disabled = busy || button.dataset.staticDisabled === 'true';
         });
         root.querySelector('#plan-chat-toggle')?.classList.toggle('has-alert', Boolean(session.error || session.planSaveWarning));
+        renderOperationStatus(session);
+    }
+
+    // Errors, outcomes and the ticket jump are shown in the status line above the composer,
+    // so a failed send, rebuild, upload or ticket build is never only a dot on the chat toggle.
+    function renderOperationStatus(session) {
+        const status = root.querySelector('#plan-operation-status');
+        if (!status) return;
+        status.replaceChildren();
+        if (session.error || session.planSaveWarning) {
+            const error = document.createElement('p');
+            error.className = 'plan-error';
+            error.setAttribute('role', 'alert');
+            error.textContent = session.error || session.planSaveWarning;
+            status.append(error);
+        }
+        const working = ['running', 'pending', 'processing'].includes(session.conversation?.status) ? 'Assistant is working...' : '';
+        const note = session.pollError || (!session.loaded && !session.error ? 'Loading conversation...' : '') || session.outcome || (session.streamText == null ? working : '');
+        if (note) {
+            const text = document.createElement('p');
+            text.textContent = String(note);
+            status.append(text);
+        }
+        const latestBuild = Array.from(root.querySelectorAll('#plan-messages .plan-build-results')).at(-1);
+        const firstTicket = latestBuild?.querySelector('[data-plan-ticket]');
+        if (firstTicket && !session.pending) {
+            const jump = document.createElement('button');
+            jump.type = 'button';
+            jump.className = 'plan-ticket-jump';
+            jump.textContent = 'View generated tickets';
+            jump.onclick = () => {
+                firstTicket.focus({ preventScroll: true });
+                firstTicket.scrollIntoView({ block: 'center', inline: 'nearest' });
+            };
+            status.append(jump);
+        }
+        if (!session.pending && (session.error || !session.loaded)) {
+            const retry = document.createElement('button');
+            retry.type = 'button';
+            retry.textContent = 'Refresh conversation';
+            retry.onclick = () => load(session);
+            status.append(retry);
+        }
     }
 
     function refresh(session) {

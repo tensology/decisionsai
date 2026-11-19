@@ -13,14 +13,14 @@ def test_embedded_ecommerce_routes_are_not_project_pages(tmp_path,child):
     (embedded/'urls.py').write_text('path("checkout/", views.checkout),\n')
     (tmp_path/'urls.py').write_text('path("development/", views.development),\n')
     rows=scan.scan_frontend_routes(tmp_path)
-    assert [row['url'] for row in rows]==['/development/']
+    assert [row['url'] for row in rows]==['/development']  # sitemap routes are normalised without a trailing slash
     assert all(str(path.relative_to(tmp_path))=='urls.py' for path in scan.iter_sitemap_sources(tmp_path))
 
 
 def test_explicit_example_project_root_is_still_a_real_project(tmp_path):
     root=tmp_path/'examples'/'shop';root.mkdir(parents=True)
     (root/'urls.py').write_text('path("checkout/", views.checkout),\n')
-    assert scan.scan_frontend_routes(root)[0]['url']=='/checkout/'
+    assert scan.scan_frontend_routes(root)[0]['url']=='/checkout'
 
 
 def test_unsupported_fastapi_project_reports_no_complete_inventory(tmp_path):

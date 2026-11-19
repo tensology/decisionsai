@@ -8,12 +8,16 @@ export function nextWorkflowLoopId(prefix = 'workflow-loop') {
     return `${prefix}-${loopSeq}`;
 }
 
+// The loop ring needs room: on phone widths its step cards overlap, so List is the default
+// there unless the person explicitly picked Loop.
 export function readWorkflowViewMode() {
+    let stored = null;
+    try { stored = window.localStorage.getItem(WORKFLOW_VIEW_KEY); } catch (_error) { stored = null; }
+    if (stored === 'list' || stored === 'loop') return stored;
     try {
-        return window.localStorage.getItem(WORKFLOW_VIEW_KEY) === 'list' ? 'list' : 'loop';
-    } catch (_error) {
-        return 'loop';
-    }
+        if (window.matchMedia?.('(max-width: 640px)').matches) return 'list';
+    } catch (_error) { /* no media queries: fall through */ }
+    return 'loop';
 }
 
 export function writeWorkflowViewMode(mode) {

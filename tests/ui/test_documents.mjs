@@ -6,11 +6,12 @@ const C = await import(new URL(base + 'documents-config.js', import.meta.url));
 const S = await import(new URL(base + 'inline-edit/sanitize.js', import.meta.url));
 const it = (id, item_type, extra = {}) => ({ id, item_type, title: `${item_type} ${id}`, ...extra });
 
-test('documents: order frac, brief, prd, handover, skills, file_structure, decision, overview, discovery, user docs; nothing dropped', () => {
+test('documents: order frac, brief, prd, file_structure, decision, user docs; retired handover/skills/overview/discovery stay hidden', () => {
     const items = [it(1, 'brief'), it(2, 'architecture'), it(3, 'prd'), it(4, 'frac'), it(5, 'skills'), it(6, 'handover'), it(7, 'file_structure'),
         it(8, 'decision'), it(9, 'project_overview'), it(10, 'discovery_proposal'), it(11, 'flows'), it(12, 'wireframe'), it(13, 'erd'), it(14, 'document'), it(15, 'decision')];
     const docs = D.orderDocuments(items);
-    assert.deepEqual(docs.map((d) => d.id), [4, 1, 3, 6, 5, 7, 8, 15, 9, 10, 14]);
+    assert.deepEqual(docs.map((d) => d.id), [4, 1, 3, 7, 8, 15, 14]);
+    assert.ok(!docs.some((d) => ['handover', 'skills', 'project_overview', 'discovery_proposal'].includes(d.item_type)));   // retired 12 Nov
     assert.ok(!docs.some((d) => ['architecture', 'flows', 'wireframe', 'erd'].includes(d.item_type)));   // stay on Data / Interfaces
     const docTypes = new Set(items.filter(D.isDocument).map((d) => d.id));
     assert.equal(docTypes.size, docs.length);

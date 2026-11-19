@@ -1,5 +1,5 @@
 import { renderWireframe } from './wireframe.js?v=20261119-page-designer';
-import { addWidget, designPage, editWidgetLabel, insertionLayout, moveWidget, WIDGETS } from './page-designer-source.js?v=20261119-page-designer';
+import { addWidget, designPage, editWidgetLabel, insertionLayout, moveWidget, removeWidget, WIDGETS } from './page-designer-source.js?v=20261119-designer-undo';
 
 const PALETTE = { row: 'Row', stack: 'Stack', heading: 'Heading', text: 'Text', button: 'Button', input: 'Field' };
 const WIDGET_DRAG = 'application/x-decisions-widget';
@@ -18,6 +18,8 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
                 <button type="button" data-width="phone" aria-pressed="false">Phone</button>
             </div>
             <div class="plan-design-save">
+                <button type="button" class="header-button" data-design-undo aria-label="Undo" title="Undo (Ctrl+Z)" disabled>Undo</button>
+                <button type="button" class="header-button" data-design-redo aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
                 <button type="button" class="header-button" data-design-discard hidden>Discard</button>
                 <button type="button" class="header-button primary" data-design-save disabled>Save design</button>
             </div>
@@ -35,6 +37,7 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
                 <button type="submit" class="header-button">Apply label</button>
                 <button type="button" class="header-button" data-move="-1" aria-label="Move up" title="Move up">↑</button>
                 <button type="button" class="header-button" data-move="1" aria-label="Move down" title="Move down">↓</button>
+                <button type="button" class="header-button" data-design-delete aria-label="Delete widget" title="Delete widget (Delete)">Delete</button>
             </form>
             <div class="plan-design-status" role="status"></div>
         </div>
@@ -48,6 +51,11 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
     const save = root.querySelector('[data-design-save]');
     const discard = root.querySelector('[data-design-discard]');
     const status = root.querySelector('[role=status]');
+    const undo = root.querySelector('[data-design-undo]');
+    const redo = root.querySelector('[data-design-redo]');
+    const remove = root.querySelector('[data-design-delete]');
+    draft.undo ||= [];
+    draft.redo ||= [];
     const palette = [...root.querySelectorAll('[data-widget]')];
     const movers = [...root.querySelectorAll('[data-move]')];
     const selected = () => model.layers.get(selection);
@@ -69,6 +77,9 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
             button.draggable = !button.disabled;
         });
         save.disabled = busy || !dirty() || !model.valid;
+        undo.disabled = busy || !draft.undo.length;
+        redo.disabled = busy || !draft.redo.length;
+        remove.disabled = busy || !model.valid || !entry?.parent || ['screen', 'content'].includes(node?.type);
         discard.hidden = !dirty();
         discard.disabled = busy;
         status.textContent = message || (dirty() ? 'Unsaved changes' : model.valid ? '' : 'Open the page source to fix the stencil before editing.');
@@ -106,6 +117,13 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
             sync('That change would make the stencil invalid.');
             return;
         }
+        draft.undo.push({ source: draft.source, line: selection });
+        if (draft.undo.length > 100) draft.undo.shift();
+        draft.redo.length = 0;
+        apply(edit);
+    }
+
+    function apply(edit) {
         scroll = frame.contentDocument?.scrollingElement?.scrollTop || 0;
         selection = edit.line;
         draft.source = edit.source;
@@ -113,6 +131,27 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
         onDraft(draft);
         render();
     }
+
+    function step(from, to) {
+        if (busy || !from.length) return;
+        to.push({ source: draft.source, line: selection });
+        apply(from.pop());
+    }
+    const removeSelected = () => {
+        const entry = selected();
+        if (!remove.disabled && entry) change(removeWidget(source(), entry.node, entry.parent));
+    };
+    // Keyboard: Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl+Y redo, Delete/Backspace removes the
+    // selected widget unless the person is typing in a field.
+    function shortcut(event) {
+        const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(event.target?.tagName || '') && event.target !== layers;
+        const mod = event.metaKey || event.ctrlKey;
+        const key = event.key.toLowerCase();
+        if (mod && key === 'z' && !typing) { event.preventDefault(); step(event.shiftKey ? draft.redo : draft.undo, event.shiftKey ? draft.undo : draft.redo); }
+        else if (mod && key === 'y' && !typing) { event.preventDefault(); step(draft.redo, draft.undo); }
+        else if ((event.key === 'Delete' || event.key === 'Backspace') && !typing && !mod) { event.preventDefault(); removeSelected(); }
+    }
+    root.addEventListener('keydown', shortcut);
 
     function choose(line) {
         selection = line;
@@ -185,6 +224,7 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
             moving = false;
             clearTarget();
         });
+        doc.addEventListener('keydown', shortcut);
         doc.addEventListener('dragstart', event => event.preventDefault());
         doc.addEventListener('dragover', event => {
             if (busy || !event.dataTransfer.types.includes(WIDGET_DRAG)) return;
@@ -234,6 +274,9 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
             change(moveWidget(source(), node, parent, index));
         };
     });
+    undo.onclick = () => step(draft.undo, draft.redo);
+    redo.onclick = () => step(draft.redo, draft.undo);
+    remove.onclick = removeSelected;
     discard.onclick = async () => {
         busy = true;
         sync('Loading saved design…');

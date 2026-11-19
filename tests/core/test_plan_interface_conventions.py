@@ -91,9 +91,11 @@ def test_chat_edit_cannot_invent_asset_ids(flows_item):
 def test_prompt_tells_the_model_both_conventions():
     import inspect
     from distr.core.planning import conversation
-    src = inspect.getsource(conversation)
+    import re
+    # Join adjacent string literals so a phrase split across source lines still counts.
+    src = re.sub(r'["\']\s*\n\s*["\']', '', inspect.getsource(conversation))
     for phrase in ("'#|' directly under a screen line", "'# decisions-flow: {json}'", "'%% decisions-flow: {json}'",
-                   "copy both back unchanged", "Return only strict JSON, no fences"):
+                   "Keep screen id= values", "Return only strict JSON, no fences"):
         assert phrase in src
 
 

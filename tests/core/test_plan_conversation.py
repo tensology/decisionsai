@@ -1,5 +1,6 @@
 """Isolated persistence tests; real local model checks require explicit opt-in."""
 import json
+import logging
 import os
 import sys
 from contextlib import contextmanager
@@ -848,8 +849,19 @@ def test_decode_still_rejects_non_json_proposal():
         c._decode("I updated the second paragraph in prose.", {187: 1})
 
 
-def test_safe_error_logs_underlying_exception_but_sanitizes_the_reply(caplog):
-    caplog.set_level("ERROR")
+
+@pytest.fixture
+def plan_log(caplog, monkeypatch):
+    """Capture this module's log directly: earlier tests may stop propagation or disable app loggers."""
+    monkeypatch.setattr(c.logger, "disabled", False)
+    monkeypatch.setattr(c.logger, "level", logging.ERROR)
+    c.logger.addHandler(caplog.handler)
+    yield caplog
+    c.logger.removeHandler(caplog.handler)
+
+
+def test_safe_error_logs_underlying_exception_but_sanitizes_the_reply(plan_log):
+    caplog = plan_log
     message = c._safe_error(ValueError("Edit revision does not match the workspace snapshot."))
     assert message == (
         "Planning failed: invalid input, model response, or changed plan. "
@@ -879,8 +891,8 @@ def test_decode_recovers_edits_when_closing_brace_is_missing():
     assert value["edits"][0]["expected_revision"] == 1
 
 
-def test_load_planning_json_logs_payload_preview_when_recovery_fails(caplog):
-    caplog.set_level("ERROR")
+def test_load_planning_json_logs_payload_preview_when_recovery_fails(plan_log):
+    caplog = plan_log
     with pytest.raises(json.JSONDecodeError):
         c._load_planning_json('{"reply":"broken","edits" not-an-array}')
     assert "Planning JSON decode failed" in caplog.text

@@ -37,6 +37,19 @@ function endOf(node) {
     return last ? endOf(last) : node.line;
 }
 
+// Last source line (1-based) owned by a node: its subtree plus any comment or
+// "#|" annotation lines indented under it, so notes travel with their widget.
+function blockEnd(lines, node) {
+    let end = endOf(node);
+    while (end < lines.length) {
+        const next = lines[end];
+        const indent = next.match(/^ */)[0].length;
+        if (!next.trimStart().startsWith('#') || indent < node.column) break;
+        end++;
+    }
+    return end;
+}
+
 export function addWidget(source, layout, widget) {
     if (!layout || !Object.hasOwn(WIDGETS, widget)) return null;
     const newline = source.includes('\r\n') ? '\r\n' : '\n';
@@ -57,13 +70,13 @@ export function editWidgetLabel(source, node, label) {
 }
 
 export function moveWidget(source, node, layout, index) {
-    const first = node.line - 1;
-    const end = endOf(node);
-    const before = layout.children[index];
-    const destination = before ? before.line - 1 : endOf(layout);
-    if (destination >= first && destination <= end) return null;
     const newline = source.includes('\r\n') ? '\r\n' : '\n';
     const lines = source.split(newline);
+    const first = node.line - 1;
+    const end = blockEnd(lines, node);
+    const before = layout.children[index];
+    const destination = before ? before.line - 1 : blockEnd(lines, layout);
+    if (destination >= first && destination <= end) return null;
     const offset = layout.column + 2 - node.column;
     const block = lines.splice(first, end - first).map(line => {
         if (!line.trim()) return line;
@@ -72,4 +85,15 @@ export function moveWidget(source, node, layout, index) {
     const insert = destination > end ? destination - block.length : destination;
     lines.splice(insert, 0, ...block);
     return { source: lines.join(newline), line: insert + 1 };
+}
+
+export function removeWidget(source, node, parent) {
+    if (!node || !parent || node.type === 'screen' || node.type === 'content') return null;
+    const newline = source.includes('\r\n') ? '\r\n' : '\n';
+    const lines = source.split(newline);
+    lines.splice(node.line - 1, blockEnd(lines, node) - node.line + 1);
+    const siblings = parent.children;
+    const index = siblings.indexOf(node);
+    const neighbour = siblings[index - 1] || null;
+    return { source: lines.join(newline), line: neighbour ? neighbour.line : parent.line };
 }

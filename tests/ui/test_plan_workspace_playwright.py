@@ -130,6 +130,11 @@ def test_page_designer_saves_a_responsive_stencil(page: Page, plan_server, tmp_p
     assert not errors
 
 
+def _json_messages(page):
+    """The composer streams by default; these tests drive the JSON fallback it uses when the stream route is missing."""
+    page.route("**/plan-workspaces/1/messages/stream", lambda route: route.fulfill(status=404, body=""))
+
+
 def _drag_designer_widget(page, start, end):
     start.scroll_into_view_if_needed()
     end.scroll_into_view_if_needed()
@@ -158,6 +163,42 @@ def test_page_designer_drops_palette_widget(page: Page, plan_server):
     expect(row).to_have_attribute("data-design-empty", "")
     _drag_designer_widget(page, designer.get_by_role("button", name="Add text"), row)
     expect(row.locator(".text")).to_have_count(1)
+
+
+def test_page_designer_delete_undo_redo(page: Page, plan_server):
+    page.set_default_timeout(8000)
+    page.set_viewport_size({"width": 1280, "height": 900})
+    page.goto(plan_server)
+    expect(page.locator(".iface-node")).to_have_count(2)
+    page.wait_for_load_state("networkidle")
+    page.locator(".iface-node", has_text="Saved").press("Enter")
+    page.get_by_role("button", name="Design", exact=True).click()
+    designer = page.get_by_role("region", name="Page designer")
+    canvas = page.frame_locator('iframe[title="Design canvas"]')
+    undo = designer.get_by_role("button", name="Undo", exact=True)
+    redo = designer.get_by_role("button", name="Redo", exact=True)
+    delete = designer.get_by_role("button", name="Delete widget")
+    expect(undo).to_be_disabled()
+    designer.get_by_role("button", name="Add button").click()
+    added = canvas.get_by_role("button", name="Button", exact=True)
+    expect(added).to_have_count(1)
+    delete.click()
+    expect(added).to_have_count(0)
+    undo.click()
+    expect(added).to_have_count(1)
+    redo.click()
+    expect(added).to_have_count(0)
+    # Keyboard: Ctrl+Z restores, Delete removes the selected widget again.
+    designer.get_by_role("combobox", name="Layer").focus()
+    page.keyboard.press("Control+z")
+    expect(added).to_have_count(1)
+    page.keyboard.press("Delete")
+    expect(added).to_have_count(0)
+    # Undoing everything returns to the saved stencil: nothing left to save.
+    while undo.is_enabled():
+        undo.click()
+    expect(designer.get_by_role("button", name="Save design")).to_be_disabled()
+    expect(designer.get_by_role("button", name="Discard", exact=True)).to_be_hidden()
 
 
 def test_page_designer_move_and_revision_conflict(page: Page, plan_server, tmp_path):
@@ -270,6 +311,7 @@ def test_prompt_linked_artifacts_and_repeated_build(page: Page, plan_server, siz
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.set_viewport_size(size)
     page.goto(plan_server)
+    _json_messages(page)
     expect(page.get_by_role("button", name="Hide artifacts", exact=True)).to_have_count(0)
     expect(page.get_by_role("region", name="Artifacts", exact=True)).to_be_visible()
     expect(page.get_by_label("Model", exact=True)).to_have_value("fixture-model")
@@ -331,6 +373,7 @@ def test_prompt_linked_artifacts_and_repeated_build(page: Page, plan_server, siz
 
 def test_plan_retry_after_post_and_recovery_read_are_lost(page: Page, plan_server):
     page.goto(plan_server)
+    _json_messages(page)
     field = page.get_by_label("Message", exact=True)
     send = page.get_by_role("button", name="Send message", exact=True)
     expect(page.get_by_label("Model", exact=True)).to_have_value("fixture-model")
@@ -377,6 +420,7 @@ def test_plan_retry_after_post_and_recovery_read_are_lost(page: Page, plan_serve
 def test_plan_reload_recovers_the_original_submission(page: Page, plan_server, committed):
     page.set_viewport_size({"width": 1280, "height": 900})
     page.goto(plan_server)
+    _json_messages(page)
     field = page.get_by_label("Message", exact=True)
     send = page.get_by_role("button", name="Send message", exact=True)
     expect(page.get_by_label("Model", exact=True)).to_have_value("fixture-model")
@@ -443,6 +487,7 @@ def test_plan_reload_recovers_the_original_submission(page: Page, plan_server, c
 
 def test_uploaded_source_and_pdf_preview(page: Page, plan_server):
     page.goto(plan_server)
+    _json_messages(page)
     page.get_by_role("button", name="Example brochure.pdf", exact=True).click()
     expect(page.get_by_role("img", name="Example brochure.pdf, page 1", exact=True)).to_be_visible()
     page.locator('input[type="file"]').set_input_files({
