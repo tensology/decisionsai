@@ -971,6 +971,47 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             logger.debug("_get_filtered_tools fallback: %s", e)
             return self._tools
 
+    def _chat_project_id(self, chat_id) -> int | None:
+        if not chat_id:
+            return None
+        try:
+            from distr.core.db import Chat, get_session
+
+            with get_session() as session:
+                chat = session.get(Chat, int(chat_id))
+                if chat is None:
+                    return None
+                if chat.project_id:
+                    return int(chat.project_id)
+                if chat.parent_id:
+                    parent = session.get(Chat, int(chat.parent_id))
+                    if parent is not None and parent.project_id:
+                        return int(parent.project_id)
+        except Exception:
+            logger.debug("Could not resolve chat project", exc_info=True)
+        return None
+
+    def _ground_state_question(self, text: str, user_message_content: str) -> str:
+        """Call the read-only Development tools before answering a state question."""
+        try:
+            from distr.core.agent.state_grounding import ground_state, is_state_question
+        except Exception:
+            return user_message_content
+        if not is_state_question(text):
+            return user_message_content
+        chat_id = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+        try:
+            grounding = ground_state(
+                getattr(self, "_tools_dict", {}) or {},
+                chat_id=chat_id,
+                project_id=self._chat_project_id(chat_id),
+            )
+        except Exception:
+            logger.warning("State grounding failed", exc_info=True)
+            return user_message_content
+        self._last_state_grounding = grounding
+        return grounding.to_prompt_block(user_message_content)
+
     def _maybe_inject_rag_context(self, text: str) -> str:
         """When a local RAG index exists, prepend retrieved context for chat replies."""
         clean = str(text or "").strip()
@@ -1836,7 +1877,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         try:
             from distr.core.developer_context import build_developer_context
 
-            developer_context_text = build_developer_context(chat_id=chat_id).to_prompt_text(max_chars=2200)
+            developer_context_text = build_developer_context(chat_id=chat_id).to_sectioned_prompt_text(max_chars=6000)
         except Exception:
             logger.warning("Could not build developer workflow context", exc_info=True)
 
@@ -2282,6 +2323,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         )
         if isinstance(user_message_content, str):
             user_message_content = self._maybe_inject_rag_context(user_message_content)
+        if isinstance(user_message_content, str):
+            user_message_content = self._ground_state_question(text, user_message_content)
         image_path = get_image_path_from_context(uploaded_image_path)
 
         if image_path and os.path.exists(image_path):
