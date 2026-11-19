@@ -144,7 +144,19 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             if self.chat_manager:
                 current_chat = self.chat_manager.get_current_chat()
                 if current_chat:
-                    self.chat_manager.add_assistant_message(current_chat, notice)
+                    # Not final: the replay on the backup provider is still coming.
+                    # A final save here closed the turn with only the notice, so API
+                    # and remote callers got "switched provider" instead of an answer.
+                    self.chat_manager.add_assistant_message(current_chat, notice, is_final=False)
+                    try:
+                        from distr.core.agent.tool_audit import record_tool_execution
+
+                        record_tool_execution(
+                            int(current_chat), "provider_failover", notice, "completed",
+                            instruction_hint="Switched model provider", chat_visible=True,
+                        )
+                    except Exception:
+                        logger.debug("Could not record provider failover activity", exc_info=True)
         except Exception:
             logger.debug("Could not persist provider notice", exc_info=True)
         if getattr(self, "event_queue", None):
@@ -1986,6 +1998,18 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             content = (
                 f"{persona}\n\n{owner_block}\n\n{template}" if persona else f"{owner_block}\n\n{template}"
             )
+        try:
+            from distr.core.agent.memory_capture import memory_prompt_block, remembered_entries
+
+            remembered = remembered_entries()
+            memory_block = memory_prompt_block(remembered)
+        except Exception:
+            remembered, memory_block = [], ""
+        if memory_block:
+            content = f"{content}\n\n{memory_block}"
+            if len(remembered) != getattr(self, "_last_memory_entry_count", None):
+                logger.info("Memory in prompt: %d remembered entries", len(remembered))
+                self._last_memory_entry_count = len(remembered)
 
         # Append recent tool reflection context so the LLM is aware of prior
         # tool outcomes (failures, loop patterns) when composing its response.
@@ -2338,6 +2362,13 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             skip_user_persist or should_bypass_fast_action_detection(text)
         )
         self._ensure_user_message_persisted(text, skip=skip_user_persist)
+        if not skip_user_persist and not getattr(self, "_is_automation_turn", False):
+            try:
+                from distr.core.agent.memory_capture import capture as _capture_memory
+
+                _capture_memory(text, chat_id=requested_chat_id or getattr(self, "current_chat_id", None))
+            except Exception:
+                logger.debug("Memory capture skipped", exc_info=True)
 
         # Handle vision input
         from distr.core.agent.services.llm.image_utils import (
