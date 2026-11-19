@@ -1,4 +1,4 @@
-"""Durable attention state for Initiative: who and what to set aside, and what still needs Paul.
+"""Durable attention state for Initiative: who and what to set aside, and what still needs the owner.
 
 Why this exists (Initiative audit, 12 Nov 2026):
 

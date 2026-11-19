@@ -1,6 +1,6 @@
 """Same-channel rule for "Be my assistant" suggestions and replies (12 Nov 2026).
 
-Paul's rule (live call, 12 Nov 2026 15:16 and 15:19 SAST) replaces the earlier
+The owner's rule (live call, 12 Nov 2026 15:16 and 15:19 SAST) replaces the earlier
 "intelligent channel selection" design, which scored Telegram / app / spoken activity,
 picked the "best" place and asked "Where do you want suggestions like this?" when unsure:
 
@@ -9,7 +9,7 @@ picked the "best" place and asked "Where do you want suggestions like this?" whe
   push-to-talk) in, spoken out; in the app in, in the app out.
 * Nothing here scores activity, learns a "preferred" channel or picks a "best" one.
 * No incoming channel (a proactive suggestion nobody asked for): it stays in the app.
-  It is never pushed to Telegram or spoken just because Paul looked active there.
+  It is never pushed to Telegram or spoken just because the owner looked active there.
 * An unknown channel name is refused (kept in the app, marked not delivered). It is
   never mapped onto some other named channel.
 * If the same channel can't take it, nothing is sent anywhere else. The suggestion is

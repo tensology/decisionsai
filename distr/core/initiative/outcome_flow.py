@@ -266,7 +266,7 @@ def find_workflow_reply_review(ticket_id: int, workflow: dict) -> dict[str, Any]
 
 
 def posture_handles_reply(ticket_id: Any) -> bool:
-    """True when the Initiative flow already sent this ticket's client update or holds it for Paul."""
+    """True when the Initiative flow already sent this ticket's client update or holds it for the owner."""
     live = {"awaiting_decision", "continuing", "checking", "confirming", "sending", "sent", "unconfirmed"}
     for flow in (_load_state().get("flows") or {}).values():
         if flow.get("kind") == "reply" and str(flow.get("ticket_id")) == str(ticket_id) and flow.get("status") in live:
@@ -423,7 +423,7 @@ def on_intake_staged(pending: dict[str, Any], settings: dict[str, Any] | None = 
             audit("own_intake_held_set_aside", source=ctx["source"], client=ctx["client"], project=ctx.get("project"),
                   token_hash=_flow_key(token), reason=set_aside, status="held")
             if not (own_channel_choice(settings) == "telegram" and telegram_allowed(settings)):
-                # The Telegram card below only reaches Paul when Telegram is on; otherwise say it elsewhere.
+                # The Telegram card below only reaches the owner when Telegram is on; otherwise say it elsewhere.
                 notify_owner(tension + " It's in Incoming when you want to look.", settings, kind="own_tension",
                              source=ctx["source"], client=ctx["client"])
             card = intake_card(token, ctx)
@@ -1169,7 +1169,7 @@ def _tension_observations(now: datetime) -> list[dict[str, Any]]:
 
 
 def _pending_reply_observations(now: datetime) -> list[dict[str, Any]]:
-    """Client replies that are written and waiting on Paul (Telegram card, approval queue, blocked)."""
+    """Client replies that are written and waiting on the owner (Telegram card, approval queue, blocked)."""
     out: list[dict[str, Any]] = []
     seen_tickets: set[str] = set()
     for key, flow in (_load_state().get("flows") or {}).items():
@@ -1371,7 +1371,7 @@ def _project_name_map() -> dict[int, str]:
 def build_recommendations(settings: dict[str, Any] | None = None, *, now: datetime | None = None) -> dict[str, Any]:
     """Gather done work, outstanding actions and suggestions. Every source is optional.
 
-    Sources: boards, the work scan, calendar, client replies waiting on Paul, project links
+    Sources: boards, the work scan, calendar, client replies waiting on the owner, project links
     (Telegram groups, email address links), automations, and ignored-but-waiting clients.
     The memory palace and the durable attention store decide what is boosted and what is
     quieted; a waiting client is never quieted.

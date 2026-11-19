@@ -49,7 +49,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
     _MAX_GENERATION_TIME_WITHOUT_TOOL = 15.0
     _FOLLOW_UP_STREAM_TIMEOUT_SEC = 60.0
     _TOOL_EXECUTION_TIMEOUT_SEC = 90.0
-    # Tools that may wait for Paul's in-chat Approve/Deny card (15 min, then deny)
+    # Tools that may wait for the owner's in-chat Approve/Deny card (15 min, then deny)
     # need an outer ceiling above that wait, or a late click could act after the
     # turn has moved on.
     _LONG_RUNNING_TOOL_TIMEOUTS = {"save_audio": 1800.0, "message_agent": 180.0,

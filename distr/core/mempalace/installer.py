@@ -227,21 +227,35 @@ def hub_healthy(port: int | None = None, timeout: float = 2.0) -> bool:
 
 
 def record_embedder(plan: Plan, palace: Path) -> None:
+    """Stamp minilm on drawers and closets (same 384-dim default MiniLM vectors)."""
     from distr.core.mempalace import hub as _hub
 
     if not (palace / "chroma.sqlite3").exists():
         plan.log(f"palace {palace} empty; embedder is recorded on first write")
         return
-    if _hub.hub_is_up(str(palace)):
-        plan.log("hub already owns the palace; embedder step skipped")
-        return
-    plan.log(f"record embedder identity (minilm) for {palace}")
+    plan.log(f"record embedder identity (minilm) for drawers and closets in {palace}")
     if plan.dry_run:
         return
-    subprocess.run(
-        [sys.executable, "-m", "mempalace", "--palace", str(palace), "palace", "set-embedder", "--model", "minilm"],
-        capture_output=True, text=True, timeout=300, check=False,
-    )
+    try:
+        from mempalace.palace import set_palace_embedder_identity
+    except Exception as exc:
+        plan.log(f"mempalace API unavailable, falling back to CLI: {exc}")
+        if _hub.hub_is_up(str(palace)):
+            plan.log("hub already owns the palace; embedder step skipped")
+            return
+        subprocess.run(
+            [sys.executable, "-m", "mempalace", "--palace", str(palace), "palace", "set-embedder", "--model", "minilm"],
+            capture_output=True, text=True, timeout=300, check=False,
+        )
+        return
+    for collection_name in ("mempalace_drawers", "mempalace_closets"):
+        try:
+            old, new = set_palace_embedder_identity(
+                str(palace), model="minilm", collection_name=collection_name
+            )
+            plan.log(f"  {collection_name}: {getattr(old, 'model_name', None)} -> {new.model_name} dim={new.dimension}")
+        except Exception as exc:
+            plan.log(f"  {collection_name}: not recorded ({exc})")
 
 
 def install_hub(plan: Plan, *, launchctl: bool) -> None:

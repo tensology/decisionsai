@@ -1,7 +1,7 @@
 """Pinned owner identity for every chat persona.
 
-On 13 Nov Paul opened a chat with the Hayley Williams agent and said "Hello,
-my name is Paul." The agent replied "Hey Paul, good to meet you", treating the
+On 13 Nov the owner opened a chat with the Hayley Williams agent and said "Hello,
+my name is <owner>." The agent replied "Hey <owner>, good to meet you", treating the
 owner of the install as a stranger. The owner block is placed right after the
 persona (so agent personas and the condensed local-model prompt keep it) and
 says who the owner is and that a self-introduction is not a first meeting.
@@ -21,6 +21,17 @@ def owner_name(fallback: str = "") -> str:
     name = configured or str(fallback or "").strip()
     first = name.split()[0] if name.split() else ""
     return "" if first.lower() in _GENERIC else first
+
+
+def owner_label(default: str = "the user") -> str:
+    """Owner's first name for runtime text (config, then OS account), else ``default``."""
+    try:
+        import getpass
+
+        account = getpass.getuser().replace("_", " ").replace(".", " ").strip().title()
+    except Exception:
+        account = ""
+    return owner_name(account) or default
 
 
 def owner_identity_block(name: str) -> str:

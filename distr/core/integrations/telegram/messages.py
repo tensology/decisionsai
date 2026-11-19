@@ -840,7 +840,7 @@ class TelegramMessagesMixin:
             if len(self._group_messages_storage) > self._max_stored_group_messages:
                 self._group_messages_storage.pop(0)
 
-            # Third-party chats: never Paul's channel and never commands. Only an explicitly
+            # Third-party chats: never the owner's channel and never commands. Only an explicitly
             # linked group with complete provenance may lead to a (single, ask-first) heads-up.
             try:
                 from distr.core.integrations.telegram.third_party_intake import handle_group_inbound

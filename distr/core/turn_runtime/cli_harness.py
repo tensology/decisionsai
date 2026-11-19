@@ -144,7 +144,7 @@ class CliHarnessTurnRuntime:
         token = cancellation or CancellationToken()
         token.raise_if_cancelled()
 
-        # Anti-loop guard (18 Nov: 80+ Read/Grep/Ls calls, no edit, until Paul
+        # Anti-loop guard (18 Nov: 80+ Read/Grep/Ls calls, no edit, until the owner
         # stopped it by hand). Counts read-only tool events between changes.
         from distr.core.agent.loop_guard import ReadLoopGuard, is_harness_read
 

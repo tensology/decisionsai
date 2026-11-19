@@ -2,7 +2,7 @@
 
 * ``ReadLoopGuard`` counts consecutive read-only tool calls (read, grep, ls,
   find, list, get…) since the last write/command/answer. On 18 Nov a
-  Development turn made 80+ Read/Grep/Ls calls with no edit until Paul stopped
+  Development turn made 80+ Read/Grep/Ls calls with no edit until the owner stopped
   it by hand. The guard first nudges the model to act or answer, then stops the
   loop with a plain explanation.
 * ``round_cap_notice`` is the message the user gets when the chat tool loop hits

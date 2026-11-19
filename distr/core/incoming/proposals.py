@@ -47,7 +47,7 @@ _NOISE_RE = re.compile(
     r"marketing|mailer|automated",
     re.I,
 )
-# Our own messages (Paul), and simulated test traffic.
+# Our own messages (the owner), and simulated test traffic.
 _SELF_RE = re.compile(r"(^|\W)paul(\W|$)|paulvonhoesslin|paulhoft", re.I)
 _TEST_RE = re.compile(r"\bsimulated\b|fake jid", re.I)
 # A conversation that only ends in "thanks"/"ok" has no work left in it.
@@ -1989,7 +1989,7 @@ def _persist_proposal_dismissal(proposal: dict[str, Any]) -> str:
     key = _proposal_handoff_key(proposal)
     conversation_key = str(proposal.get("dedupe_key") or "")
     # Prefer an explicit channel:thread key so local triage of the same conversation
-    # stays covered even when the Tensology id form was what Paul dismissed.
+    # stays covered even when the Tensology id form was what the owner dismissed.
     source = str(proposal.get("source") or "").strip().lower()
     thread_id = str(proposal.get("source_thread_id") or "").strip()
     if source and thread_id:
@@ -2610,7 +2610,11 @@ def resolve_proposal_review(review_key: str, *, submitted_only: bool = False) ->
         )
         for chat_id, project_id, params, owner_project_id in candidates:
             from .followups import handoff_receipts
-            receipt = next((row for row in handoff_receipts(_chat_params(params))
+            # A submitted-source lookup must match a recorded handoff, not the reply
+            # pack that handoff_receipts synthesizes for history (bc8a3ffc let a newer
+            # reply context unlock the source view of a thread it was never submitted to).
+            receipts = handoff_receipts(_chat_params(params), include_reply_context=not submitted_only)
+            receipt = next((row for row in receipts
                             if _review_key_for_handoff(str(row.get('key'))) == review_key), None)
             handoff_key = receipt.get("key") if isinstance(receipt, dict) else None
             if not isinstance(handoff_key, str) or _review_key_for_handoff(handoff_key) != review_key:
@@ -2990,7 +2994,7 @@ def _create_proposal_thread(proposal: dict[str, Any], *, start_work: bool, requi
     if start_work and merge is not None:
         _require_merged_launch_attachments(merge, retained_attachments, int(project_id), client, recover_local=True)
 
-    # Per Paul: a file that cannot be fetched must not block the thread. Fetch
+    # Per the owner: a file that cannot be fetched must not block the thread. Fetch
     # leniently, keep what downloaded, log and surface the rest.
     if merge is not None and proposal_id is None:
         attachments = retained_attachments

@@ -197,7 +197,7 @@ def thread_source_instructions(chat_id: int) -> str:
 # Incoming-origin threads: the client message is a separate, approved action.
 CLIENT_REPLY_GUIDANCE = (
     "\n\nThis thread came from a client message. After your final reply, Decisions shows a separate Message Client "
-    "action that drafts the outbound message from your result and asks Paul to approve it. "
+    "action that drafts the outbound message from your result and asks the owner to approve it. "
     "Do not write a draft message to the client, a 'Reply to send' section, or a question asking whether to message them. "
     "When the source includes a screenshot or photo, the sender already knows what it shows: do not describe or transcribe "
     "the image back to them. Use it as evidence and say plainly what the problem actually is, why it happened, what was or "

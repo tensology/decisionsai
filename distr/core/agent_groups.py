@@ -1,7 +1,7 @@
 """Multi-agent chat: agent roster, primary/orchestrator, group threads, agent-to-agent.
 
 Group threads are ordinary root ``chats`` rows with ``chat_group_members`` rows.
-Each message is a child row: Paul's messages use ``input``; agent messages use
+Each message is a child row: the owner's messages use ``input``; agent messages use
 ``response`` with ``params.group_speaker`` naming the agent.
 
 Agents in groups and agent-to-agent exchanges run on each agent's own configured
@@ -41,6 +41,17 @@ class GroupError(ValueError):
 # ---------------------------------------------------------------------------
 # Roster
 # ---------------------------------------------------------------------------
+
+def _owner(default: str) -> str:
+    from distr.core.agent.owner_identity import owner_label
+
+    return owner_label(default)
+
+
+def _owner_who() -> str:
+    name = _owner("")
+    return f"{name} (the user)" if name else "the user"
+
 
 def _prefs(session) -> dict[int, ChatAgentPrefs]:
     return {p.agent_id: p for p in session.query(ChatAgentPrefs).all()}
@@ -371,7 +382,7 @@ def _append_row(chat_id: int, *, user_text: str = "", agent: Optional[ChatAgent]
 
 def mentioned_agents(text: str, members: list[ChatAgent], *, exclude: Optional[int] = None,
                      leading_name: bool = False) -> list[ChatAgent]:
-    """Members addressed with @Name / @FirstName (or, for Paul, a leading "Name,")."""
+    """Members addressed with @Name / @FirstName (or, for the owner, a leading "Name,")."""
     raw = text or ""
     found: list[tuple[int, ChatAgent]] = []
     for agent in members:
@@ -415,7 +426,7 @@ def _memory_block(agent_id: int) -> str:
 
         shared = load_context_snippets_for_llm()
         if shared.get("user"):
-            parts.append("Shared notes about Paul:\n" + shared["user"][:2000])
+            parts.append(f"Shared notes about {_owner('the user')}:\n" + shared["user"][:2000])
         if shared.get("memory"):
             parts.append("Shared memory:\n" + shared["memory"][:2500])
         private = agent_memory_snippet(agent_id)
@@ -441,7 +452,7 @@ def system_prompt(agent: ChatAgent, members: list[ChatAgent], *, orchestrator: O
         role = (member.role or "").strip().replace("\n", " ")[:160]
         roster.append(f"- {member.name}{tag}" + (f": {role}" if role else ""))
     where = ("a direct conversation with another AI agent" if kind == "agents"
-             else "a group chat with Paul (the user) and other AI agents")
+             else f"a group chat with {_owner_who()} and other AI agents")
     lines = [f"You are {agent.name}, in {where}.",
              f"Your role: {agent.role.strip()}" if (agent.role or "").strip() else "Your role: general assistant.",
              "Members:", *roster,
@@ -450,7 +461,7 @@ def system_prompt(agent: ChatAgent, members: list[ChatAgent], *, orchestrator: O
              "To ask another member something, @mention them by name with a specific request. "
              "Only mention someone when you actually need them; never mention yourself."]
     if agent.id == orchestrator:
-        lines.append("You are the orchestrator: answer Paul first, then delegate parts of the work to the "
+        lines.append(f"You are the orchestrator: answer {_owner('the user')} first, then delegate parts of the work to the "
                      "best-suited members by @mentioning them, and pull their answers together.")
     memory = _memory_block(agent.id)
     if memory:
@@ -467,7 +478,7 @@ def transcript_for(agent: ChatAgent, chat_id: int, names: dict[int, str]) -> lis
         for row in rows:
             speaker = _speaker(row)
             if row.input:
-                out.append({"role": "user", "content": f"[Paul] {row.input}"})
+                out.append({"role": "user", "content": f"[{_owner('User')}] {row.input}"})
             if row.response and not speaker.get("error"):
                 if speaker.get("agent_id") == agent.id:
                     out.append({"role": "assistant", "content": row.response})

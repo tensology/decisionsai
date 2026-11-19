@@ -119,7 +119,7 @@ def register_reply_context(chat_id, proposal):
     _store_reply_context(chat_id, snapshot)
 
 
-# Same-channel rule (Paul, 12 Nov 2026): a proposal's reply goes back on the channel each
+# Same-channel rule (owner, 12 Nov 2026): a proposal's reply goes back on the channel each
 # source came in on. Telegram sources are offered too (linked groups only, checked at send).
 REPLY_CHANNELS = ('whatsapp', 'gmail', 'mailshot', 'telegram')
 
@@ -327,14 +327,17 @@ def generate_draft(proposal, source, response, *, previous='', instruction='', c
     evidence = [row for row in [*(proposal.get('evidence') or []), *(proposal.get('context_evidence') or [])]
                 if isinstance(row, dict) and str((row.get('original_source') or {}).get('source_message_id') or row.get('id')) in set(map(str, source['message_ids']))]
     local_time = datetime.now().astimezone()
+    from distr.core.agent.owner_identity import owner_label
+
+    owner = owner_label("the sender")
     prompt = [
-        {'role': 'system', 'content': 'Write a reply from Paul to the selected original source. '
+        {'role': 'system', 'content': f'Write a reply from {owner} to the selected original source. '
          'Use the Humanizer skill in embedded mode: draft, audit and revise internally; return only the final message. '
          'Address a nontechnical client. Write as one developer: I, me, my, never we/us/our for development work. '
          'Start with a friendly greeting: Hi, Good morning, Good afternoon or Good evening, followed by the relevant people\'s names and a comma. '
          'Use Hi when the recipients\' local time is unknown; never use the old source-message timestamp as the current time. '
          'Choose names from the selected source messages and verified recipient_names, addressing the people involved in the current request. '
-         'For a group, name the relevant requesters, not everyone mentioned in older history. Do not greet Paul, quote a group/project title as a person, '
+         f'For a group, name the relevant requesters, not everyone mentioned in older history. Do not greet {owner}, quote a group/project title as a person, '
          'invent a name, or infer one from an email address or phone number. If no person can be identified, use Hi, without a name. '
          'After the greeting, give a short update on their request in everyday language: what changed, what it means for them, '
          'and any remaining step or question. Translate technical findings into the visible result for the recipient. '

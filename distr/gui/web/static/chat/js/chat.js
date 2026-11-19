@@ -5661,6 +5661,7 @@ async function showNewChatModal() {
     document.getElementById('createAgentError').hidden = true;
     newChatModal.style.display = 'flex';
     document.body.classList.add('agent-modal-open');
+    _agentModalUserMoved = false;
     modalClose.focus();
     // Always reload Settings defaults so the model pick is not a stale first-open value.
     _agentModalInitialized = false;
@@ -5683,9 +5684,7 @@ async function showNewChatModal() {
         // Show the form as soon as the model/voice picks exist. Skin thumbnails
         // can finish after that; do not leave the controls hidden if skins stall.
         revealModal();
-        if (newChatModal.style.display !== 'none' && voiceProviderSelect) {
-            voiceProviderSelect.focus();
-        }
+        focusModalVoiceIfUntouched();
         await loadModalSkins();
         _agentModalInitialized = Boolean(llmModelSelect.value && voiceModelSelect.value);
         toggleModalOllamaPullBtn();
@@ -5694,10 +5693,21 @@ async function showNewChatModal() {
     } finally {
         clearTimeout(revealTimer);
         revealModal();
-        if (newChatModal.style.display !== 'none' && voiceProviderSelect) {
-            voiceProviderSelect.focus();
-        }
+        focusModalVoiceIfUntouched();
     }
+}
+
+// Move focus to the voice picker only until the user has pressed a key or clicked
+// in the dialog. Skin thumbnails load after the form appears; refocusing
+// unconditionally yanked focus back from whatever the user had tabbed to.
+let _agentModalUserMoved = false;
+['keydown', 'pointerdown'].forEach(type => newChatModal?.addEventListener(type, () => { _agentModalUserMoved = true; }, true));
+newChatModal?.addEventListener('focusin', event => {
+    if (event.target !== modalClose && event.target !== voiceProviderSelect) _agentModalUserMoved = true;
+});
+function focusModalVoiceIfUntouched() {
+    if (_agentModalUserMoved || newChatModal.style.display === 'none' || !voiceProviderSelect) return;
+    voiceProviderSelect.focus();
 }
 
 function hideNewChatModal() {

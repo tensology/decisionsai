@@ -209,7 +209,7 @@ def prepare_completed_jira_review(
         from distr.core.initiative.outcome_flow import posture_handles_reply
 
         if posture_handles_reply(int(ticket_id)):
-            # The Initiative flow already sent this update or is holding it for Paul.
+            # The Initiative flow already sent this update or is holding it for the owner.
             _audit(ticket_id, run_id, "client_update_via_initiative", "Client update handled by the Initiative flow")
             return None
     except Exception:

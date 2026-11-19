@@ -62,16 +62,22 @@ def current_chat_id() -> Optional[int]:
         return None
 
 
+def _owner() -> str:
+    from distr.core.agent.owner_identity import owner_label
+
+    return owner_label()
+
+
 def request_in_chat(tool: str, action: str, args: dict[str, Any], summary: str,
                     details: Optional[dict[str, Any]] = None, *, chat_id: Optional[int] = None,
                     timeout_s: float = APPROVAL_TTL_S + WAIT_GRACE_S) -> Decision:
-    """Show an Approve/Deny card in the Chat thread and wait for Paul's click."""
+    """Show an Approve/Deny card in the Chat thread and wait for the owner's click."""
     from distr.core.workflow import dev_approvals
 
     chat_id = chat_id or current_chat_id()
     label = summary.strip() or f"{tool} {action}"
     if not chat_id:
-        return Decision(False, f"Not done: there is no Chat thread to ask Paul in ({label}). Do not retry.")
+        return Decision(False, f"Not done: there is no Chat thread to ask {_owner()} in ({label}). Do not retry.")
     context = {"chat_id": int(chat_id), "turn_id": None}
     try:
         req = dev_approvals.request_approval(tool, action, args or {}, label, details or {}, context=context)
@@ -82,11 +88,11 @@ def request_in_chat(tool: str, action: str, args: dict[str, Any], summary: str,
         status = st.get("status")
         if status == "approved" and st.get("approval_id") and dev_approvals.consume(
                 st["approval_id"], tool, action, args or {}, context=context):
-            return Decision(True, "Approved by Paul.")
+            return Decision(True, f"Approved by {_owner()}.")
         if status == "denied":
-            return Decision(False, f"Paul denied this: {label}. Do not retry.")
+            return Decision(False, f"{_owner()} denied this: {label}. Do not retry.")
         if status in ("expired", "pending"):
-            return Decision(False, f"No answer within 15 minutes, treated as denied: {label}. Do not retry unless Paul asks.")
+            return Decision(False, f"No answer within 15 minutes, treated as denied: {label}. Do not retry unless {_owner()} asks.")
         return Decision(False, f"Not done: approval failed ({st.get('detail') or status}). Do not retry.")
     except Exception:
         logger.warning("in-chat approval failed; refusing", exc_info=True)

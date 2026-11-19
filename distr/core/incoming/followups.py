@@ -2,12 +2,17 @@
 from .followup_policy import rank_followups
 
 
-def handoff_receipts(params):
+def handoff_receipts(params, *, include_reply_context=True):
+    """Recorded handoffs, plus (by default) a synthesized row for the active reply pack.
+
+    The synthesized row only preserves history; it was never submitted, so callers
+    that must prove a submitted source pass include_reply_context=False.
+    """
     current = params.get('incoming_proposal_handoff')
     rows = [row for row in [*(params.get('incoming_proposal_history') or []), current]
             if isinstance(row, dict) and row.get('key')]
     context = params.get('incoming_reply_context')
-    if isinstance(context, dict) and context.get('id'):
+    if include_reply_context and isinstance(context, dict) and context.get('id'):
         from .proposals import _proposal_handoff_key
         key = _proposal_handoff_key(context)
         if not any(row['key'] == key for row in rows):

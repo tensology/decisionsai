@@ -1,7 +1,7 @@
 """Workspace tools for chat agents: Calendar blocks, Snippets, Development overview, message_agent.
 
 Every call is checked against the calling agent's capability set
-(distr.core.agent_capabilities). Deletes always need Paul's in-chat confirmation.
+(distr.core.agent_capabilities). Deletes always need the user's in-chat confirmation.
 The calling agent is the one loaded in the live runtime (else the primary).
 """
 from __future__ import annotations
@@ -86,7 +86,7 @@ def calendar_op(action: str, *, agent_id: Optional[int] = None, start: str = "",
             return f"Updated calendar block {block.id}."
         if action == "delete":
             if not (confirm or (lambda _s: False))(f"Delete calendar block {block.id} “{block.title}”?"):
-                return "Not deleted: Paul did not approve it (or did not answer within 15 minutes). Do not retry."
+                return f"Not deleted: {_owner()} did not approve it (or did not answer within 15 minutes). Do not retry."
             session.delete(block)
             session.commit()
             return f"Deleted calendar block {block.id}."
@@ -140,7 +140,7 @@ def snippets_op(action: str, *, agent_id: Optional[int] = None, snippet_id: Opti
             return f"Updated snippet {snippet.id}."
         if action == "delete":
             if not (confirm or (lambda _s: False))(f"Delete snippet {snippet.id} “{snippet.title}”?"):
-                return "Not deleted: Paul did not approve it (or did not answer within 15 minutes). Do not retry."
+                return f"Not deleted: {_owner()} did not approve it (or did not answer within 15 minutes). Do not retry."
             session.delete(snippet)
             session.commit()
             return f"Deleted snippet {snippet.id}."
@@ -185,6 +185,12 @@ def development_overview(*, agent_id: Optional[int] = None, project_id: Optional
 # LangChain tools
 # ---------------------------------------------------------------------------
 
+
+def _owner() -> str:
+    from distr.core.agent.owner_identity import owner_label
+
+    return owner_label()
+
 class _ConfirmingTool(BaseTool):
     event_queue: Optional[Any] = Field(default=None, exclude=True)
     command_queue: Optional[Any] = Field(default=None, exclude=True)
@@ -212,8 +218,8 @@ class CalendarInput(BaseModel):
 
 class CalendarBlocksTool(_ConfirmingTool):
     name: str = "calendar_blocks"
-    description: str = ("Read and manage Paul's Decisions Calendar (the /calendar time blocks): list a date range, "
-                        "get, create, update or delete a block. Deletes ask Paul to confirm.")
+    description: str = ("Read and manage the user's Decisions Calendar (the /calendar time blocks): list a date range, "
+                        "get, create, update or delete a block. Deletes ask the user to confirm.")
     args_schema: type[BaseModel] = CalendarInput
 
     def _run(self, action: str = "list", start: str = "", end: str = "", block_id: Optional[int] = None,
@@ -234,8 +240,8 @@ class SnippetsInput(BaseModel):
 
 class SnippetsTool(_ConfirmingTool):
     name: str = "snippets"
-    description: str = ("Read and manage Paul's text Snippets: list, get, create, update or delete. "
-                        "Deletes ask Paul to confirm.")
+    description: str = ("Read and manage the user's text Snippets: list, get, create, update or delete. "
+                        "Deletes ask the user to confirm.")
     args_schema: type[BaseModel] = SnippetsInput
 
     def _run(self, action: str = "list", snippet_id: Optional[int] = None, title: Optional[str] = None,
@@ -269,7 +275,7 @@ class MessageAgentInput(BaseModel):
 class MessageAgentTool(BaseTool):
     name: str = "message_agent"
     description: str = ("Send a message to another Decisions agent (by name) and get its reply. The exchange is "
-                        "saved in your shared thread with that agent. Use when Paul asks you to ask, tell, check "
+                        "saved in your shared thread with that agent. Use when the user asks you to ask, tell, check "
                         "with or delegate to another agent.")
     args_schema: type[BaseModel] = MessageAgentInput
 
@@ -291,7 +297,7 @@ class MessageAgentTool(BaseTool):
 # ---------------------------------------------------------------------------
 # Browser for Chat agents: the Development structured browser on the signed-in
 # ~/.decisions/chrome-profile, headless unless asked. Never the Decisions app,
-# never password fields; submits/purchase-like clicks need Paul's confirmation.
+# never password fields; submits/purchase-like clicks need the user's confirmation.
 # ---------------------------------------------------------------------------
 
 BROWSER_READ_ACTIONS = {"open", "navigate", "extract", "screenshot", "close"}
@@ -347,7 +353,7 @@ def chat_browser(action: str, *, agent_id: Optional[int] = None, approve=None, t
             logger.warning("browser approval failed; refusing", exc_info=True)
             return False, f"Not done: the approval could not be completed ({summary}). Do not retry."
         ok = bool(getattr(result, "approved", result) is True)
-        message = getattr(result, "message", "") or ("" if ok else f"Paul did not approve: {summary}. Do not retry.")
+        message = getattr(result, "message", "") or ("" if ok else f"{_owner()} did not approve: {summary}. Do not retry.")
         return ok, message
 
     name = _agent_name(agent_id)
@@ -378,7 +384,7 @@ def chat_browser(action: str, *, agent_id: Optional[int] = None, approve=None, t
         return {"ok": False, "tool": tool, "summary": message, "artifacts": [], "needs_approval": False}
 
     settings = dict(dbt._settings())
-    settings["dev_browser_enabled"] = True  # Chat access only; Paul's Development setting is unchanged
+    settings["dev_browser_enabled"] = True  # Chat access only; the user's Development setting is unchanged
     from pathlib import Path
 
     previous = dbt.transport
@@ -400,14 +406,14 @@ class ChatBrowserInput(BaseModel):
     text: Optional[str] = Field(default=None, description="Text to type.")
     submit: bool = Field(default=False, description="Press Enter after typing (needs approval).")
     mode: Literal["text", "links", "html"] = Field(default="text", description="extract mode")
-    headed: bool = Field(default=False, description="Show the window. Only when Paul asks to see it.")
+    headed: bool = Field(default=False, description="Show the window. Only when the user asks to see it.")
 
 
 class ChatBrowserTool(_ConfirmingTool):
     name: str = "web_browser"
     description: str = ("Use a real Chrome (the signed-in Decisions profile, so logins persist): open/navigate a URL, "
-                        "extract text/links, screenshot, click, type, close. Headless unless Paul asks to see it "
-                        "(headed=true). Never types passwords; submits and purchase-like clicks ask Paul first.")
+                        "extract text/links, screenshot, click, type, close. Headless unless the user asks to see it "
+                        "(headed=true). Never types passwords; submits and purchase-like clicks ask the user first.")
     args_schema: type[BaseModel] = ChatBrowserInput
 
     def _run(self, action: str = "open", url: Optional[str] = None, selector: Optional[str] = None,

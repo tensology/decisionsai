@@ -736,7 +736,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "OpenThreadTool": "Open a thread page (latest, id, or title words) in the default browser, Development by default or Chat. Use for 'open my most recent thread' or when the web UI is not open.",
     "MessageAgentTool": "Send a message to another Decisions agent by name and get its reply (ask, tell, check with, delegate to another agent).",
     "CalendarBlocksTool": "List, create, update or delete time blocks on the Decisions Calendar (/calendar).",
-    "SnippetsTool": "List, read, create, update or delete Paul's text snippets.",
+    "SnippetsTool": "List, read, create, update or delete the user's text snippets.",
     "ChatBrowserTool": "Drive a real signed-in Chrome: open a website or URL, read or extract the page, screenshot, click or type (with approval).",
     "DevelopmentOverviewTool": "Read-only overview of Development: projects, recent threads, work items, lanes and timers.",
     "ShowMermaidDiagramTool": "Open the Mermaid diagram viewer. With mermaid_code: render that diagram. With empty mermaid_code: open the viewer (last diagram or blank editor). Use open_page page='diagram viewer' when the user only asks to open the viewer.",

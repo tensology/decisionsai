@@ -6,7 +6,7 @@ existing ``send_message`` frame already carries an explicit ``chat_id`` and post
 answering with ``message_sent`` or ``error`` for the same ``client_message_id``. No new relay
 or Tensology API is used.
 
-Paul's own conversation stays on the paired private chat through ``send_to_telegram``; this
+The owner's own conversation stays on the paired private chat through ``send_to_telegram``; this
 path is only for replying in a group the work came from. It fails closed:
 
 * the chat id comes from the ticket's provenance and must be a Telegram group id

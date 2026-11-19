@@ -1,12 +1,12 @@
-"""Inbound Telegram messages from chats that are not Paul's paired private chat.
+"""Inbound Telegram messages from chats that are not the owner's paired private chat.
 
-Paul's own channel is his paired private Telegram chat (and WhatsApp for himself). A group is
+The owner's own channel is their paired private Telegram chat (and WhatsApp for themselves). A group is
 never his channel, even when he writes in it. This module decides what an inbound message from
 any other chat may do, and it fails closed:
 
 * ``linked_group``: a group or supergroup with an explicit project link and complete provenance
   (group chat id, message id, a human sender id). It is kept in Incoming as before (messages.py
-  persists every group message) and, when "Be my assistant" is on, Paul hears about it once,
+  persists every group message) and, when "Be my assistant" is on, the owner hears about it once,
   in the app (same-channel rule: this heads-up answers no message of his, so it is never pushed
   to Telegram or spoken). Nothing is sent to the group; a reply to the group goes back on that
   same group through the normal reply flow (ask first, explicit link, ``chat_send``).
@@ -14,7 +14,7 @@ any other chat may do, and it fails closed:
 * ``refused``: provenance is incomplete (no chat id, no message id, no sender, a bot, a channel
   post), or it's a private chat that isn't the paired one. Nothing is acted on.
 
-A group message is never treated as a command from Paul, and no chat id is ever guessed: the
+A group message is never treated as a command from the owner, and no chat id is ever guessed: the
 only chat ids used are the ones the relay delivered with the message.
 """
 
@@ -137,7 +137,7 @@ def _assistant_on() -> tuple[bool, dict[str, Any]]:
 
 
 def _heads_up(decision: InboundDecision, text: str, settings: dict[str, Any]) -> str:
-    """Tell Paul once, in the app. Same-channel rule: there is no incoming message from him to answer."""
+    """Tell the owner once, in the app. Same-channel rule: there is no incoming message from them to answer."""
     from datetime import datetime
 
     from distr.core.initiative import channel_select
@@ -167,7 +167,7 @@ def handle_group_inbound(inner: dict[str, Any], *, paired_user_id: Any, index: O
         return decision
     text = str((inner or {}).get("text") or (inner or {}).get("caption") or "").strip()
     if not text or decision.from_owner:
-        return decision  # Paul's own words in a group need no heads-up, and are never commands
+        return decision  # The owner's own words in a group need no heads-up, and are never commands
     on, settings = _assistant_on()
     if not on:
         return decision

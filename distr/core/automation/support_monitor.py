@@ -195,7 +195,7 @@ class SupportMonitor:
     # ------------------------------------------------------------- channels
     def _mailshot(self, last: dict[str, Any]) -> tuple[list[dict], dict]:
         if not self.port_check():
-            self.channel_status["mailshot"] = f"DOWN: ssh tunnel :{TUNNEL_PORT} not listening (not restarted; needs Paul)"
+            self.channel_status["mailshot"] = f"DOWN: ssh tunnel :{TUNNEL_PORT} not listening (not restarted; needs the owner)"
             return [], last
         try:
             emails = self.mailshot_fetch() if self.mailshot_fetch else self._mailshot_list()
@@ -316,7 +316,7 @@ class SupportMonitor:
             wd = working_days_between(mod, self.now)
             if wd > 2:
                 rule = "same lane >3 working days" if wd > 3 else "no activity >2 working days"
-                out.append({"key": f"ticket:{r['id']}", "item": f"{r['board']} #{r['id']} {r['title'][:70]}", "lane": r["lane"], "last": _sast(mod), "stuck": f"{wd:.1f} working days", "rule": rule, "next": "Paul/Jupiter: decide move, close or chase"})
+                out.append({"key": f"ticket:{r['id']}", "item": f"{r['board']} #{r['id']} {r['title'][:70]}", "lane": r["lane"], "last": _sast(mod), "stuck": f"{wd:.1f} working days", "rule": rule, "next": "Owner/Jupiter: decide move, close or chase"})
         for r in con.execute("select id, workflow_id, started_at, status, ticket_id from auto_workflow_runs where status in ('running','waiting')").fetchall():
             started = _utc_naive(r["started_at"])
             if not started:
@@ -324,13 +324,13 @@ class SupportMonitor:
             hours = (self.now - started).total_seconds() / 3600
             wd = working_days_between(started, self.now)
             if (r["status"] == "running" and hours > 2) or (r["status"] == "waiting" and (hours > 2 or wd > 1)):
-                out.append({"key": f"run:{r['id']}", "item": f"workflow run {r['id']} (workflow {r['workflow_id']}, ticket {r['ticket_id']})", "lane": r["status"], "last": _sast(started), "stuck": f"{hours:.0f} h", "rule": "run stuck >2h" + (" / gate waiting >1 working day" if r["status"] == "waiting" and wd > 1 else ""), "next": "Paul: review the run (observe only; gates are Paul's)"})
+                out.append({"key": f"run:{r['id']}", "item": f"workflow run {r['id']} (workflow {r['workflow_id']}, ticket {r['ticket_id']})", "lane": r["status"], "last": _sast(started), "stuck": f"{hours:.0f} h", "rule": "run stuck >2h" + (" / gate waiting >1 working day" if r["status"] == "waiting" and wd > 1 else ""), "next": "Owner: review the run (observe only; gates are the owner's)"})
         try:
             for r in con.execute("select id, skill_name, status, updated_at, created_at from skill_judgment_proposals where lower(coalesce(status,'')) in ('pending','proposed','open','draft')").fetchall():
                 at = datetime.fromtimestamp(float(r["updated_at"] or r["created_at"] or 0), timezone.utc)
                 wd = working_days_between(at, self.now)
                 if wd > 2:
-                    out.append({"key": f"proposal:{r['id']}", "item": f"skill proposal {r['id']} {r['skill_name']}", "lane": r["status"], "last": _sast(at), "stuck": f"{wd:.1f} working days", "rule": "proposal idle >2 working days", "next": "Paul: decide"})
+                    out.append({"key": f"proposal:{r['id']}", "item": f"skill proposal {r['id']} {r['skill_name']}", "lane": r["status"], "last": _sast(at), "stuck": f"{wd:.1f} working days", "rule": "proposal idle >2 working days", "next": "Owner: decide"})
         except sqlite3.Error:
             pass
         return out
@@ -392,7 +392,7 @@ class SupportMonitor:
                 "last": _sast(at),
                 "stuck": f"{wd:.1f} working days",
                 "rule": "proposal waiting >2 working days" if stale else "proposal awaiting a decision",
-                "next": "Paul/Jupiter: queue, send to Decisions, or dismiss",
+                "next": "Owner/Jupiter: queue, send to Decisions, or dismiss",
             })
         self.channel_status["tensology"] = f"ok ({len(rows)} pending proposal(s))"
         return out
@@ -448,7 +448,7 @@ class SupportMonitor:
             flag = "NEEDS ACTION - " if it["needs_action"] else ""
             lines.append(f"- {flag}{it['channel']} | {it['from']} | {it['subject']} | {_sast(it['at'])} | owner: {it['owner']}")
             if it["needs_action"]:
-                lines.append(f"  Paul/Jupiter: this needs a reply or action; suggested: {it['owner']} to review and draft a reply (draft only).")
+                lines.append(f"  Owner/Jupiter: this needs a reply or action; suggested: {it['owner']} to review and draft a reply (draft only).")
         if stale:
             lines.append("\n**Stale proposals**")
             groups: dict[str, list[dict]] = {}
@@ -459,7 +459,7 @@ class SupportMonitor:
                 mark = "NEW " if new_n else ""
                 if len(members) > 3:
                     oldest = max(members, key=lambda s: float(s["stuck"].split()[0]))
-                    lines.append(f"- {mark}{label}: {len(members)} tickets idle (oldest {oldest['item'].split(' ', 1)[1]}, last {oldest['last']}, {oldest['stuck']}) | next: Paul/Jupiter: triage the lane")
+                    lines.append(f"- {mark}{label}: {len(members)} tickets idle (oldest {oldest['item'].split(' ', 1)[1]}, last {oldest['last']}, {oldest['stuck']}) | next: Owner/Jupiter: triage the lane")
                     continue
                 for s in members:
                     mark = "NEW " if s["key"] not in reported_stale else ""

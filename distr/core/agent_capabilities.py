@@ -2,9 +2,9 @@
 
 Capabilities: read, create, update, delete, run, browse.
 Defaults: the primary and the orchestrator get all six; every other agent gets
-read + run (browser: open/extract/screenshot freely, click/type only after Paul
+read + run (browser: open/extract/screenshot freely, click/type only after the owner
 confirms in chat). A per-agent override can be stored in chat_agent_prefs.capabilities
-(JSON list). Deletes and other destructive changes additionally need Paul's
+(JSON list). Deletes and other destructive changes additionally need the owner's
 in-chat confirmation at execution time, whatever the capability set says.
 """
 from __future__ import annotations
@@ -127,7 +127,7 @@ def request_confirmation(title: str, message: str, *, tool: str = "chat_agent", 
                          args: Optional[dict] = None, details: Optional[dict] = None,
                          chat_id: Optional[int] = None, timeout_s: Optional[float] = None,
                          danger: bool = True, **_legacy) -> bool:
-    """Ask Paul with an Approve/Deny card in the Chat thread and wait for his click.
+    """Ask the owner with an Approve/Deny card in the Chat thread and wait for their click.
 
     Fails CLOSED (see distr.core.chat_approvals): no thread, app unreachable,
     any error, a deny or no answer within 15 minutes all return False. The old
@@ -150,7 +150,7 @@ def confirm_destructive(summary: str, *, title: str = "Confirm delete", tool: st
                         action: str = "delete", args: Optional[dict] = None,
                         details: Optional[dict] = None, chat_id: Optional[int] = None,
                         timeout_s: Optional[float] = None, **_legacy) -> bool:
-    """Deletes and other destructive changes always need Paul's in-chat click. Fails closed."""
+    """Deletes and other destructive changes always need the owner's in-chat click. Fails closed."""
     return request_confirmation(title, summary, tool=tool, action=action, args=args, details=details,
                                 chat_id=chat_id, timeout_s=timeout_s, danger=True)
 
@@ -172,7 +172,7 @@ def safe_confirm(confirm) -> "callable":
 # read actions: any agent with "read". Mutating actions (click/type/submit/fill):
 #   - agents with "browse" (primary, orchestrator): allowed, still behind the
 #     existing approval gates for submits/purchases;
-#   - everyone else: only after Paul confirms that specific action.
+#   - everyone else: only after the owner confirms that specific action.
 # Unknown capability state => refused.
 
 def browser_policy(agent_id: Optional[int], *, mutating: bool) -> str:

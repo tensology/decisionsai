@@ -516,7 +516,9 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
         from distr.core.chat_approvals import request_in_chat, sensitive_ask_enabled
 
         if self._types_into_password(code):
-            return "Not run: scripts may not type into password fields. Ask Paul to sign in himself."
+            from distr.core.agent.owner_identity import owner_label
+
+            return f"Not run: scripts may not type into password fields. Ask {owner_label()} to sign in themselves."
         mutating = self._requires_confirmation(code)
         try:
             from distr.core.agent_groups import current_agent_id

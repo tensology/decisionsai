@@ -300,15 +300,18 @@
 
 .main-content:has(> .tts-player-card:not([hidden])) .chat-messages { background-image: none; }
 
-.tts-player-card:not([hidden]) + .input-container .input-footer {
+/* :has() rather than a sibling combinator: a 280px absolutely positioned About
+   target in the input footer covers the player's close button while the player
+   is open. Shrink it into the footer and ignore pointer events for the duration. */
+.main-content:has(> .tts-player-card:not([hidden])) .input-container .input-footer {
     display: flex;
     align-items: center;
     gap: 12px;
 }
 
-.tts-player-card:not([hidden]) + .input-container .disclaimer { flex: 1; }
+.main-content:has(> .tts-player-card:not([hidden])) .input-container .disclaimer { flex: 1; }
 
-.tts-player-card:not([hidden]) + .input-container .llama-click-target {
+.main-content:has(> .tts-player-card:not([hidden])) .input-container .llama-click-target {
     position: static;
     flex-shrink: 0;
     width: 44px;
@@ -316,6 +319,7 @@
     border: 0;
     background: url('/assets/img/llama.png') center / contain no-repeat;
     opacity: 1;
+    pointer-events: none;
 }
 
 .tts-player-card:focus-within {

@@ -258,7 +258,7 @@ class MemoryAddInput(BaseModel):
     target: Literal["memory", "user", "shared"] = Field(
         default="memory",
         description="memory (default): your own private memory as this agent; shared: MEMORY.md "
-        "that every agent reads; user: shared USER.md preferences about Paul.",
+        "that every agent reads; user: shared USER.md preferences about the user.",
     )
 
 

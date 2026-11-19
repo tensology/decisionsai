@@ -1,6 +1,6 @@
 """Resolve "read it / read that" against the conversation before the clipboard.
 
-On 15 Nov Paul asked "Can you see what I said to Uncle Roger?", then "I just
+On 15 Nov the owner asked "Can you see what I said to Uncle Roger?", then "I just
 want you to read it." The fast-action detector matched "read it" and read the
 clipboard aloud. When the recent conversation names a thread, message, agent
 or other referent and the request does not mention the clipboard or a
