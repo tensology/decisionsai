@@ -29,9 +29,13 @@ _DOMAIN_LIKE_RE = re.compile(
     rf"|\b[A-Za-z0-9](?:[A-Za-z0-9-]{{0,61}}[A-Za-z0-9])?\.(?:{_DOMAIN_LIKE_COMMON_TLDS})\b"
 )
 _WORD_RE = re.compile(r"\b[\w']+\b")
+# The lookahead requires a word character before the stop without the old
+# ambiguous "[^.!?]*\w[^.!?]*", which backtracked catastrophically on long text
+# with no full stop (200 words took 5.6 s; a 1,500-char reply froze the voice).
 _SENTENCE_BOUNDARY_RE = re.compile(
-    r"([^.!?]*\w[^.!?]*[.!?]+[\"'”’)\]]*)(\s+|$|(?=[A-Z0-9]))"
+    r"((?=[^.!?]*\w)[^.!?]*[.!?]+[\"'”’)\]]*)(\s+|$|(?=[A-Z0-9]))"
 )
+_HAS_STOP_RE = re.compile(r"[.!?]")
 
 
 def spoken_word_count(text: str) -> int:
@@ -102,6 +106,8 @@ def extract_complete_sentences(text: str) -> tuple[list[str], str]:
     sentences_raw: list[str] = []
     pos = 0
     while pos < len(protected):
+        if not _HAS_STOP_RE.search(protected, pos):
+            break  # no stop left: the rest is the unfinished tail
         match = _SENTENCE_BOUNDARY_RE.search(protected[pos:])
         if not match:
             break
@@ -153,11 +159,12 @@ def cap_spoken_text(text: str, max_chars: int = SPOKEN_ANNOUNCE_MAX_CHARS) -> st
         used += extra
     if kept:
         return " ".join(kept)
-    head = clean[:max_chars]
+    head = clean[: max(1, max_chars - 1)]  # leave room for the closing full stop
     cut = head.rfind(" ")
     if cut > 0:
         head = head[:cut]
-    return head.rstrip(" ,;:-\u2014") + "."
+    head = head.rstrip(" ,;:-\u2014")
+    return head if head.endswith((".", "!", "?", "\u2026")) else head + "."
 
 
 def is_redundant_sentence(
