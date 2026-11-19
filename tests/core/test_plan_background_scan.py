@@ -125,7 +125,12 @@ def test_concurrent_reopens_start_only_one_scan_for_the_same_workspace(plan_db, 
     gate.set()
     _wait(first["id"])
     assert len(calls) == 1
-    # After it settles a new open may scan again.
+    # Re-opening right after a finished scan reuses it (no scan on every open).
+    reopened = _open(plan_db)
+    assert reopened["scan"]["state"] == "done"
+    assert len(calls) == 1
+    # Once the scan is older than the freshness window, an open scans again.
+    monkeypatch.setattr(service, "PLAN_SCAN_FRESH_SECONDS", 0)
     gate.clear(); gate.set()
     _open(plan_db)
     _wait(first["id"])

@@ -5,7 +5,7 @@ import { createThreadSession } from './threads/session.js?v=20261115-workflow-di
 import { createCatalogLoader } from './shell/catalog.js';
 import { installNavigationGuard } from './shell/navigation-guard.js';
 import { catalogModels, providerLabel } from './shared/models.js';
-import { createPlanning } from './planning/index.js?v=20261119-designer-undo';
+import { createPlanning } from './planning/index.js?v=20261120-wfplan';
 import { seedPlanHistory } from './planning/back.js?v=20261102-verify';
 import { planCrumbs, renderPlanCrumbs, clearPlanCrumbs } from './planning/breadcrumb.js?v=20261111-nav-apply-chrome4';
 import { setOverflowLabel } from './shared/overflow-names.js?v=20261111-overflow-names3';
@@ -18,13 +18,13 @@ import { createAutomations } from './automations/index.js?v=20261113-calendar-pa
 import { createIncoming } from './incoming/index.js?v=20261118-message-copy';
 import { fileDropZoneHtml, proposalThreadToast } from './shared/ticket-modal.js?v=20261111-thread-recovery';
 
-import { createWorkflows } from './workflows/index.js?v=20261024-wfwhat1';
+import { createWorkflows } from './workflows/index.js?v=20261120-wfplan';
 
 import { createBoards } from './boards/index.js?v=20261112-ticket-draft-project';
 
 import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261110-startup-only1';
 
-import { createThreadsTranscript } from './threads/transcript/index.js?v=20261115-workflow-history';
+import { createThreadsTranscript } from './threads/transcript/index.js?v=20261120-wfplan';
 import { openSourceReply } from './threads/source-reply.js?v=20261112-recipient-select';
 
 import { createThreadsComposer } from './threads/composer/index.js?v=20261112-human-review';
@@ -188,6 +188,10 @@ function developmentRoute() {
     if (parts[1] === 'threads' && Number(parts[2])) {
         const chatId = Number(parts[2]);
         return { kind: 'thread', chatId, path: `/development/threads/${chatId}/` };
+    }
+    if (parts[1] === 'workflows' && Number(parts[2])) {
+        const workflowId = Number(parts[2]);
+        return { kind: 'workspace', mode: 'workflows', workflowId, path: `/development/workflows/${workflowId}/` };
     }
     if (parts[1] === 'terminals' && Number(parts[2])) {
         const projectId = Number(parts[2]);
@@ -1318,10 +1322,10 @@ async function loadPlayOpensTerminals() {
                 playTerminalsPref.value = data.dev_play_opens_terminals;
                 writeLocalPlayOpensTerminals(playTerminalsPref.value);
             } else {
-                // Never saved globally: save the effective value (default on) so it is a real config key.
+                // Never saved globally: use the local/default value. Only an explicit toggle saves,
+                // so opening Development never writes settings.
                 playTerminalsPref.value = local === null ? true : local;
                 writeLocalPlayOpensTerminals(playTerminalsPref.value);
-                savePlayOpensTerminals(playTerminalsPref.value);
             }
         } else if (local === null) {
             writeLocalPlayOpensTerminals(true);
@@ -1628,7 +1632,8 @@ function setWorkspaceMode(mode, options) {
             ? null
             : el('task-prompt');
     if (options?.focus !== false) window.setTimeout(() => focusTarget?.focus(), 0);
-    if (options?.updateUrl !== false && developmentModePaths[state.workspaceMode]) setDevelopmentLocation(developmentModePaths[state.workspaceMode], options);
+    if (options?.updateUrl !== false && developmentModePaths[state.workspaceMode])
+        setDevelopmentLocation(workflowMode ? workflows.currentPath() : developmentModePaths[state.workspaceMode], options);
 }
 
 async function ensureProviderCatalogs() {
@@ -1743,11 +1748,6 @@ async function openBoardPlan(boardKey, options) {
     if (planning.hasUnsavedChanges() && !(await planning.beforeLeave())) return;
     const board = boardByKey(boardKey);
     if (!board) return;
-    if (!board.project_id || !projectById(board.project_id)) {
-        sidebar.closeBoardContextMenu();
-        toast('Link this board to a project before opening Plan.', 'error');
-        return;
-    }
     state.selectedBoardKey = board.key;
     rememberBoardSection(window.localStorage, board.key, 'plan');
     const planToken = ++state.planOpenToken;
@@ -2740,6 +2740,7 @@ async function restoreDevelopmentLocation(options) {
         } else if (route.kind === 'workspace') {
             setWorkspaceMode(route.mode, { focus: false, updateUrl: false });
             if (route.proposalKey !== undefined) incoming.openProposalReview(route.proposalKey);
+            if (route.mode === 'workflows') await workflows.showWorkflowRoute(route.workflowId || 0);
         } else if (route.kind === 'project_terminals') {
             await terminals.openProjectTerminals(route.projectId, {
                 updateUrl: false
@@ -3237,6 +3238,7 @@ const workflows = createWorkflows({
         loadChat: (...args) => loadChat(...args),
         refreshShell: (...args) => refreshShell(...args),
         runForWorkflow: (...args) => runForWorkflow(...args),
+        setLocation: (path, options) => setDevelopmentLocation(path, options),
         statusLabel: (...args) => statusLabel(...args),
         toast: (...args) => toast(...args)
     },
@@ -3685,6 +3687,7 @@ const planning = createPlanning({
     openBoardPlan,
     openPlanTicket,
     openHome: () => setWorkspaceMode('plan'),
+    openBoardLink: (boardKey) => sidebar.openBoardLinkDialog(boardKey),
     planControlsSlot: () => el('development-header-context'),
     setPlanCrumbs: (...rest) => {
         if (state.workspaceMode !== 'plan') return;

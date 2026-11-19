@@ -16,7 +16,9 @@ FAKE_DOC = r'''
 function node(tag, attrs = {}) {
   return { tag, textContent: '', dataset: {}, ...attrs,
     after(...nodes) { const list = this.parent.children; list.splice(list.indexOf(this) + 1, 0, ...nodes); nodes.forEach(n => n.parent = this.parent); },
-    remove() { const list = this.parent.children; list.splice(list.indexOf(this), 1); } };
+    remove() { const list = this.parent.children; list.splice(list.indexOf(this), 1); },
+    setAttribute(name, value) { this.attrs = this.attrs || {}; this.attrs[name] = value; },
+    getAttribute(name) { return (this.attrs || {})[name]; } };
 }
 const crumb = { children: [] };
 const project = node('span', { id: 'header-project', textContent: 'Board A' });
@@ -52,11 +54,11 @@ assert.equal(crumb.children.length, 3);
 def test_plan_mode_keeps_thread_header_and_embeds_under_it():
     app = (STATIC / 'app.js').read_text()
     css = (STATIC / 'planning/styles.css').read_text()
-    assert "el('development-task-header').classList.toggle('hidden', alternateMode && !planMode);" in app
+    assert "el('development-task-header').classList.toggle('hidden', alternateMode && !keepSharedHeader);" in app
     assert "el('development-task-header').classList.toggle('plan-mode', planMode);" in app
     assert "renderPlanCrumbs(document, planCrumbs(name, ...rest));" in app
     assert "clearPlanCrumbs(document);" in app
-    assert "#development-task-header.plan-mode > :not(.task-breadcrumb):not(.header-context):not(.board-view-switch) { display: none !important; }" in css
+    assert "#development-task-header.plan-mode > :not(.task-breadcrumb):not(.header-context):not(.plan-header-end):not(#board-chrome-unit) { display: none !important; }" in css
     assert ".development-workspace.plan-workspace { position: relative; inset: auto; grid-row: 2;" in css
     html = (ROOT / 'distr/gui/web/templates/development/index.html').read_text()
     assert html.count('class="task-breadcrumb"') == 1  # one breadcrumb component, reused not copied
@@ -65,12 +67,14 @@ def test_plan_mode_keeps_thread_header_and_embeds_under_it():
 def test_reopen_uses_cache_and_providers_load_once_in_parallel():
     index = (STATIC / 'planning/index.js').read_text()
     conv = (STATIC / 'planning/conversation.js').read_text()
-    assert 'const cached = state.details.get(board.key);' in index
+    assert 'const previous = state.details.get(board.key);' in index
+    assert 'const cached = Number(previous?.project_id) === Number(project.id) ? previous : null;' in index
     assert 'if (cached) conversation.refreshWorkspace(detail);' in index
     assert 'planningProviders ||= api(' in conv
     # Conversation (of the active chat, multi-chat) and providers still load in parallel.
-    assert "await Promise.all([api(conversationPath(session))" in conv and "}), planningProviders]);" in conv
+    assert "await Promise.all([api(conversationPath(session, requestedChat))" in conv and "}), planningProviders]);" in conv
     assert "(await api('/llms/available-providers?type=planning'))" not in conv
     # Round 15: the active tab is not repeated in the breadcrumb.
     assert 'host.setPlanCrumbs?.(TABS' not in conv and conv.count('host.setPlanCrumbs?.();') == 1
-    assert './planning/breadcrumb.js?v=20261102-verify' in (STATIC / 'app.js').read_text()
+    assert "from './planning/breadcrumb.js?v=" in (STATIC / 'app.js').read_text()
+    assert "planCrumbs, renderPlanCrumbs, clearPlanCrumbs" in (STATIC / 'app.js').read_text()

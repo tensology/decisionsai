@@ -1155,12 +1155,23 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             : interaction?.kind === 'provider_preflight' && (approval.name || approval.model)
             ? `Use ${approval.name || approval.model} for this step and continue the workflow.`
             : run?.worker_question || run?.waiting_prompt || 'Review the pending checkpoint before the workflow continues.');
+        // Say why approval is needed: the step it is for and the recorded reason, not only "Approval required".
+        const approvalStep = statusSteps[activeIndex];
+        const approvalStepRoute = routeDataFor(approvalStep);
+        const approvalReason = needsApproval
+            ? String(approval.reason || approval.rationale || interaction?.reason || interaction?.summary
+                || approvalStepRoute.rationale || approvalStepRoute.reason || '').trim()
+            : '';
+        const approvalFor = needsApproval && approvalStep?.name ? `Step ${activeIndex + 1} of ${count}: ${approvalStep.name}` : '';
+        const approvalWhyHtml = needsApproval && (approvalFor || approvalReason)
+            ? `<p class="thread-workflow-checkpoint-why" data-approval-why>${approvalFor ? `<span>${actions.escapeHtml(approvalFor)}</span>` : ''}${approvalReason ? `<span>Why: ${actions.escapeHtml(approvalReason)}</span>` : ''}</p>`
+            : '';
         const checkpointNotice = interaction?.decision_status === 'unconfirmed'
             ? 'The desktop restarted before it could confirm the decision. Review this run before continuing.'
             : interaction?.decision_status === 'resolving' ? '' : waitingPrompt;
         const checkpoint = ['waiting', 'paused'].includes(runStatus)
             ? `<section class="thread-workflow-checkpoint" aria-label="${checkpointTitle}">
-                <div><strong>${checkpointTitle}</strong>${checkpointNotice ? `<p>${actions.escapeHtml(checkpointNotice)}</p>` : ''}</div>
+                <div><strong>${checkpointTitle}</strong>${checkpointNotice ? `<p>${actions.escapeHtml(checkpointNotice)}</p>` : ''}${approvalWhyHtml}</div>
                 ${actionable.length ? `<div class="thread-workflow-checkpoint-actions">${actionable.map((action, index) => `<button type="button" class="thread-workflow-checkpoint-action${index === 0 && action !== 'stop' ? ' primary' : ''}${action === 'stop' ? ' danger' : ''}" data-workflow-interaction-token="${actions.escapeHtml(interaction.token)}" data-workflow-interaction-action="${actions.escapeHtml(action)}">${actions.escapeHtml(action === 'approve' ? (budgetApproval ? 'Raise budget and continue' : 'Approve and continue') : actions.actionLabel(action, interaction.kind))}</button>`).join('')}</div>` : ''}
             </section>`
             : '';
@@ -1174,9 +1185,10 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             <div class="thread-workflow-feedback-head"><div><span>Step ${activeIndex + 1} of ${count}</span><strong>${actions.escapeHtml(currentStep?.name || 'Current step')}</strong></div><em class="workflow-step-pill ${actions.escapeHtml(currentStep?.status || 'pending')}">${actions.escapeHtml(actions.statusLabel(currentStep?.status || 'pending'))}</em></div>
             <div class="thread-workflow-route"><strong>${actions.escapeHtml(currentRouteLabel)}</strong>${currentMeta.length ? `<span>${actions.escapeHtml(currentMeta.join(' · '))}</span>` : ''}</div>
             ${currentReason ? `<p>${actions.escapeHtml(currentReason)}</p>` : ''}
-            <div class="thread-workflow-live-feedback"><span class="thread-status-dot"></span><div><strong>Live feedback</strong><p>${actions.escapeHtml(activityText(currentActivity))}</p></div>${currentActivity.at ? `<time datetime="${actions.escapeHtml(currentActivity.at)}">${actions.escapeHtml(messageTime(currentActivity.at))}</time>` : ''}</div>
+            <div class="thread-workflow-live-feedback"><span class="thread-status-dot"></span><div><strong>${['running', 'waiting', 'paused', 'queued'].includes(runStatus) ? 'Live feedback' : 'Last feedback'}</strong><p>${actions.escapeHtml(activityText(currentActivity))}</p></div>${currentActivity.at ? `<time datetime="${actions.escapeHtml(currentActivity.at)}">${actions.escapeHtml(messageTime(currentActivity.at))}</time>` : ''}</div>
         </section>`;
-        const viewMode = 'loop';
+        // One or two steps read better as a short list than as a ring.
+        const viewMode = count <= 2 ? 'list' : 'loop';
         const ringPrefix = nextWorkflowLoopId(`thread-wf-${String(run?.id || event.run_id || 'x')}-${mode}`);
         const ring = workflowLoopHtml(statusSteps, {
             compact: true,

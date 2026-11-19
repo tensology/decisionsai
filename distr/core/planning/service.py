@@ -298,7 +298,8 @@ def open_project_plan(
         workspace_id = int(payload["id"])
         ensure_plan_scaffold(workspace_id)  # DB-only, cheap; stays synchronous
         if defer_scan:
-            start_background_scan(workspace_id, int(payload["project_id"]))
+            if not _scan_is_fresh(workspace_id):
+                start_background_scan(workspace_id, int(payload["project_id"]))
             scan = plan_scan_status(workspace_id)
             detail = get_workspace(workspace_id) or payload
             detail["scan"] = scan
@@ -314,6 +315,17 @@ _SCAN_LOCK = threading.Lock()
 _SCAN_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="plan-scan")
 _SCAN_QUEUES: dict[int, deque[int]] = {}
 _SCAN_STATUS: dict[int, dict[str, Any]] = {}
+
+
+# Re-opening a plan shortly after a finished scan reuses it instead of scanning the project again.
+PLAN_SCAN_FRESH_SECONDS = 300
+
+
+def _scan_is_fresh(workspace_id: int) -> bool:
+    with _SCAN_LOCK:
+        status = _SCAN_STATUS.get(int(workspace_id)) or {}
+    finished = status.get("finished_at")
+    return status.get("state") == "done" and isinstance(finished, (int, float)) and time.time() - finished < PLAN_SCAN_FRESH_SECONDS
 
 
 def plan_scan_status(workspace_id: int) -> dict[str, Any]:

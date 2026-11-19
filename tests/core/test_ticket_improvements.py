@@ -225,6 +225,23 @@ def test_run_file_changes_survive_moving_to_the_next_step():
     assert '1 file changed' in row['status_summary'] and not row['stalled']
 
 
+def test_finished_run_summary_does_not_keep_starting_the_worker():
+    _, rid, sid = seed()
+    with get_session() as db:
+        run = db.get(AutoWorkflowRun, rid)
+        run.status = 'completed'
+        run.completed_at = utc_now_naive()
+        session = ProjectExecutionSession(project_id=999, run_id=rid, step_id=sid, status='completed')
+        db.add(session)
+        db.flush()
+        db.add(ProjectExecutionEvent(session_id=session.id, event_type='log', message='starting the worker'))
+        db.commit()
+        health = run_health(db, run, json.loads(run.run_data))
+    assert 'starting the worker' not in health['status_summary']
+    assert 'finished after' in health['status_summary']
+    assert not health['stalled']
+
+
 @pytest.mark.parametrize('tokens,cost,turns', [(101, .99, 1), (101, 1., 1), (1000, 0., 1), (1, 0., 80)])
 def test_power_budget_exhaustion_never_gates(tokens, cost, turns):
     assert power_budget_is_exhausted({'max_turns': 80, 'turns_used': turns, 'max_tokens': 100,

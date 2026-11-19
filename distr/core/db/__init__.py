@@ -288,6 +288,8 @@ class Settings(Base):
     dev_files_enabled = Column(Boolean, default=True)
     dev_browser_enabled = Column(Boolean, default=False)
     dev_calendar_provider = Column(String, default='auto')
+    # NULL = never chosen (Development treats that as on); only an explicit False turns it off.
+    dev_play_opens_terminals = Column(Boolean, nullable=True)
     icloud_apple_id = Column(String, default='')
     icloud_app_password = Column(String, default='')
     icloud_calendar_name = Column(String, default='')
@@ -888,6 +890,7 @@ try:
                 ("dev_files_enabled", "BOOLEAN DEFAULT 1"),
                 ("dev_browser_enabled", "BOOLEAN DEFAULT 0"),
                 ("dev_calendar_provider", "VARCHAR DEFAULT 'auto'"),
+                ("dev_play_opens_terminals", "BOOLEAN"),
                 ("icloud_apple_id", "VARCHAR DEFAULT ''"),
                 ("icloud_app_password", "VARCHAR DEFAULT ''"),
                 ("icloud_calendar_name", "VARCHAR DEFAULT ''"),

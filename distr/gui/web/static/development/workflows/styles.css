@@ -556,7 +556,11 @@
 
 /* wfui 2026-10-22: flat grid, gutters, Add workflow toolbar, current/next card steps */
 .workflow-home { padding: 24px 32px 64px 32px; box-sizing: border-box; }
-.workflow-home-toolbar { display: flex; justify-content: flex-end; margin: 0 0 14px; }
+.workflow-home-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin: 0 0 14px; }
+.workflow-search { flex: 1 1 auto; max-width: 320px; margin-right: auto; }
+.workflow-search input { width: 100%; min-height: 32px; padding: 6px 10px; border: 1px solid var(--studio-line); border-radius: 6px; background: var(--studio-raised); color: var(--studio-text); font: inherit; font-size: 13px; }
+.workflow-search input:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; }
+.workflow-card[hidden] { display: none !important; }
 .workflow-add-button { padding: 8px 14px; border-radius: 8px; font-weight: 600; }
 .workflow-create-prompt { max-width: none; margin: 0 0 18px; }
 .workflow-create-prompt.hidden { display: none; }

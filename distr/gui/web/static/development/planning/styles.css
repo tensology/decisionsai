@@ -236,6 +236,8 @@ span.plan-sitemap-shot-missing { border-style: dashed; background: transparent; 
 .plan-empty-steps { margin: 0; padding-left: 18px; text-align: left; line-height: 1.55; }
 .plan-empty-hint { margin: 0; max-width: 36rem; line-height: 1.5; }
 .plan-empty.error { color: #ffaaa3; }
+.plan-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.plan-retry.primary { border-color: var(--studio-accent); color: var(--studio-accent); }
 .plan-assets { display: flex; flex-shrink: 0; max-height: 140px; gap: 12px; overflow: auto; padding: 10px 16px; border-top: 1px solid var(--studio-line-soft); }
 .plan-asset { display: flex; width: 100px; flex: 0 0 100px; min-width: 0; flex-direction: column; gap: 4px; font-size: 11px; overflow-wrap: anywhere; }
 .plan-asset img { width: 100%; height: 64px; object-fit: contain; border-radius: 4px; background: var(--studio-raised); }

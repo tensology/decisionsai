@@ -8,6 +8,9 @@ from distr.core.db import Base, Chat, ChatTurnEvent
 from distr.core.db.projects import Project
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
 from distr.core.workflow.chat_trace import record_chat_workflow_event, record_workflow_chat_event
+# Import before any test patches distr.core.db.get_session: chat.py binds get_session at import,
+# and binding the per-test in-memory factory broke later files ("no such table: chats").
+import distr.core.chat  # noqa: E402,F401
 
 
 def test_record_workflow_chat_event_persists_to_owning_chat(monkeypatch):

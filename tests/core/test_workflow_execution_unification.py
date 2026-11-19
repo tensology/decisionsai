@@ -19,14 +19,19 @@ from hypothesis import strategies as st
 
 # distr.core.signals requires PyQt6 which is not available in the test environment.
 # Inject a mock module so local imports inside service.py resolve correctly.
-_mock_signals_module = MagicMock()
-_mock_signal_manager = MagicMock()
-_mock_signals_module.signal_manager = _mock_signal_manager
-sys.modules.setdefault("distr.core.signals", _mock_signals_module)
+# Use the real modules when they import; a module-level MagicMock in sys.modules leaks into
+# every later test file (it made 30+ step_runner tests fail only in the full run).
+try:
+    import distr.core.signals  # noqa: F401
+except ImportError:
+    _mock_signals_module = MagicMock()
+    _mock_signals_module.signal_manager = MagicMock()
+    sys.modules.setdefault("distr.core.signals", _mock_signals_module)
 
-# distr.core.workflow_engine.test_loop requires pydantic which is not available in tests.
-_mock_test_loop_module = MagicMock()
-sys.modules.setdefault("distr.core.workflow_engine.test_loop", _mock_test_loop_module)
+try:
+    import distr.core.workflow_engine.test_loop  # noqa: F401
+except ImportError:
+    sys.modules.setdefault("distr.core.workflow_engine.test_loop", MagicMock())
 
 import distr.core.workflow.service as service_mod
 import distr.core.workflow.dispatcher as dispatcher_mod
@@ -535,12 +540,20 @@ def test_agent_instruction_dispatch_isolation(data):
         with patch.object(dispatcher_mod, "get_session", return_value=mock_session_ctx), \
              patch("distr.core.signals.signal_manager", mock_signal_manager), \
              patch("distr.core.workflow.post_execution._run_verification", return_value=True), \
-             patch.object(dispatcher_mod, "increment_workflow_updated"):
+             patch.object(dispatcher_mod, "increment_workflow_updated"), \
+             patch.object(post_execution_mod.PostExecutionMixin, "_record_result_and_route") as mock_route:
 
             from distr.core.workflow.dispatcher import StepDispatcher
 
             dispatcher = StepDispatcher()
             result = dispatcher.run_in_workflow(step_id, run_id)
+            # Let the agent callback finish while routing is stubbed. Real routing in a
+            # background callback used to outlive this example and clean up the next
+            # example's run context (same run_id), which failed only in full-suite runs.
+            import time
+            deadline = time.monotonic() + 2
+            while not mock_route.called and time.monotonic() < deadline:
+                time.sleep(0.01)
 
         # --- Assertions ---
 

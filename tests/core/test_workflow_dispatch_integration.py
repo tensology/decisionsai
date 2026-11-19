@@ -26,11 +26,15 @@ from sqlalchemy.orm import sessionmaker
 pytestmark = pytest.mark.slow
 
 # ── Stub out Qt/signal dependencies that aren't available in test env ──────
-_mock_signals = MagicMock()
-_mock_signals.signal_manager = MagicMock()
-sys.modules.setdefault("distr.core.signals", _mock_signals)
-sys.modules.setdefault("PyQt6.QtCore", MagicMock())
-sys.modules.setdefault("PyQt6", MagicMock())
+# Only when the real modules are missing: a MagicMock left in sys.modules leaks into later files.
+try:
+    import distr.core.signals  # noqa: F401
+except ImportError:
+    _mock_signals = MagicMock()
+    _mock_signals.signal_manager = MagicMock()
+    sys.modules.setdefault("distr.core.signals", _mock_signals)
+    sys.modules.setdefault("PyQt6.QtCore", MagicMock())
+    sys.modules.setdefault("PyQt6", MagicMock())
 
 
 def _make_engine(path):

@@ -76,3 +76,23 @@ test('adding a widget lands after trailing annotations at the right depth', () =
     assert.equal(out.source.split('\n')[out.line - 1], '    button "Button" variant=primary');
     assert.equal(D.addWidget(SRC, row.node, 'script'), null);
 });
+
+test('add inserts a dropped widget before the child it was dropped on', () => {
+    const p = page();
+    const row = node(p, 'row');
+    const out = D.addWidget(SRC, row.node, 'text', 1);
+    const lines = out.source.split('\n');
+    assert.equal(lines[out.line - 1], '    text "Text"');
+    assert.ok(lines.indexOf('    text "Text"') < lines.indexOf('    text "From R250"'));
+    assert.ok(lines.indexOf('      #| primary call to action') < lines.indexOf('    text "Text"'), 'stays after the button note');
+    assert.ok(D.designPage(out.source, 0).valid);
+});
+
+test('add at index 0 goes first and past the end appends', () => {
+    const p = page();
+    const stack = node(p, 'stack');
+    const first = D.addWidget(SRC, stack.node, 'button', 0).source.split('\n');
+    assert.ok(first.indexOf('    button "Button" variant=primary') < first.indexOf('    input "Bike model" required'));
+    const last = D.addWidget(SRC, stack.node, 'button', 9).source.split('\n');
+    assert.equal(last.at(-1), '    button "Button" variant=primary');
+});

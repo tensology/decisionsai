@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import threading
 import json
 from unittest.mock import MagicMock, patch
 
@@ -41,8 +42,16 @@ def _make_factory(tmp_path):
     return sessionmaker(bind=engine, expire_on_commit=False)
 
 
+# The test shares one in-memory connection (StaticPool) across the agent, callback and
+# routing threads. Interleaved reads on that connection failed about one run in three
+# ("tuple index out of range"), so sessions take turns. The timeout keeps a session that
+# waits on another thread from hanging the test.
+_DB_TURN = threading.RLock()
+
+
 @contextlib.contextmanager
 def _session_ctx(factory):
+    turn = _DB_TURN.acquire(timeout=5)
     session = factory()
     try:
         yield session
@@ -52,6 +61,8 @@ def _session_ctx(factory):
         raise
     finally:
         session.close()
+        if turn:
+            _DB_TURN.release()
 
 
 class LoopFakeBackend(ProjectCliBackend):
@@ -221,6 +232,7 @@ def _seed_loop_workflow(factory, tmp_path):
 def test_loop_ticket_handoff_bridge_and_exit(tmp_path):
     from distr.core.project_cli_backends import registry as backend_registry
     from distr.core.workflow.dispatcher import _active_runs, _runs_lock, start_workflow_run
+    from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
 
     with _runs_lock:
         _active_runs.clear()
@@ -272,7 +284,9 @@ def test_loop_ticket_handoff_bridge_and_exit(tmp_path):
         patch("distr.core.workflow.router.record_workflow_chat_event", MagicMock()),
         patch("distr.gui.web.kanban_events.increment_kanban_updated", MagicMock()),
         patch("distr.gui.web.workflow_events.increment_workflow_updated", MagicMock()),
-        patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge", MagicMock()),
+        # The bridge is faked, but result packets still read its pure public-result helper.
+        patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge", MagicMock(
+            public_project_cli_result=WorkflowAgentBridge.public_project_cli_result)),
         patch("distr.core.workflow_agent.WorkflowAgent", LoopFakeWorkflowAgent),
         patch("distr.core.workflow.run_briefing.maybe_pause_before_next_step", lambda **kwargs: False),
         patch("distr.core.orchestrator.is_orchestrator_enabled", lambda: True),

@@ -13,10 +13,51 @@ export function createWorkflows({ context, actions, el }) {
         selectedStepIndex: -1,
         drawerAnimate: false,
         settingsOpen: false,
-        workflowDetailSteps: {}
+        workflowDetailSteps: {},
+        search: ''
     };
     function filteredWorkflows() {
         return context.workflows.slice();
+    }
+
+    function workflowProjectName(workflow) {
+        const projectId = workflowProjectId(workflow);
+        return projectId ? context.projects.find((project) => Number(project.id) === projectId)?.name || '' : '';
+    }
+
+    function workflowSearchText(workflow) {
+        return `${workflow.name || ''} ${workflow.description || ''} ${workflowProjectName(workflow)}`.toLowerCase();
+    }
+
+    function applyWorkflowSearch(list) {
+        const query = state.search.trim().toLowerCase();
+        let visible = 0;
+        list.querySelectorAll('[data-workflow-card]').forEach((card) => {
+            const matches = !query || String(card.dataset.workflowSearch || '').includes(query);
+            card.hidden = !matches;
+            if (matches) visible += 1;
+        });
+        let empty = list.querySelector('[data-workflow-search-empty]');
+        if (query && !visible) {
+            if (!empty) list.insertAdjacentHTML('beforeend', '<div class="development-empty" data-workflow-search-empty>No workflows match this search.</div>');
+        } else empty?.remove();
+    }
+
+    // The URL names the open workflow so it survives reloads and can be shared.
+    function currentPath() {
+        return state.selectedWorkflowId ? `/development/workflows/${Number(state.selectedWorkflowId)}/` : '/development/workflows/';
+    }
+
+    function syncLocation(options) {
+        if (context.workspaceMode === 'workflows') actions.setLocation?.(currentPath(), options);
+    }
+
+    function lastRunText(run) {
+        if (!run) return '';
+        const when = run.completed_at || run.finished_at || run.started_at || run.created_at;
+        const date = when ? new Date(String(when).endsWith('Z') || /[+-]\d\d:?\d\d$/.test(String(when)) ? when : `${when}Z`) : null;
+        const day = date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '';
+        return `Last run ${actions.statusLabel(String(run.status || '').toLowerCase()).toLowerCase()}${day ? ` ${day}` : ''}`;
     }
 
     function workflowStepList(workflow) {
@@ -135,22 +176,29 @@ export function createWorkflows({ context, actions, el }) {
         })();
         const stepRow = (label, index) =>
             `<li class="workflow-card-step-${label.toLowerCase()}"><span class="workflow-card-index">${index + 1}</span><span class="workflow-card-step"><small>${label}</small><strong>${actions.escapeHtml(steps[index].name || `Step ${index + 1}`)}</strong></span></li>`;
+        // "Current" only means something while a run is going; idle templates show where they start.
+        const firstRows = () => `${stepRow('First', 0)}${
+            steps.length > 1
+                ? `<li class="workflow-card-step-next"><span class="workflow-card-index">${steps.length > 2 ? '…' : '2'}</span><span class="workflow-card-step"><small>Then</small><strong>${actions.escapeHtml(steps.length > 2 ? `${steps.length - 1} more steps` : steps[1].name || 'Step 2')}</strong></span></li>`
+                : ''
+        }`;
         const preview = steps.length
-            ? `<ol class="workflow-card-steps workflow-card-current-next">${stepRow('Current', currentStepIndex)}${
+            ? `<ol class="workflow-card-steps workflow-card-current-next">${active ? `${stepRow('Current', currentStepIndex)}${
                   currentStepIndex + 1 < steps.length
                       ? stepRow('Next', currentStepIndex + 1)
                       : '<li class="workflow-card-step-next workflow-card-last"><span class="workflow-card-index">✓</span><span class="workflow-card-step"><small>Next</small><strong>Last step</strong></span></li>'
-              }</ol>`
+              }` : firstRows()}</ol>`
             : stepCount
               ? `<p class="workflow-card-pending">${state.workflowPreviewUnavailable.has(workflow) ? 'Step preview unavailable' : 'Loading steps'}</p>`
               : '<p class="workflow-card-pending">No steps yet</p>';
         const classLabel = WORKFLOW_CLASS_LABEL[workflowClassKey(workflow)] || '';
-        const readiness = run ? actions.statusLabel(status) : issue || (steps.length ? 'Ready' : '');
-        const summary = [classLabel, `${stepCount} step${stepCount === 1 ? '' : 's'}`, readiness].filter(Boolean).join(' · ');
+        const readiness = run ? (active ? actions.statusLabel(status) : lastRunText(run)) : issue || (steps.length ? 'Ready' : '');
+        const projectName = workflowProjectName(workflow);
+        const summary = [projectName || classLabel, `${stepCount} step${stepCount === 1 ? '' : 's'}`, readiness].filter(Boolean).join(' · ');
         // Managed policies explain themselves: what they are for, not just their name.
         const what = classLabel ? String(workflow.description || '').trim() : '';
         const stateClass = status === 'waiting' || status === 'paused' ? 'waiting' : status === 'failed' ? 'failed' : active ? 'running' : '';
-        return `<article class="workflow-card" data-workflow-card="${Number(workflow.id)}">
+        return `<article class="workflow-card" data-workflow-card="${Number(workflow.id)}" data-workflow-search="${actions.escapeHtml(workflowSearchText(workflow))}">
             <header class="workflow-card-head">
                 <button type="button" class="workflow-card-open" data-workflow-select="${Number(workflow.id)}"><strong>${actions.escapeHtml(workflow.name || 'Untitled workflow')}</strong><small>${actions.escapeHtml(summary)}</small>${what ? `<small class="workflow-card-what">${actions.escapeHtml(what)}</small>` : ''}</button>
                 <span class="workflow-card-controls">${stateClass ? `<i class="workflow-state ${stateClass}" role="img" aria-label="${actions.escapeHtml(actions.statusLabel(status))}" title="${actions.escapeHtml(actions.statusLabel(status))}"></i>` : ''}<span class="scheduled-row-icons"><button type="button" class="scheduled-icon-button edit" data-workflow-card-action="open" data-workflow-id="${Number(workflow.id)}" title="Edit" aria-label="Edit ${actions.escapeHtml(workflow.name || 'workflow')}"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m4 14-.5 3 3-.5L15 8l-2.5-2.5L4 14Z"/><path d="m11.5 6.5 2.5 2.5"/></svg></button><button type="button" class="scheduled-icon-button delete danger" data-workflow-card-action="delete" data-workflow-id="${Number(workflow.id)}" title="Delete" aria-label="Delete ${actions.escapeHtml(workflow.name || 'workflow')}"><svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 6h12M8 6V4h4v2M6 6l.8 10h6.4L14 6"/></svg></button></span></span>
@@ -253,6 +301,7 @@ export function createWorkflows({ context, actions, el }) {
                   .join('')}</div>`
             : '<div class="development-empty">No workflows yet.</div>';
         list.innerHTML = activeExecutions + groupsHtml;
+        applyWorkflowSearch(list);
         list.querySelectorAll('[data-workflow-select]').forEach((button) =>
             button.addEventListener('click', () => selectWorkflow(Number(button.dataset.workflowSelect)))
         );
@@ -294,12 +343,27 @@ export function createWorkflows({ context, actions, el }) {
         hydrateWorkflowCards(workflows);
     }
 
-    async function selectWorkflow(workflowId) {
+    // Route entry: /development/workflows/<id>/ opens that workflow, /development/workflows/ the list.
+    async function showWorkflowRoute(workflowId) {
+        if (Number(workflowId) > 0) {
+            await selectWorkflow(workflowId, { updateUrl: false });
+            if (context.workflows.some((item) => Number(item.id) === Number(workflowId))) return;
+            actions.toast('That workflow no longer exists.', 'error');
+        }
+        state.selectedWorkflowId = '';
+        syncLocation({ replace: true });
+        state.selectedStepIndex = -1;
+        state.inlineStepId = 0;
+        renderWorkflowWorkspace();
+    }
+
+    async function selectWorkflow(workflowId, options) {
         if (String(workflowId || '') !== state.selectedWorkflowId) {
             state.selectedStepIndex = -1;
             state.inlineStepId = 0;
         }
         state.selectedWorkflowId = String(workflowId || '');
+        if (options?.updateUrl !== false) syncLocation();
         try {
             const detail = await actions.api(`/workflows/${Number(workflowId)}`);
             const index = context.workflows.findIndex((item) => Number(item.id) === Number(workflowId));
@@ -455,6 +519,7 @@ export function createWorkflows({ context, actions, el }) {
             <details class="workflow-advanced-section workflow-memory-section"><summary><span><strong>Memory</strong><small>Handoffs and learned context</small></span><svg aria-hidden="true" viewBox="0 0 20 20"><path d="m6 8 4 4 4-4"></path></svg></summary><div class="workflow-memory-panel"><button type="button" class="secondary-button" data-workflow-load-memory>${memory ? 'Refresh memory' : 'Load memory'}</button><div class="workflow-memory-content">${memory ? workflowMemoryHtml(memory) : '<p>Load the workflow memory to inspect handoffs, routing, and learned context.</p>'}</div></div></details></dialog>`;
         detail.querySelector('.workflow-editor-back').addEventListener('click', () => {
             state.selectedWorkflowId = '';
+            syncLocation();
             renderWorkflowWorkspace();
         });
         detail.querySelector('[data-workflow-duplicate]').addEventListener('click', () => duplicateManagedWorkflow(Number(workflow.id)));
@@ -1017,6 +1082,7 @@ export function createWorkflows({ context, actions, el }) {
         try {
             await actions.api(`/workflows/${workflowId}`, { method: 'DELETE' });
             state.selectedWorkflowId = '';
+            syncLocation({ replace: true });
             await actions.refreshShell({ preserveConversation: true });
             renderWorkflowWorkspace();
             actions.toast('Workflow deleted.');
@@ -1133,6 +1199,7 @@ export function createWorkflows({ context, actions, el }) {
             state.selectedWorkflowId = '';
             state.selectedStepIndex = -1;
             state.inlineStepId = 0;
+            syncLocation();
             renderWorkflowWorkspace();
         }
         setWorkflowComposerOpen(true);
@@ -1284,6 +1351,11 @@ export function createWorkflows({ context, actions, el }) {
 
     function bindEvents() {
         installWorkflowTooltips();
+        el('workflow-search')?.addEventListener('input', (event) => {
+            state.search = event.target.value || '';
+            const list = el('workflow-list');
+            if (list) applyWorkflowSearch(list);
+        });
         el('workflow-prompt-form').addEventListener('submit', createWorkflowFromPrompt);
         el('workflow-add-toggle')?.addEventListener('click', () => setWorkflowComposerOpen(true));
         el('workflow-add-modal')?.addEventListener('click', (event) => {
@@ -1298,9 +1370,11 @@ export function createWorkflows({ context, actions, el }) {
     }
     return {
         bindEvents,
+        currentPath,
         openWorkflowComposer,
         renderWorkflowWorkspace,
         selectWorkflow,
+        showWorkflowRoute,
         workflowProjectId,
         workflowStepList
     };

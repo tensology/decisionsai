@@ -1359,6 +1359,8 @@ html.dev-board-route #chrome-play-group #development-kanban-more { display: grid
 .thread-workflow-view-switch svg { width: 12px; height: 12px; }
 .thread-workflow-runner[data-view="loop"] .thread-workflow-steps { display: none; }
 .thread-workflow-runner[data-view="list"] .thread-workflow-ring { display: none; }
+.thread-workflow-checkpoint-why { display: grid; gap: 2px; margin: 6px 0 0; color: var(--studio-muted); font-size: 12px; line-height: 1.45; }
+.thread-workflow-checkpoint-why span:first-child { color: var(--studio-text); }
 .thread-workflow-steps .workflow-step-panel strong { font-size: 12px; }
 .thread-workflow-steps .workflow-step-panel > div > span,
 .thread-workflow-steps .workflow-step-pill { font-size: 10px; }

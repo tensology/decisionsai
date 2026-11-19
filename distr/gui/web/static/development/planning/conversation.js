@@ -1,5 +1,5 @@
 import { parseWireframe, renderWireframe, explainWireframeDiagnostics } from './wireframe.js?v=20261119-page-designer';
-import { mountPageDesigner } from './page-designer.js?v=20261119-designer-undo';
+import { mountPageDesigner } from './page-designer.js?v=20261120-wfplan';
 import { createPlanPolling } from './polling.js';
 import { buildResultsHtml } from './build-results.js';
 import { layoutConnectedSitemap, pageAccessGroup, sitemapRouteKey, SITEMAP_ACCESS_GROUPS } from './sitemap.js?v=20261119-preview-routes';
@@ -3145,7 +3145,8 @@ export function createPlanConversation(host, root) {
         };
     }
 
-    return { open, refreshWorkspace, setScanHint, leave, hasDraft };
+    const hasUnsavedEdits = () => [...sessions.values()].some(hasArtifactDraft);
+    return { open, refreshWorkspace, setScanHint, leave, hasDraft, hasUnsavedEdits };
 }
 
 

@@ -165,6 +165,51 @@ def test_page_designer_drops_palette_widget(page: Page, plan_server):
     expect(row.locator(".text")).to_have_count(1)
 
 
+def test_page_designer_drops_where_the_pointer_is(page: Page, plan_server):
+    page.set_default_timeout(8000)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(plan_server)
+    expect(page.locator(".iface-node")).to_have_count(2)
+    page.wait_for_load_state("networkidle")
+    page.locator(".iface-node", has_text="Saved").press("Enter")
+    page.get_by_role("button", name="Design", exact=True).click()
+    designer = page.get_by_role("region", name="Page designer")
+    canvas = page.frame_locator('iframe[title="Design canvas"]')
+    heading = canvas.get_by_text("Customer saved", exact=True)
+    # Dropping on the top of the heading puts the new text before it, not at the end of the page.
+    _drag_designer_widget(page, designer.get_by_role("button", name="Add text"), heading)
+    expect(canvas.get_by_text("Text", exact=True)).to_have_count(1)
+    with page.expect_response(lambda response: response.request.method == "PATCH" and "/plan-items/" in response.url) as saved:
+        designer.get_by_role("button", name="Save design").click()
+    content = saved.value.request.post_data_json["content"]
+    assert content.index('text "Text"') < content.index('heading "Customer saved"'), content
+
+
+def test_page_designer_warns_when_leaving_with_unsaved_changes(page: Page, plan_server):
+    page.set_default_timeout(8000)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(plan_server)
+    expect(page.locator(".iface-node")).to_have_count(2)
+    page.wait_for_load_state("networkidle")
+    page.locator(".iface-node", has_text="Saved").press("Enter")
+    page.get_by_role("button", name="Design", exact=True).click()
+    designer = page.get_by_role("region", name="Page designer")
+    designer.get_by_role("button", name="Add text").click()
+    expect(designer).to_contain_text("Unsaved changes")
+    # The designer draft is registered with the shared unsaved-edits check used when leaving Plan.
+    assert page.evaluate("""async () => {
+        const { hasUnsavedEdits } = await import('/static/development/planning/inline-edit/editor.js?v=20261103-ifaces3');
+        return hasUnsavedEdits();
+    }""")
+    prevented = page.evaluate("""() => {
+        const event = new Event('beforeunload', { cancelable: true });
+        const ok = window.dispatchEvent(event);
+        return event.defaultPrevented || event.returnValue === '' || ok === false;
+    }""")
+    assert prevented, 'leaving with unsaved designer edits should be cancelled'
+    expect(designer).to_contain_text("Unsaved changes")
+
+
 def test_page_designer_delete_undo_redo(page: Page, plan_server):
     page.set_default_timeout(8000)
     page.set_viewport_size({"width": 1280, "height": 900})

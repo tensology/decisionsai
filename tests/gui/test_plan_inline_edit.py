@@ -16,7 +16,7 @@ def test_brief_buttons_and_editor_removed():
 def test_markdown_items_get_inline_editor_and_dsl_stays_read_only():
     conv = (PLAN / 'conversation.js').read_text()
     assert "import { createInlineEditor, addUnsavedCheck, isRevisionConflict } from './inline-edit/editor.js?v=20261103-ifaces3';" in conv
-    assert "preview.append(inlineEditorFor(session, item, raw ? 'markdown-raw' : 'markdown', item.title || 'Document', () => markDocTabs(session)).el);" in conv
+    assert "const editor = inlineEditorFor(session, item, raw ? 'markdown-raw' : 'markdown', item.title || 'Document', () => markDocTabs(session)).el;" in conv
     mermaid = conv[conv.index("} else if (item.content_format === 'mermaid') {"):]
     mermaid = mermaid[:mermaid.index('} else {')]
     assert 'inlineEditorFor' not in mermaid and 'contenteditable' not in mermaid and 'textarea' not in mermaid

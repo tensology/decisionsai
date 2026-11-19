@@ -1,5 +1,5 @@
 import { renderWireframe } from './wireframe.js?v=20261119-page-designer';
-import { addWidget, designPage, editWidgetLabel, insertionLayout, moveWidget, removeWidget, WIDGETS } from './page-designer-source.js?v=20261119-designer-undo';
+import { addWidget, designPage, editWidgetLabel, insertionLayout, moveWidget, removeWidget, WIDGETS } from './page-designer-source.js?v=20261120-wfplan';
 
 const PALETTE = { row: 'Row', stack: 'Stack', heading: 'Heading', text: 'Text', button: 'Button', input: 'Field' };
 const WIDGET_DRAG = 'application/x-decisions-widget';
@@ -168,7 +168,11 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
             .node.design-selected{outline:2px solid #315fc0;outline-offset:3px}
             .node.design-target{outline:2px dashed #315fc0;outline-offset:3px}
             .node[data-design-empty]{min-height:40px;outline:1px dashed #8298c9;border-radius:4px}
-            .node[data-design-empty]::after{content:"Drop widgets here";padding:8px;color:#405a84;font:12px system-ui}`;
+            .node[data-design-empty]::after{content:"Drop widgets here";padding:8px;color:#405a84;font:12px system-ui}
+            .node.design-insert-before{box-shadow:0 -3px 0 #315fc0}
+            .node.design-insert-after{box-shadow:0 3px 0 #315fc0}
+            .row > .node.design-insert-before, .node.design-row-child.design-insert-before{box-shadow:-3px 0 0 #315fc0}
+            .row > .node.design-insert-after, .node.design-row-child.design-insert-after{box-shadow:3px 0 0 #315fc0}`;
         doc.head.append(style);
         doc.scrollingElement.scrollTop = scroll;
         doc.querySelectorAll('a, button, input, select, textarea').forEach(control => { control.tabIndex = -1; });
@@ -185,11 +189,34 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
         let pointerStart = null;
         let moving = false;
         let ignoreClick = false;
-        const clearTarget = () => doc.querySelector('.design-target')?.classList.remove('design-target');
+        const clearTarget = () => doc.querySelectorAll('.design-target, .design-insert-before, .design-insert-after')
+            .forEach(node => node.classList.remove('design-target', 'design-insert-before', 'design-insert-after', 'design-row-child'));
+        // Where a drop lands: the layout under the pointer and the child index the pointer is before,
+        // so widgets go where they are dropped instead of always at the end.
+        function dropPoint(event) {
+            const layout = insertionLayout(model, lineAt(event));
+            if (!layout) return { layout: null, index: 0 };
+            const horizontal = layout.type === 'row';
+            const children = layout.children.filter(child => child.type !== 'content');
+            let index = layout.children.length;
+            for (const child of children) {
+                const box = doc.querySelector(`.node[data-line="${child.line}"]`)?.getBoundingClientRect();
+                if (!box) continue;
+                const middle = horizontal ? box.left + box.width / 2 : box.top + box.height / 2;
+                if ((horizontal ? event.clientX : event.clientY) < middle) { index = layout.children.indexOf(child); break; }
+            }
+            return { layout, index, horizontal };
+        }
         function markTarget(event) {
             clearTarget();
-            const target = insertionLayout(model, lineAt(event));
-            doc.querySelector(`.node[data-line="${target?.line}"]`)?.classList.add('design-target');
+            const { layout, index, horizontal } = dropPoint(event);
+            doc.querySelector(`.node[data-line="${layout?.line}"]`)?.classList.add('design-target');
+            const before = layout?.children[index];
+            const marker = before || layout?.children.at(-1);
+            const element = marker && doc.querySelector(`.node[data-line="${marker.line}"]`);
+            if (!element) return;
+            element.classList.add(before ? 'design-insert-before' : 'design-insert-after');
+            if (horizontal) element.classList.add('design-row-child');
         }
         doc.addEventListener('click', event => {
             event.preventDefault();
@@ -216,8 +243,8 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
             if (!moving) return;
             moving = false;
             ignoreClick = true;
-            const layout = insertionLayout(model, lineAt(event));
-            if (start && layout) change(moveWidget(source(), start.node, layout, layout.children.length));
+            const { layout, index } = dropPoint(event);
+            if (start && layout) change(moveWidget(source(), start.node, layout, index));
         });
         doc.addEventListener('pointerleave', () => {
             pointerStart = null;
@@ -238,9 +265,9 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
         doc.addEventListener('drop', event => {
             event.preventDefault();
             clearTarget();
-            const layout = insertionLayout(model, lineAt(event));
+            const { layout, index } = dropPoint(event);
             const widget = event.dataTransfer.getData(WIDGET_DRAG);
-            if (widget) change(addWidget(source(), layout, widget));
+            if (widget) change(addWidget(source(), layout, widget, index));
         });
         highlight(doc, true);
     });

@@ -78,7 +78,14 @@ def run_health(db, run, data, *, now=None, execution=None):
     kind = str(data.get("waiting_kind") or "")
     recovery = data.get("restart_recovery")
     reason = str(recovery.get("blocked_reason") or "") if isinstance(recovery, dict) else ""
-    if run.status == "waiting":
+    finished = {"completed": "finished", "failed": "failed", "cancelled": "stopped", "stopped": "stopped"}
+    if run.status in finished:
+        # A finished run is never "starting the worker"; say how it ended.
+        doing = finished[run.status]
+        end = getattr(run, "completed_at", None)
+        if run.started_at and end:
+            minutes = max(0, int((end - run.started_at).total_seconds() // 60))
+    elif run.status == "waiting":
         doing = ("paused after restart" + (f": {reason}" if reason else "")) if kind == "restart_recovery" else f"waiting ({kind.replace('_', ' ') or 'checkpoint'})"
     elif stalled:
         doing = (f"Stalled: worker heartbeat missing for {age} seconds" if basis == "heartbeat"
@@ -90,7 +97,10 @@ def run_health(db, run, data, *, now=None, execution=None):
     # A checkout can already be dirty. Report it as modified, never attribute it
     # to this worker without a file-change event.
     files = f"{len(changed)} {'file' if len(changed) == 1 else 'files'} changed" if changed else (f"{len(git_status)} modified files in checkout" if git_status else "no files changed yet")
-    summary = f"{label}: {doing}, {minutes} minutes in, {files}."
+    if run.status in finished:
+        summary = f"{label}: {doing} after {minutes} {'minute' if minutes == 1 else 'minutes'}, {files}."
+    else:
+        summary = f"{label}: {doing}, {minutes} minutes in, {files}."
     prompt = f"{label}: worker heartbeat stopped. No retry has been started. Safe default if you do nothing: keep monitoring without launching another worker. Inspect or stop the run before retrying."
     return {"status_summary": summary, "stalled": stalled,
             "worker_health": {"state": "stalled" if stalled else "active" if active_worker else "idle",

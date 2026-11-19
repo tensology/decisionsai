@@ -1,4 +1,4 @@
-import { createPlanConversation } from './conversation.js?v=20261119-designer-undo';
+import { createPlanConversation } from './conversation.js?v=20261120-wfplan';
 import { scanHint, watchPlanScan } from './scan-watch.js?v=20261112-scan-refresh';
 import { createLoadGuard, isAbort } from './load-guard.js?v=20261102-verify';
 
@@ -16,18 +16,15 @@ export function createPlanning(host, root = document.getElementById('plan-root')
 
     function homeResultsHtml() {
         // Development sidebar (sidebar/index.js renderSidebar) lists every catalog board.
-        // This page keeps that set and drops boards with no valid project.
-        const boards = state.boards.filter((board) => {
-            if (!projectFor(board)) return false;
-            return true;
-        });
+        // This page keeps that set, including boards with no project folder, so they can be set up here.
+        const boards = state.boards.filter((board) => board && board.key);
         return `<div class="plan-board-grid" role="list">${
             boards
                 .map((board) => {
                     const workspace = workspaceFor(board);
                     const project = projectFor(board);
                     const count = Number(workspace?.item_count || 0);
-                    const actionLabel = count ? 'Edit' : 'Build plan';
+                    const actionLabel = !project ? 'Set up' : count ? 'Edit' : 'Build plan';
                     const folder = project?.folder_location || 'No project folder';
                     const boardName = board.name || 'Ticket board';
                     const key = escapeHtml(board.key);
@@ -122,8 +119,7 @@ export function createPlanning(host, root = document.getElementById('plan-root')
         state.projects = Array.isArray(projects) ? projects : state.projects;
         const project = projectFor(board);
         if (!project) {
-            host.toast('Link this board to a project before opening Plan.', 'error');
-            host.openHome();
+            renderUnlinked(board);
             return false;
         }
         // Reopening a board plan shows the cached plan at once and refreshes it in the
@@ -182,6 +178,32 @@ export function createPlanning(host, root = document.getElementById('plan-root')
         }
     }
 
+    // A board with no project folder (e.g. My Board) still gets a Plan screen that says
+    // what is missing and links the folder, instead of bouncing back with a toast.
+    function renderUnlinked(board) {
+        state.workspace = null;
+        state.item = null;
+        host.setPlanCrumbs?.();
+        const name = escapeHtml(board?.name || 'This board');
+        root.innerHTML = `<div class="plan-empty plan-unlinked" data-plan-unlinked="${escapeHtml(board?.key || '')}">
+            <strong>${name} has no project folder yet</strong>
+            <p class="plan-empty-hint">A plan is built from a project folder: its pages, data and flows. Link a folder to this board and its plan opens here.</p>
+            <div class="plan-empty-actions">
+                <button type="button" class="plan-retry primary" data-plan-link-folder>Link a project folder</button>
+                <button type="button" class="plan-retry" data-plan-retry="home">Back to Plans</button>
+            </div>
+        </div>`;
+        root.querySelector('[data-plan-link-folder]')?.addEventListener('click', () => host.openBoardLink?.(board.key));
+        root.querySelector('[data-plan-retry="home"]')?.addEventListener('click', () => host.openHome());
+    }
+
+    // Unsaved page-designer, document or ERD edits: ask before leaving Plan. The draft stays in
+    // memory for this tab, but a reload or close loses it, so leaving must be a choice.
+    async function beforeLeave() {
+        if (!conversation.hasUnsavedEdits?.()) return true;
+        return window.confirm('You have unsaved plan edits. Leave Plan without saving? The draft stays until you reload or close Decisions.');
+    }
+
     function syncCatalog(boards, projects) {
         state.boards = Array.isArray(boards) ? boards : state.boards;
         state.projects = Array.isArray(projects) ? projects : state.projects;
@@ -192,6 +214,6 @@ export function createPlanning(host, root = document.getElementById('plan-root')
         loads.cancel(); // abort the in-flight plan POST; scan polling stops via isCurrent
         conversation.leave();
     }
-    return { openHome, openBoard, currentView: () => state.view, syncCatalog, beforeLeave: async () => true, leave,
+    return { openHome, openBoard, currentView: () => state.view, syncCatalog, beforeLeave, leave,
         hasUnsavedChanges: () => conversation.hasDraft() };
 }

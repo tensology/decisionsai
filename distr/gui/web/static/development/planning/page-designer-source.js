@@ -50,12 +50,14 @@ function blockEnd(lines, node) {
     return end;
 }
 
-export function addWidget(source, layout, widget) {
+// index (optional): insert before layout.children[index]; past the end (or omitted) appends.
+export function addWidget(source, layout, widget, index) {
     if (!layout || !Object.hasOwn(WIDGETS, widget)) return null;
     const newline = source.includes('\r\n') ? '\r\n' : '\n';
     const lines = source.split(newline);
-    let end = endOf(layout);
-    while (/^\s*#\|/.test(lines[end] || '')) end++;
+    const before = Number.isInteger(index) ? layout.children[index] : null;
+    let end = before ? before.line - 1 : endOf(layout);
+    if (!before) while (/^\s*#\|/.test(lines[end] || '')) end++;
     lines.splice(end, 0, ' '.repeat(layout.column + 1) + WIDGETS[widget]);
     return { source: lines.join(newline), line: end + 1 };
 }
