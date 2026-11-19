@@ -677,3 +677,33 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "e2e_playwright: Browser UI tests (e.g. workflows page) — require local server + Chromium; excluded from default pytest run via pytest.ini",
     )
+
+
+# ---------------------------------------------------------------------------
+# Event-loop isolation — a test that exits while asyncio still marks a loop as
+# running on the main thread (an interrupted run_until_complete, a stubbed
+# Qt/pipecat runner, a manual _set_running_loop) makes every later
+# asyncio.run() fail with "cannot be called from a running event loop".
+# Clear the stale marker after each test and name the leaking test.
+# ---------------------------------------------------------------------------
+_LOOP_LEAK_LOG = os.environ.get("DECISIONS_TEST_LOOP_LEAK_LOG", "")
+
+
+@pytest.fixture(autouse=True)
+def _reset_leaked_running_loop(request):
+    import asyncio
+    import threading
+
+    yield
+    if threading.current_thread() is not threading.main_thread():
+        return
+    leaked = asyncio._get_running_loop()
+    if leaked is None:
+        return
+    asyncio._set_running_loop(None)
+    if _LOOP_LEAK_LOG:
+        try:
+            with open(_LOOP_LEAK_LOG, "a", encoding="utf-8") as fh:
+                fh.write(request.node.nodeid + "\n")
+        except OSError:
+            pass
