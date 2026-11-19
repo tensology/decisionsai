@@ -19,6 +19,12 @@ def proposal(**extra):
                          {'id': 'b', 'sent_at': (NOW - timedelta(hours=96)).isoformat()}], **extra}
 
 
+@pytest.fixture
+def in_scope(monkeypatch):
+    """Expiry/ordering tests: the fixture sources aren't linked to a project, so scope would hide them."""
+    monkeypatch.setattr('distr.core.incoming.project_links.proposal_in_scope', lambda *a, **kw: True)
+
+
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch):
     from distr.core.db import IncomingProposalDismissal, IncomingProposalRestoration, get_session
@@ -75,7 +81,7 @@ def test_source_start_stays_unknown_when_referenced_dates_are_missing_or_invalid
     assert proposal_source_started_at(value) is None
 
 
-def test_cached_api_exposes_source_collection_start_without_changing_latest_expiry():
+def test_cached_api_exposes_source_collection_start_without_changing_latest_expiry(in_scope):
     value = proposal(created_at=NOW.isoformat())
     proposals._store_proposals_list_cache({'proposals': [value], 'counts': {'gmail': 1}})
     result = proposals.list_incoming_proposals()['proposals'][0]
@@ -91,16 +97,16 @@ def test_source_start_can_use_authoritative_source_metadata_without_evidence_pay
 
 def source_order_rows():
     return [
-        proposal(id='may', dedupe_key='gmail:may', created_at='2030-01-01T00:00:00Z', evidence=[
+        proposal(id='may', dedupe_key='gmail:may', source_thread_id='may', created_at='2030-01-01T00:00:00Z', evidence=[
             {'id': 'b', 'sent_at': '2026-11-05T00:00:00Z'},
             {'id': 'a', 'sent_at': '2026-05-15T00:00:00Z'},
             {'id': 'unrelated', 'sent_at': '2020-01-01T00:00:00Z'},
         ]),
-        proposal(id='unknown', dedupe_key='gmail:unknown', created_at='2035-01-01T00:00:00Z', evidence=[]),
-        proposal(id='june', dedupe_key='gmail:june', created_at='2020-01-01T00:00:00Z', evidence=[
+        proposal(id='unknown', dedupe_key='gmail:unknown', source_thread_id='unknown', created_at='2035-01-01T00:00:00Z', evidence=[]),
+        proposal(id='june', dedupe_key='gmail:june', source_thread_id='june', created_at='2020-01-01T00:00:00Z', evidence=[
             {'id': 'a', 'sent_at': '2026-06-01T00:00:00Z'},
         ]),
-        proposal(id='november', dedupe_key='gmail:november', evidence=[
+        proposal(id='november', dedupe_key='gmail:november', source_thread_id='november', evidence=[
             {'id': 'a', 'sent_at': '2026-11-01T00:00:00Z'},
         ]),
     ]
@@ -120,14 +126,14 @@ def test_collection_order_uses_actual_timezone_instants_and_stable_ids_for_ties(
     assert [row['id'] for row in sorted(rows, key=proposal_source_order_key)] == ['a', 'b', 'z']
 
 
-def test_cached_payload_always_reorders_old_cached_sequences_by_source_start():
+def test_cached_payload_always_reorders_old_cached_sequences_by_source_start(in_scope):
     proposals._store_proposals_list_cache({'proposals': source_order_rows(), 'counts': {'gmail': 4}})
     result = proposals.list_incoming_proposals()
     assert [row['id'] for row in result['proposals']] == ['november', 'june', 'may', 'unknown']
     assert result['counts'] == {'gmail': 4}
 
 
-def test_fresh_list_uses_same_source_order_without_launching_triage(monkeypatch):
+def test_fresh_list_uses_same_source_order_without_launching_triage(in_scope, monkeypatch):
     monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', lambda **kwargs: [])
     monkeypatch.setattr(proposals, '_saved_local_proposals', lambda: [])
     monkeypatch.setattr(proposals, '_record_local_proposals', lambda rows: None)
@@ -149,7 +155,7 @@ def test_missing_source_dates_never_use_creation_or_conversation_activity():
     assert proposal_expiry(value, now=NOW) == {**value, 'source_message_at': None, 'expires_at': None, 'is_expired': False}
 
 
-def test_cached_list_crosses_deadline_without_source_refetch(monkeypatch):
+def test_cached_list_crosses_deadline_without_source_refetch(in_scope, monkeypatch):
     instant = [NOW - timedelta(seconds=1)]
     original = proposal_expiry
     monkeypatch.setattr(proposals, 'proposal_expiry', lambda row: original(row, now=instant[0]))

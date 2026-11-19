@@ -158,6 +158,10 @@ def test_migration_idempotent_and_old_schema_safe(tmp_path, monkeypatch):
     WhatsAppMessage.__table__.create(old, checkfirst=True)
     Project.__table__.create(old, checkfirst=True)
     IncomingProposalProject.__table__.create(old, checkfirst=True)
+    # Tables the app always creates at startup; only the dismissals table is 'old' here.
+    from distr.core.db import Chat, IncomingMixedMergeIntent
+    Chat.__table__.create(old, checkfirst=True)
+    IncomingMixedMergeIntent.__table__.create(old, checkfirst=True)
     with old.begin() as conn:
         conn.execute(text('CREATE TABLE incoming_proposal_dismissals (key VARCHAR PRIMARY KEY, '
                           'conversation_key VARCHAR NOT NULL, message_ids TEXT NOT NULL, created_at DATETIME NOT NULL)'))

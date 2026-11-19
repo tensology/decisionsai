@@ -38,7 +38,9 @@ def test_shared_contact_is_routed_by_context_and_outgoing_reply_is_context(monke
         payload = json.loads(messages[1]['content'])
         assert {row['id'] for row in payload['candidate_projects']} == {8, 10, 4}
         assert payload['messages'][-1]['direction'] == 'outbound'
-        return json.dumps({'is_actionable': True, 'project_id': 10, 'title': 'Fix tracking report', 'confidence': .96, 'project_evidence_message_ids': ['m2']})
+        return json.dumps({'is_actionable': True, 'project_id': 10, 'title': 'Fix tracking report', 'confidence': .96, 'project_evidence_message_ids': ['m2'],
+                           # Context is now chosen explicitly by the model (supporting_context_message_ids).
+                           'supporting_context_message_ids': ['m2']})
     result = proposals._triage_conversations(items, {}, complete=complete)
     assert result[0]['project_id'] == 10
     assert result[0]['message_ids'] == ['m1']

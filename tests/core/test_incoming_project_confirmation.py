@@ -33,7 +33,8 @@ def test_infers_from_earlier_exact_thread_context_without_literal_project_name(p
         assert [row['id'] for row in payload['thread_context']] == ['earlier']
         assert 'Vehicle telemetry' in payload['candidate_projects'][0]['description']
         return json.dumps({'is_actionable': True, 'project_id': 3, 'confidence': .96,
-                           'project_evidence_message_ids': ['earlier'], 'title': 'Enable option'})
+                           'project_evidence_message_ids': ['earlier'], 'title': 'Enable option',
+                           'supporting_context_message_ids': ['earlier']})
     row = proposals._triage_conversations([item(source_thread_id='shared', source_message_id='new',
                     text='Please enable that option.', project_ids=[3, 7])], {}, complete=analyze)[0]
     assert row['project_id'] == 3 and row['needs_project'] is False
