@@ -38,6 +38,9 @@ if os.environ.get("DECISIONS_TESTS_ALLOW_LIVE_APP") != "1":
     os.environ["DECISIONSAI_INTERNAL_TOKEN_FILE"] = os.path.join(
         tempfile.mkdtemp(prefix="decisions-test-token-"), "internal_api_token")
     os.environ.pop("DECISIONSAI_INTERNAL_API_TOKEN", None)
+    # Nor Paul's real MemPalace: workflow tests dual-wrote into it and hung on the hub.
+    # MemPalace tests opt back in with monkeypatch.setenv(..., "1").
+    os.environ.setdefault("DECISIONS_MEMPALACE_MEMORY_BACKEND", "0")
 
 
 @pytest.fixture(scope="session", autouse=True)
