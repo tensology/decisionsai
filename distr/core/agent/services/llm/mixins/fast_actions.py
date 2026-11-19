@@ -76,6 +76,7 @@ class FastActionMixin:
 
         logger.debug("LLM: _execute_fast_action for %s, tool=%s", fast_action.action_type.value, fast_action.tool_name)
 
+        opening_turn_id = None
         try:
             # --- locate tool ---
             tool = None
@@ -187,9 +188,25 @@ class FastActionMixin:
             logger.warning("LLM: Unknown response_type '%s' for fast action, falling back to LLM", fast_action.response_type)
             return False
 
+        except asyncio.CancelledError:
+            # Stopped mid read-aloud: nothing else will close this turn, and an open
+            # turn collects later workflow updates for hours (11 Nov). Close it, re-raise.
+            if fast_action.response_type in _SELF_CONTAINED_RESPONSE_TYPES:
+                self._fa_close_turn_stopped(current_chat_id, opening_turn_id)
+            raise
         except Exception as e:
             logger.error("LLM: Error executing fast action: %s", e, exc_info=True)
             return False
+
+    def _fa_close_turn_stopped(self, chat_id, turn_id) -> None:
+        if not chat_id or not turn_id:
+            return
+        try:
+            from distr.core.chat_turns import complete_turn
+
+            complete_turn(int(chat_id), turn_id=int(turn_id), display_text="Stopped.")
+        except Exception:
+            logger.warning("LLM: Could not close stopped fast-action turn", exc_info=True)
 
     def _fa_close_turn(self, chat_id, turn_id, fast_action, result) -> None:
         """Mark the fast action's own turn as answered (idempotent per turn)."""
