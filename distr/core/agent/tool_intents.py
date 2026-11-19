@@ -303,6 +303,10 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "web_search",
         (
+            # Plain web-search wording ("search the web for…", "google how to…").
+            r"\b(search|look\s+up|check)\b.{0,20}\b(?:the\s+)?(?:web|internet|online)\b",
+            r"\bgoogle\b\s+(?:it|this|that|for|how|what|why|where|who|when|the|a|an)\b",
+            r"^\s*google\s+\S+",
             # Current, location-specific listings are research requests even when
             # the user does not say "search the web" explicitly. Keep this
             # deterministic so semantic retrieval cannot hide the web tool.
