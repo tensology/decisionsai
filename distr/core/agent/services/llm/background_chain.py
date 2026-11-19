@@ -383,7 +383,11 @@ class BackgroundChainRunner:
         if self.service._speaker_enabled and not getattr(self.service, '_is_telegram_request', False):
             try:
                 from distr.core.signals import speak_text_directly_event_queue
-                speak_text_directly_event_queue(cleaned[:500])  # Cap TTS at 500 chars
+                from distr.core.agent.services.tts.sentence_split import cap_spoken_text
+
+                # Never slice mid-sentence: a raw [:500] cut a 668-char reply off
+                # mid-word. Long reports are still capped, but only at a sentence end.
+                speak_text_directly_event_queue(cap_spoken_text(cleaned))
             except Exception as e:
                 logger.debug("BackgroundChain TTS announcement error: %s", e)
 
