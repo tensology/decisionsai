@@ -127,6 +127,39 @@ def extract_complete_sentences(text: str) -> tuple[list[str], str]:
     return [restore(sentence) for sentence in sentences_raw], restore(remaining)
 
 
+SPOKEN_ANNOUNCE_MAX_CHARS = 1500
+
+
+def cap_spoken_text(text: str, max_chars: int = SPOKEN_ANNOUNCE_MAX_CHARS) -> str:
+    """Limit spoken text to ``max_chars`` without ever stopping mid-sentence.
+
+    Whole sentences are kept while they fit. A single sentence longer than the
+    limit is cut at the last word boundary and closed with a full stop, so the
+    voice never ends on half a word.
+    """
+    clean = (text or "").strip()
+    if len(clean) <= max_chars:
+        return clean
+    sentences, trailing = extract_complete_sentences(clean)
+    if trailing.strip():
+        sentences = list(sentences) + [trailing.strip()]
+    kept: list[str] = []
+    used = 0
+    for sentence in sentences:
+        extra = len(sentence) + (1 if kept else 0)
+        if used + extra > max_chars:
+            break
+        kept.append(sentence)
+        used += extra
+    if kept:
+        return " ".join(kept)
+    head = clean[:max_chars]
+    cut = head.rfind(" ")
+    if cut > 0:
+        head = head[:cut]
+    return head.rstrip(" ,;:-\u2014") + "."
+
+
 def is_redundant_sentence(
     normalized_sentence: str,
     processed_sentences: set[str],
