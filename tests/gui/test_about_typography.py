@@ -15,7 +15,9 @@ def test_about_markdown_html_uses_shared_tab_typography() -> None:
     assert f"line-height: {about._tab_line_height_css()};" in html
     assert f"font-size: {about._TAB_FONT_SIZE_PX}px;" in html
     assert f"font-size: {about._TAB_FONT_SIZE_PX + 1}px;" not in html
-    assert f"font-size: {about._TAB_FONT_SIZE_PX + 2}px;" not in html
+    # Since 27 Oct only the version heading (h2) is 2px larger; nothing else is.
+    assert html.count(f"font-size: {about._TAB_FONT_SIZE_PX + 2}px;") == 1
+    assert "[2.8.0] - 2026-06-14</h2>" in html
     assert f"font-size: {about._TAB_FONT_SIZE_PX + 4}px;" not in html
     assert "<br>" not in html
     assert "Plain paragraph body text." in html

@@ -57,7 +57,9 @@ def test_mcp_stdio_roundtrip(mcp_client):
     rows = r2.json().get("servers") or []
     assert rows[0]["name"] == "demo"
     assert rows[0]["command"] == ["echo", "x"]
-    assert rows[0]["env"] == {"A": "b"}
+    # Env values are secrets: the API masks them; the saved file keeps the real value.
+    assert rows[0]["env"] == {"A": "\u2022" * 8}
+    assert saved["servers"][0]["env"] == {"A": "b"}
 
 
 def test_mcp_post_invalid_stdio_missing_command(mcp_client):

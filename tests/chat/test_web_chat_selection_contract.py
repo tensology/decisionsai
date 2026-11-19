@@ -710,7 +710,7 @@ def test_header_settings_edited_via_configure_modal_only():
 
 def test_waiting_indicator_preserved_during_in_flight_send():
     src = _chat_js_source()
-    render_block = src.split("function renderMessages(messages, preserveOnEmpty) {", 1)[1].split(
+    render_block = src.split("function renderMessages(messages, preserveOnEmpty", 1)[1].split(
         "function formatTime(seconds)",
         1,
     )[0]
@@ -732,7 +732,7 @@ def test_poll_and_render_skip_duplicate_assistant_rows():
         "// Send message to the agent",
         1,
     )[0]
-    render_block = src.split("function renderMessages(messages, preserveOnEmpty) {", 1)[1].split(
+    render_block = src.split("function renderMessages(messages, preserveOnEmpty", 1)[1].split(
         "function formatTime(seconds)",
         1,
     )[0]

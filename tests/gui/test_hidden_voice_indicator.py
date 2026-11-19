@@ -382,6 +382,7 @@ def test_post_eula_startup_does_not_reshow_a_saved_hidden_oracle(monkeypatch) ->
         about_window=MagicMock(),
         _splash_sound_played=False,
         _enable_device_check_timer=MagicMock(),
+        _maybe_show_about_window=MagicMock(),
     )
 
     Application._continue_startup_after_eula(app)

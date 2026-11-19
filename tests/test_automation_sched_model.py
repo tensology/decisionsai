@@ -55,7 +55,8 @@ def test_list_shows_readable_default_and_no_auto_tag():
     assert "Next run" in js and "Last run" in js  # autocog: inline Harness · model column moved to the cog modal
     assert "Africa/Johannesburg" in js
     code = "\n".join(l for l in js.splitlines() if not l.strip().startswith("//"))
-    assert "#auto" not in code and "auto_${" not in code
+    import re
+    assert not re.search(r"#auto\b", code) and "auto_${" not in code  # the #auto tag, not #automation-* ids
 
 
 def test_cache_busters():

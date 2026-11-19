@@ -147,7 +147,7 @@ def test_speak_spoken_route_mocked(client):
     tc, _ = client
     with patch("distr.core.signals.speak_text_directly_event_queue") as speak:
         r = tc.post("/api/chats/speak-spoken", json={"text": "Short spoken."})
-    assert r.json() == {"ok": True, "oracle_note_row_id": None}
+    assert r.json() == {"ok": True, "oracle_note_row_id": None, "remote_streamed": False}
     speak.assert_called_once_with("Short spoken.")
 
 
@@ -317,7 +317,7 @@ def test_speak_spoken_route_adds_oracle_note(client):
          patch.object(chat_routes, "get_session", _fake_session()), \
          patch("distr.core.read_response.add_oracle_context_note", return_value=77) as note:
         r = tc.post("/api/chats/speak-spoken", json={"text": "Navy.", "chat_id": 1746, "source_row_id": 1757})
-    assert r.json() == {"ok": True, "oracle_note_row_id": 77}
+    assert r.json() == {"ok": True, "oracle_note_row_id": 77, "remote_streamed": False}
     speak.assert_called_once_with("Navy.")
     assert note.call_args.args[1:] == (1746, "Navy.")
     assert note.call_args.kwargs == {"source_row_id": 1757, "current_chat_id": 1652}
@@ -328,5 +328,5 @@ def test_speak_spoken_route_without_thread_adds_no_note(client):
     with patch("distr.core.signals.speak_text_directly_event_queue"), \
          patch("distr.core.read_response.add_oracle_context_note") as note:
         r = tc.post("/api/chats/speak-spoken", json={"text": "Navy."})
-    assert r.json() == {"ok": True, "oracle_note_row_id": None}
+    assert r.json() == {"ok": True, "oracle_note_row_id": None, "remote_streamed": False}
     note.assert_not_called()
