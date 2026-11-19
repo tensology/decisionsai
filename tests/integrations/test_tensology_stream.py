@@ -43,6 +43,23 @@ def test_backoff_doubles_and_caps():
     assert delays[-1] == stream.BACKOFF_MAX_SECONDS
 
 
+@pytest.mark.parametrize('paused', [False, True])
+def test_customer_polling_never_opens_global_stream_and_respects_pause(paused):
+    from unittest.mock import AsyncMock, Mock
+    connect, catch_up = Mock(), AsyncMock()
+    sleep = AsyncMock()
+    transport = Mock(return_value='polling')
+    asyncio.run(stream.run_tensology_ticket_stream(
+        connect=connect, catch_up=catch_up, sleep=sleep, config=lambda: ('wss://example.test/ws/decisions', 'test-key'),
+        transport=transport, paused=lambda: paused, max_attempts=2,
+    ))
+    connect.assert_not_called()
+    transport.assert_called_once()
+    assert catch_up.await_count == (0 if paused else 2)
+    assert [call.args for call in sleep.await_args_list] == [(15.0,), (15.0,)]
+    assert stream.STREAM_STATE['transport'] == 'polling'
+
+
 class FakeSocket:
     def __init__(self, messages, hold=0.05):
         self.messages = list(messages)

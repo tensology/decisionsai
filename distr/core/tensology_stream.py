@@ -106,6 +106,18 @@ def handle_work_request_signal(event: Any) -> None:
 
     status = str(event.get("status") or "pending")
     kind = str(event.get("event") or "proposal_created")
+    if kind == 'project_links_changed':
+        from distr.core.incoming.project_links import project_links
+        from distr.core.incoming.proposals import invalidate_proposals_list_cache
+        if project_links(force=True, require_fresh=True) is None:
+            STREAM_STATE['last_error'] = 'Project links could not be refreshed from Tensology.'
+            publish_incoming_change(status='project_links_sync_failed')
+            return
+        if STREAM_STATE.get('last_error') == 'Project links could not be refreshed from Tensology.':
+            STREAM_STATE['last_error'] = ''
+        invalidate_proposals_list_cache()
+        publish_incoming_change(status='project_links_changed')
+        return
     if kind == "reconcile_requested":
         from distr.core.incoming.proposals import list_incoming_proposals
         list_incoming_proposals(force=True, reconcile_request_id=str(event.get('request_id') or ''))
@@ -275,6 +287,12 @@ async def _default_catch_up() -> Any:
     return await asyncio.to_thread(process_tensology_approved_tickets, force=True)
 
 
+def _connection_transport() -> str:
+    from distr.core.tensology_client import configured_tensology_client
+    identity = configured_tensology_client(source='ticket-transport').get('identity')
+    return 'polling' if isinstance(identity, dict) and identity.get('transport') == 'polling' else 'stream'
+
+
 async def _default_handle_events(ticket_ids: list[int]) -> Any:
     from distr.core.tensology_client import process_tensology_ticket_events
 
@@ -336,12 +354,14 @@ async def run_tensology_ticket_stream(
     handle_events: Callable[[list[int]], Awaitable[Any]] | None = None,
     handle_work_request: Callable[[Any], Any] | None = None,
     config: Callable[[], tuple[str, str] | None] | None = None,
+    transport: Callable[[], str] | None = None,
     paused: Callable[[], bool] | None = None,
     sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
     clock: Callable[[], float] = time.monotonic,
     max_attempts: int | None = None,
 ) -> None:
     """Keep one outbound authenticated websocket to Tensology open, reconnecting with backoff."""
+    transport = transport or (_connection_transport if config is None else lambda: 'stream')
     connect = connect or _default_connect
     catch_up = catch_up or _default_catch_up
     handle_events = handle_events or _default_handle_events
@@ -361,6 +381,8 @@ async def run_tensology_ticket_stream(
     last_catch_up = float("-inf")
     last_logged_error = ""
     attempts = 0
+    transport_config = None
+    selected_transport = 'stream'
     while max_attempts is None or attempts < max_attempts:
         attempts += 1
         try:
@@ -373,6 +395,25 @@ async def run_tensology_ticket_stream(
             await sleep(NOT_CONFIGURED_RETRY_SECONDS)
             continue
         url, key = cfg
+        if cfg != transport_config:
+            try:
+                selected_transport = await asyncio.to_thread(transport)
+                transport_config = cfg
+            except Exception:
+                selected_transport = 'stream'  # Older/offline servers keep the existing reconnect path.
+        if selected_transport == 'polling':
+            is_paused = await _is_paused()
+            STREAM_STATE.update(connected=False, transport='polling', last_error='tickets_paused' if is_paused else '')
+            if not is_paused:
+                try:
+                    await catch_up()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    STREAM_STATE['last_error'] = f'{type(error).__name__}: {error}'[:300]
+            await sleep(15.0)
+            continue
+        STREAM_STATE['transport'] = 'stream'
         connected_at: float | None = None
         try:
             async with connect(url, key) as websocket:

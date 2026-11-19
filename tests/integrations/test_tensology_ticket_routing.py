@@ -100,6 +100,21 @@ def test_project_match_prefers_decisions_project_id_over_name(tmp_path):
         assert tc._resolve_tensology_project({**E2E_TICKET, "decisions_project_id": "555"})["id"] == 99
 
 
+def test_customer_project_mapping_never_falls_back_to_same_name(tmp_path):
+    other = _Row(id=99, name='Plan My Charter', folder_location=str(tmp_path), start_time_tracker=False,
+                 coding_backend='cursor', coding_backend_model='m')
+    ticket = {**E2E_TICKET, 'connection_id': 'customer-own-connection', 'decisions_project_id': '555'}
+    with patch('distr.core.db.get_session', lambda: _fake_session({}, other)):
+        assert tc._resolve_tensology_project(ticket) is None
+    client = MagicMock()
+    with (patch.object(tc, '_resolve_tensology_project', return_value=None),
+          patch.object(tc, '_create_tensology_project') as create,
+          patch.object(tc, '_report_tensology_unmatched_project') as report):
+        assert tc._process_tensology_ticket(client, ticket) is False
+    create.assert_not_called()
+    report.assert_called_once_with(client, ticket)
+
+
 def test_poll_backs_off_when_idle_and_speeds_up_with_work():
     client = MagicMock()
     client.get.return_value = []

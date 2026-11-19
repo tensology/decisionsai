@@ -335,6 +335,34 @@ def _load_gmail_inbox(*, max_results: int) -> tuple[list[dict[str, Any]], dict[s
         return [], {"connected": False, "error": "Gmail is temporarily unavailable."}
 
 
+def _canonical_gmail(query):
+    from distr.core.tensology_client import configured_tensology_client
+
+    client = configured_tensology_client(source="development-incoming-gmail")
+    result = client.get("incoming/gmail", query=query)
+    if not isinstance(result, dict) or not isinstance(result.get("emails"), list):
+        raise ValueError("Tensology returned an invalid Gmail snapshot.")
+    return result
+
+
+def _load_canonical_gmail_inbox(limit):
+    from distr.core.tensology_client import TensologyApiError
+
+    try:
+        result = _canonical_gmail({"limit": limit})
+    except TensologyApiError as error:
+        return [], {"authority": "tensology", "connected": False, "error": str(error)}
+    except (OSError, RuntimeError, ValueError):
+        return [], {"authority": "tensology", "connected": False, "error": "The Tensology Gmail cache is unavailable."}
+    sync = result.get("sync") or {}
+    return result["emails"], {
+        "authority": "tensology",
+        "connected": bool(sync.get("last_succeeded_at") or sync.get("connection_status") == "connected"),
+        "error": sync.get("error") or "",
+        "last_succeeded_at": sync.get("last_succeeded_at"),
+    }
+
+
 def _gmail_inbox_message_ids(*, max_pages: int = 10) -> set[str] | None:
     """Return every message id currently in the Gmail inbox (ids only), or None when it cannot be known."""
     try:
@@ -441,27 +469,38 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
     requested = max(1, min(int(limit or 100), 250))
     items: list[dict[str, Any]] = []
     links: list[dict[str, Any]] = []
+    # Project canonical changes before serializing board pills. A single refresh
+    # must show the same link state used for routing and proposal authorization.
+    from distr.core.incoming.project_links import project_links
+    from distr.core.incoming.proposal_sync import proposal_authority
+    from distr.core.settings import load_settings_from_db
+
+    gmail_authority = proposal_authority(load_settings_from_db())
+    project_links(refresh=network)
 
     with get_session() as session:
-        from distr.core.kanban.whatsapp_jid import prefer_whatsapp_jid, whatsapp_jid_match_keys
+        from distr.core.kanban.whatsapp_jid import prefer_whatsapp_jid, whatsapp_jid_match_keys, is_whatsapp_group_jid
+        from distr.core.incoming.whatsapp_links import whatsapp_conversation_aliases, whatsapp_alias_pairs
 
         boards = {int(row.id): row.name for row in session.query(KanbanBoard).all()}
         link_rows = session.query(WhatsAppPhoneLink).order_by(WhatsAppPhoneLink.id.asc()).all()
+        aliases = whatsapp_conversation_aliases([
+            {'source': 'whatsapp', 'source_thread_id': row.phone_jid, 'projects': []} for row in link_rows
+        ], alias_pairs=whatsapp_alias_pairs(session))
         link_by_key: dict[str, list[WhatsAppPhoneLink]] = {}
         preferred_thread_by_link_id: dict[int, str] = {}
         for row in link_rows:
-            keys = whatsapp_jid_match_keys(row.phone_jid, row.phone_number)
+            keys = sorted(aliases.get(row.phone_jid, set(whatsapp_jid_match_keys(row.phone_jid, row.phone_number))))
             observed = (
                 session.query(WhatsAppMessage.jid)
                 .filter(
-                    (WhatsAppMessage.jid.in_(keys))
-                    | (WhatsAppMessage.jid_phone.in_(keys))
+                    WhatsAppMessage.jid.in_(keys)
                 )
                 .order_by(WhatsAppMessage.whatsapp_timestamp.desc(), WhatsAppMessage.id.desc())
                 .limit(1)
                 .scalar()
             )
-            thread_id = prefer_whatsapp_jid(row.phone_jid, observed) or (row.phone_jid or "")
+            thread_id = observed if observed in keys else prefer_whatsapp_jid(row.phone_jid, observed) or (row.phone_jid or "")
             preferred_thread_by_link_id[int(row.id)] = thread_id
             links.append({
                 "id": int(row.id),
@@ -500,15 +539,20 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
                     seen_message_ids.add(int(linked_row.id))
         whatsapp_rows.sort(key=lambda row: (int(row.whatsapp_timestamp or 0), int(row.id)), reverse=True)
         for row in whatsapp_rows:
-            row_links = (
-                link_by_key.get(str(row.jid or ""))
-                or link_by_key.get(str(row.jid_phone or ""))
-                or []
-            )
+            group = str(row.chat_type or '').lower() == 'group' or is_whatsapp_group_jid(row.jid)
+            candidates = [*link_by_key.get(str(row.jid or ''), []),
+                          *([] if group else link_by_key.get(str(row.jid_phone or ''), []))]
+            row_links = list({link.id: link for link in candidates
+                              if is_whatsapp_group_jid(link.phone_jid) == group}.values())
             items.append(_whatsapp_incoming_item(row, row_links, boards))
 
     gmail_items_by_id: dict[str, dict[str, Any]] = {}
-    gmail_rows, gmail_status = _load_gmail_inbox(max_results=requested) if network else ([], {"connected": False, "error": "skipped"})
+    if not network:
+        gmail_rows, gmail_status = [], {"connected": False, "error": "skipped"}
+    elif gmail_authority:
+        gmail_rows, gmail_status = _load_canonical_gmail_inbox(requested)
+    else:
+        gmail_rows, gmail_status = _load_gmail_inbox(max_results=requested)
     for row in gmail_rows:
         message_id = str(row.get("id") or "").strip()
         thread_id = str(row.get("threadId") or row.get("thread_id") or message_id).strip()
@@ -604,6 +648,8 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
                     existing["ticket_id"] = row["ticket_id"]
                     existing["board_id"] = row.get("board_id")
                 continue
+            if gmail_authority:
+                continue
             if gmail_live and message_id and message_id not in live_gmail_ids and not row.get("needs_attention"):
                 if not inbox_ids_loaded:
                     inbox_ids = _gmail_inbox_message_ids()
@@ -671,7 +717,7 @@ def list_development_incoming(*, limit: int = 100, network: bool = True) -> dict
         pass
 
     from distr.core.incoming.project_links import apply_project_links
-    apply_project_links(items, refresh=network)
+    apply_project_links(items, refresh=False)
     items.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
     counts: dict[str, int] = {}
     for row in items:

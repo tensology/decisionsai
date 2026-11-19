@@ -2197,16 +2197,12 @@ def run_migrations():
     except Exception as e:
         logger.warning(f"Could not create whatsapp_phone_links table: {e}")
 
-    # One WhatsApp chat identity -> one board link (blocks duplicate phone_jid rows).
+    # A conversation can be linked to multiple projects without moving older links.
     try:
-        with engine.connect() as conn:
-            conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_phone_links_phone_jid "
-                "ON whatsapp_phone_links (phone_jid)"
-            ))
-            conn.commit()
+        from .whatsapp_links_schema import ensure_whatsapp_board_link_schema
+        ensure_whatsapp_board_link_schema(engine)
     except Exception as e:
-        logger.warning(f"Could not ensure unique phone_jid on whatsapp_phone_links: {e}")
+        logger.warning(f"Could not ensure board-scoped WhatsApp conversation links: {e}")
 
     # ── WhatsApp compose drafts (unsent reply text per chat) ─────────────────
     try:

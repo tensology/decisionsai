@@ -39,6 +39,17 @@ class IncomingProposalRestoration(Base):
     restored_at = Column(DateTime, nullable=False, default=utc_now_naive)
 
 
+class IncomingMailProjectLink(Base):
+    """A user-selected project for one Gmail or Mailshot conversation."""
+
+    __tablename__ = "incoming_mail_project_links"
+
+    source = Column(String, primary_key=True)
+    thread_id = Column(String, primary_key=True)
+    message_id = Column(String, nullable=False)
+    project_id = Column(Integer, nullable=False)
+
+
 class IncomingProposalSnapshot(Base):
     """First local work snapshot, retained through expiry and process restarts."""
     __tablename__ = 'incoming_proposal_snapshots'
@@ -116,6 +127,7 @@ class Settings(Base):
     oracle_visible = Column(Boolean, default=True)
 
     selected_oracle = Column(String, default='0.gif')
+    default_oracle_background = Column(String, nullable=True)
 
     sphere_size = Column(Integer, default=120)
 
@@ -442,6 +454,7 @@ class ChatAgent(Base):
     name = Column(String(80), nullable=False)
     role = Column(Text, nullable=False, default='')
     skin_name = Column(String, nullable=False, default='oracle')
+    oracle_background = Column(String, nullable=True)
     provider = Column(String, nullable=True)
     model_name = Column(String, nullable=True)
     voice_provider = Column(String, nullable=True)
@@ -465,6 +478,27 @@ class AgentConversation(Base):
 
     agent_id = Column(Integer, ForeignKey('chat_agents.id'), primary_key=True)
     chat_id = Column(Integer, ForeignKey('chats.id'), primary_key=True, unique=True)
+
+
+class ChatAgentPrefs(Base):
+    """Additive per-agent sidebar order and orchestrator flag (kept off chat_agents
+    so no ALTER TABLE is needed on existing databases)."""
+    __tablename__ = 'chat_agent_prefs'
+
+    agent_id = Column(Integer, ForeignKey('chat_agents.id'), primary_key=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    is_orchestrator = Column(Boolean, nullable=False, default=False)
+    # JSON list overriding the default capability set; NULL = defaults.
+    capabilities = Column(Text, nullable=True)
+
+
+class ChatGroupMember(Base):
+    """A root chat with member rows is a group thread shared by several agents."""
+    __tablename__ = 'chat_group_members'
+
+    chat_id = Column(Integer, ForeignKey('chats.id'), primary_key=True)
+    agent_id = Column(Integer, ForeignKey('chat_agents.id'), primary_key=True)
+    position = Column(Integer, nullable=False, default=0)
 
 
 class ChatTurnEvent(Base):
@@ -680,7 +714,7 @@ class WhatsAppPhoneLink(Base):
     """Link a WhatsApp phone JID to a Ticket Board.
     When a number is linked, its messages show up in the board's WhatsApp tab,
     and Automations can create approved intake tickets from linked messages.
-    One chat identity (phone_jid) maps to at most one link row.
+    A conversation can be linked to several project boards, once per board.
     """
     __tablename__ = 'whatsapp_phone_links'
 
@@ -693,7 +727,7 @@ class WhatsAppPhoneLink(Base):
     created_date = Column(DateTime, default=utc_now_naive)
 
     __table_args__ = (
-        UniqueConstraint('phone_jid', name='uq_whatsapp_phone_links_phone_jid'),
+        UniqueConstraint('board_id', 'phone_jid', name='uq_whatsapp_phone_links_board_jid'),
     )
 
 
@@ -965,6 +999,16 @@ except Exception as _wf_mig_err:
 
 # Create the table
 Base.metadata.create_all(engine)
+
+with engine.begin() as _conn:
+    for _table, _column in (("chat_agents", "oracle_background"), ("settings", "default_oracle_background")):
+        _columns = sa_text(f"PRAGMA table_info({_table})")
+        if _column not in {row[1] for row in _conn.execute(_columns)}:
+            try:
+                _conn.execute(sa_text(f"ALTER TABLE {_table} ADD COLUMN {_column} VARCHAR"))
+            except Exception:
+                if _column not in {row[1] for row in _conn.execute(_columns)}:
+                    raise
 
 # Create a session factory
 # expire_on_commit=False is deliberate. SessionContext commits on exit, and with

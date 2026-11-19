@@ -259,6 +259,30 @@ def find_thread_for_proposal(proposal: dict[str, Any], project_id: int | None = 
     return None
 
 
+def proposal_thread_link(proposal: dict[str, Any]) -> dict[str, Any] | None:
+    """Expose an existing work identity without starting or retrying its execution."""
+    from distr.core.chat import _chat_params
+    from distr.core.db import Chat, get_session
+    from distr.core.db.workflow import DevelopmentWorkItem
+    from distr.core.incoming.proposals import _existing_proposal_thread
+
+    project_id = proposal.get('project_id')
+    if type(project_id) is not int:
+        return None
+    chat_id = _existing_proposal_thread(proposal, project_id)
+    if chat_id is None:
+        return None
+    with get_session() as db:
+        chat = db.get(Chat, chat_id)
+        item = db.query(DevelopmentWorkItem).filter_by(chat_id=chat_id).first()
+        if chat is None or item is None or chat.project_id != project_id:
+            return None
+        execution = (_chat_params(chat.params).get('development') or {}).get('execution') or {}
+        return {'chat_id': chat_id, 'status': execution.get('status') or item.ticket_lane or 'idle',
+                'ticket_id': item.local_ticket_id, 'ticket_key': item.ticket_key,
+                'ticket_lane': item.ticket_lane}
+
+
 def find_thread_for_tensology_ticket(ticket: dict[str, Any]) -> int | None:
     """Reuse an Incoming proposal thread or an earlier Tensology thread for this ticket."""
     from distr.core.db import get_session

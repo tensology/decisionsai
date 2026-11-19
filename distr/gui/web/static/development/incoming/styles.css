@@ -52,6 +52,13 @@
 .incoming-message-bubble small { display: block; margin-bottom: 3px; color: #90a5df; font-size: 11px; }
 .incoming-message-bubble p { margin: 0; color: #edf1ff; font-size: 14px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
 .incoming-message-bubble time { display: block; margin-top: 3px; color: #8994b6; font-size: 10px; text-align: right; }
+.incoming-wa-message-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.incoming-wa-message-footer time { margin-top: 0; }
+.incoming-wa-message-copy { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; border: 0; border-radius: 4px; background: transparent; color: var(--studio-muted); cursor: pointer; }
+.incoming-wa-message-copy:hover:not(:disabled) { background: var(--studio-line); color: var(--studio-text); }
+.incoming-wa-message-copy:focus-visible { outline: 2px solid var(--studio-text); outline-offset: 2px; }
+.incoming-wa-message-copy:disabled { opacity: .5; cursor: default; }
+@media (pointer: coarse) { .incoming-wa-message-copy { width: 44px; height: 44px; } }
 .incoming-media-image, .incoming-media-video { display: block; max-width: min(320px, 100%); max-height: 280px; margin-bottom: 5px; border-radius: 6px; object-fit: contain; }
 .incoming-media-audio { display: block; width: min(300px, 100%); margin-bottom: 5px; }
 /* 2026-11-12 WhatsApp voice-note Transcribe (matches the phone remote app). */
@@ -98,6 +105,7 @@
 .incoming-link-dialog-body { display: grid; gap: 12px; padding: 14px 16px 0; }
 .incoming-link-dialog-body > .incoming-link-error { color: var(--studio-danger-text); }
 .incoming-link-dialog-body > p { margin: 0; color: #d1d5db; font-size: calc(0.82rem + 1px); line-height: 1.5; }
+#incoming-mail-project-subject { overflow-wrap: anywhere; }
 .incoming-current-links { display: grid; border: 1px solid rgba(255, 255, 255, 0.13); border-radius: 6px; }
 .incoming-current-links > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 9px; border-bottom: 1px solid rgba(255, 255, 255, 0.13); font-size: calc(0.82rem + 1px); }
 .incoming-current-links > div:last-child { border-bottom: 0; }
@@ -116,6 +124,7 @@
 .incoming-channel-error a:hover, .incoming-channel-error a:focus-visible, .incoming-channel-error button:hover, .incoming-channel-error button:focus-visible { color: #ffd19a; text-decoration: underline; }
 .incoming-gmail-thread { display: block; width: 100%; padding: 11px 12px; border: 0; border-bottom: 1px solid rgba(124,142,188,.14); background: transparent; color: var(--studio-text); text-align: left; cursor: pointer; }
 .incoming-gmail-thread:hover { background: rgba(255,255,255,.035); }
+.incoming-gmail-thread .incoming-mail-project-name { color: #ffd19a; margin-top: 4px; }
 .incoming-gmail-thread.selected { box-shadow: inset 2px 0 0 var(--studio-accent); background: rgba(83,119,196,.13); }
 .incoming-gmail-thread.unread strong::before { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--studio-accent); content: ""; vertical-align: 1px; }
 .incoming-gmail-thread > span { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
@@ -789,7 +798,7 @@ button.proposal-media, button.proposal-file, button.proposal-file-card { cursor:
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     padding: 10px 12px;
     border-top: 1px solid var(--studio-line);
     background: rgba(255,255,255,.018);
@@ -802,7 +811,9 @@ button.proposal-media, button.proposal-file, button.proposal-file-card { cursor:
     gap: 8px;
     margin-left: auto;
     min-width: 0;
+    flex-wrap: wrap;
 }
+.incoming-mail-footer [data-incoming-mail-project] { flex: 0 0 auto; white-space: nowrap; }
 .incoming-mail-footer .incoming-link-controls {
     width: auto;
     flex: 0 1 auto;

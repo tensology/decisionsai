@@ -1,6 +1,8 @@
 """Incoming HTTP boundary. Existing URLs remain compatible."""
 from fastapi import Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel, Field
+from typing import Literal
 import asyncio
 import re
 from pathlib import Path
@@ -29,6 +31,14 @@ def _preview_filename(resolved_name: str, filename_hint: str) -> str:
 
 logger = logging.getLogger(__name__)
 PROPOSAL_READ_TIMEOUT_SECONDS = 60
+
+
+class MailProjectLinkRequest(BaseModel):
+    source: Literal["gmail", "mailshot"]
+    thread_id: str = Field(min_length=1, max_length=255)
+    message_id: str = Field(min_length=1, max_length=255)
+    project_id: int = Field(strict=True, gt=0)
+    remove: bool = Field(default=False, strict=True)
 
 
 def proposal_review_document() -> str:
@@ -121,6 +131,31 @@ def register_routes(router, templates):
 
         return JSONResponse(await asyncio.to_thread(resolve_proposal_review, review_key))
 
+    @router.get("/workflows/studio/incoming/proposals/local-review")
+    async def workflow_studio_local_proposal_imports():
+        from distr.core.incoming.proposal_sync import review_local_imports
+        from distr.core.tensology_client import TensologyApiError
+
+        try:
+            return JSONResponse({"proposals": await asyncio.to_thread(review_local_imports)},
+                                headers={"Cache-Control": "no-store"})
+        except (ValueError, TensologyApiError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+
+    @router.post("/workflows/studio/incoming/proposals/local-review")
+    async def workflow_studio_import_local_proposal(request: Request):
+        from distr.core.incoming.proposal_sync import import_reviewed_local_proposal
+        from distr.core.tensology_client import TensologyApiError
+
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or not all(isinstance(body.get(field), str) for field in ("key", "revision")):
+                return JSONResponse({"error": "Review a saved proposal before importing it."}, status_code=400)
+            result = await asyncio.to_thread(import_reviewed_local_proposal, body["key"], body["revision"])
+            return JSONResponse(result)
+        except (ValueError, TensologyApiError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+
     @router.get("/workflows/studio/incoming/proposals/source")
     async def workflow_studio_proposal_source(
         review_key: str = Query(pattern=r"^[a-f0-9]{64}$"),
@@ -167,18 +202,66 @@ def register_routes(router, templates):
 
     @router.api_route('/workflows/studio/incoming/check', methods=['GET', 'POST'])
     async def workflow_studio_check_incoming(request: Request):
-        from distr.core.tensology_client import configured_tensology_client
+        from distr.core.incoming.mail_check import mail_check_status, start_mail_check
+        from distr.core.tensology_client import TensologyApiError, configured_tensology_client
         import uuid
+        sources = ['whatsapp', 'gmail', 'mailshot']
+        specific_check = False
+        if request.method == 'POST' and await request.body():
+            try:
+                body = await request.json()
+                if not isinstance(body, dict):
+                    raise ValueError()
+                if 'sources' in body:
+                    requested = body['sources']
+                    if not isinstance(requested, list) or not requested or any(item not in sources for item in requested):
+                        raise ValueError()
+                    sources = list(dict.fromkeys(requested))
+                    specific_check = True
+            except ValueError:
+                return JSONResponse({'success': False, 'error': 'Choose only supported incoming sources.'}, status_code=400)
         try:
             client = configured_tensology_client(source='incoming-manual-check')
+        except TensologyApiError as exc:
+            if exc.code == 'not_configured' and not specific_check:
+                local = await asyncio.to_thread(start_mail_check) if request.method == 'POST' else mail_check_status()
+                if local:
+                    return JSONResponse({'success': True, 'checks': {
+                        'local_mail': local, 'tensology': {'source_state': 'failed'},
+                    }})
+            client = None
+        except Exception:
+            logger.exception('Could not load the Tensology Incoming connection')
+            client = None
+        try:
+            if client is None:
+                return JSONResponse({'success': False, 'error': 'Tensology source checking is unavailable.'}, status_code=503)
             if request.method == 'POST':
                 result = await asyncio.to_thread(client.post, 'incoming/check',
-                    {'sources': ['whatsapp', 'gmail', 'mailshot']}, idempotency_key='incoming-check-' + uuid.uuid4().hex)
+                    {'sources': sources}, idempotency_key='incoming-check-' + uuid.uuid4().hex)
             else:
                 result = await asyncio.to_thread(client.get, 'incoming/check')
             return JSONResponse({'success': True, **result})
         except Exception:
-            return JSONResponse({'success': False, 'error': 'Tensology source checking is unavailable. Local proposals can still be refreshed.'}, status_code=503)
+            return JSONResponse({'success': False, 'error': 'Tensology source checking is unavailable.'}, status_code=503)
+
+    @router.put("/workflows/studio/incoming/mail/project")
+    async def workflow_studio_link_mail_project(body: MailProjectLinkRequest):
+        from distr.core.incoming.project_links import set_mail_project_link
+
+        try:
+            return await asyncio.to_thread(
+                set_mail_project_link, body.source, body.thread_id, body.message_id, body.project_id,
+                remove=body.remove,
+            )
+        except ValueError as error:
+            return JSONResponse({"error": str(error)}, status_code=422)
+
+        except Exception as error:
+            from distr.core.tensology_client import TensologyApiError
+            if isinstance(error, TensologyApiError) and error.status == 409:
+                return JSONResponse({"error": str(error)}, status_code=409)
+            return JSONResponse({"error": "The project assignment could not be synchronized with Tensology. Refresh and try again."}, status_code=503)
 
 
     @router.get("/workflows/studio/incoming/proposals/attachment")

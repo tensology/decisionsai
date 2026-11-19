@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 from distr.core.incoming import proposals as proposals_mod
 
 
@@ -14,6 +16,51 @@ def _assert_cards(rows, expected):
     for row, source in zip(rows, expected):
         for key, value in source.items():
             assert row.get(key) == value, f"Card field {key}: {row.get(key)!r} != {value!r}"
+
+
+def test_visible_existing_thread_exposes_current_status_without_starting_work():
+    import json
+    from distr.core.db import Chat, get_session
+    from distr.core.db.projects import Project
+    from distr.core.db.workflow import DevelopmentWorkItem
+
+    with get_session() as db:
+        project = Project(name='Linked work status')
+        db.add(project)
+        db.flush()
+        proposal = {'id': 'local:gmail:status-thread', 'source': 'gmail', 'project_id': project.id,
+                    'source_thread_id': 'status-thread', 'message_ids': ['original'], 'title': 'Review existing work'}
+        chat = Chat(title=proposal['title'], project_id=project.id, params=json.dumps({
+            'incoming_proposal_handoff': {'key': proposals_mod._proposal_handoff_key(proposal), 'started': True},
+            'development': {'execution': {'status': 'blocked'}},
+        }))
+        db.add(chat)
+        db.flush()
+        chat_id = chat.id
+        db.add(DevelopmentWorkItem(chat_id=chat.id, project_id=project.id, identity_key='linked-status-test',
+                                   ticket_key='PROJ-123', ticket_lane='Development'))
+    payload = {'proposals': [proposal]}
+    link = proposals_mod._expiry_payload(payload)['proposals'][0]['linked_thread']
+    assert link['chat_id'] == chat_id
+    assert link['ticket_key'] == 'PROJ-123'
+    assert link['status'] == 'blocked'
+    assert 'linked_thread' not in payload['proposals'][0]
+    with get_session() as db:
+        chat = db.get(Chat, chat_id)
+        params = json.loads(chat.params)
+        params['development']['execution']['status'] = 'failed'
+        chat.params = json.dumps(params)
+    assert proposals_mod._expiry_payload(payload)['proposals'][0]['linked_thread']['status'] == 'failed'
+    new_work = {**proposal, 'message_ids': ['new-original']}
+    assert 'linked_thread' not in proposals_mod._expiry_payload({'proposals': [new_work]})['proposals'][0]
+    with get_session() as db:
+        other = Project(name='Different linked project')
+        db.add(other)
+        db.flush()
+        other_id = other.id
+    changed_project = proposals_mod._expiry_payload({'proposals': [{**proposal, 'project_id': other_id}]})['proposals'][0]
+    assert 'linked_thread' not in changed_project
+    assert changed_project['thread_link_error'] == 'The proposal thread belongs to another project.'
 
 
 @pytest.fixture(autouse=True)
@@ -347,6 +394,28 @@ def test_triage_builds_proposal_from_llm(monkeypatch):
     assert proposal["estimated_minutes"] == 30
 
 
+def test_proposal_keeps_only_explicit_support_for_its_source_request():
+    conversation = {
+        'source': 'gmail', 'thread_id': 'mail-thread', 'participant': 'Client',
+        'items': [
+            {'source_message_id': 'request', 'text': 'Please check the voucher'},
+            {'source_message_id': 'reply', 'text': 'Confirm which voucher', 'from_me': True, 'direction': 'outbound'},
+            {'source_message_id': 'other-reply', 'text': 'Delivery pricing is fixed', 'from_me': True},
+        ],
+        'thread_context': [
+            {'id': 'routing', 'body': 'Project routing only'},
+            {'id': 'detail', 'body': 'The receipt number is 123'},
+        ],
+    }
+    result = proposals_mod._proposal_from_triage(conversation, {'id': 7, 'name': 'Shop'}, {
+        'title': 'Check voucher', 'project_evidence_message_ids': ['routing'],
+        'supporting_context_message_ids': ['reply', 'detail', 'external-email', 'request'],
+    })
+    assert result['message_ids'] == ['request']
+    assert result['source_context_message_ids'] == ['reply', 'detail']
+    assert [item['id'] for item in result['evidence']] == ['request', 'reply', 'detail']
+
+
 def test_triage_skips_non_actionable_and_unknown_project(monkeypatch):
     monkeypatch.setattr(
         "distr.core.incoming.proposals._candidate_projects",
@@ -595,7 +664,8 @@ def test_proposals_list_cache_serves_until_invalidated(monkeypatch):
     monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', fetch)
     monkeypatch.setattr('distr.core.incoming.proposal_sync.fetch_remote_proposals', fetch)
     monkeypatch.setattr('distr.core.incoming.proposal_sync.reconcile', lambda local, remote, **kwargs: (remote, {'state': 'complete'}))
-    monkeypatch.setattr('distr.core.tensology_project_sync.sync_pinned_projects', lambda **kwargs: {})
+    project_publication = Mock(side_effect=AssertionError('An Incoming read must not publish project edits'))
+    monkeypatch.setattr('distr.core.tensology_project_sync.sync_pinned_projects', project_publication)
     monkeypatch.setattr('distr.core.incoming.service.list_development_incoming', lambda **k: {'items': []})
     monkeypatch.setattr(proposals_mod, '_local_proposals', lambda *a, **k: [])
     monkeypatch.setattr(proposals_mod, '_project_map', lambda: {})
@@ -619,3 +689,4 @@ def test_proposals_list_cache_serves_until_invalidated(monkeypatch):
     proposals_mod.invalidate_proposals_list_cache()
     proposals_mod.list_incoming_proposals(refresh_local=False, force=True)
     assert calls['n'] == 2
+    project_publication.assert_not_called()

@@ -76,8 +76,8 @@ def prefer_whatsapp_jid(stored_jid: str | None, *observed: str | None) -> str:
     return stored
 
 
-def find_existing_whatsapp_link(session, phone_jid: str = "", phone_number: str = ""):
-    """Return the single existing WhatsAppPhoneLink matching any JID variant, if any."""
+def find_existing_whatsapp_link(session, phone_jid: str = "", phone_number: str = "", *, board_id: int | None = None):
+    """Find a same-kind conversation link, optionally scoped to one board."""
     from sqlalchemy import or_
 
     from distr.core.db import WhatsAppPhoneLink
@@ -85,8 +85,11 @@ def find_existing_whatsapp_link(session, phone_jid: str = "", phone_number: str 
     keys = whatsapp_jid_match_keys(phone_jid, phone_number)
     if not keys:
         return None
-    return (
-        session.query(WhatsAppPhoneLink)
+    query = session.query(WhatsAppPhoneLink)
+    if board_id is not None:
+        query = query.filter(WhatsAppPhoneLink.board_id == board_id)
+    candidates = (
+        query
         .filter(
             or_(
                 WhatsAppPhoneLink.phone_jid.in_(keys),
@@ -94,8 +97,10 @@ def find_existing_whatsapp_link(session, phone_jid: str = "", phone_number: str 
             )
         )
         .order_by(WhatsAppPhoneLink.id.asc())
-        .first()
+        .all()
     )
+    requested_group = is_whatsapp_group_jid(phone_jid)
+    return next((row for row in candidates if is_whatsapp_group_jid(row.phone_jid) == requested_group), None)
 
 
 def upsert_whatsapp_phone_link(
@@ -107,11 +112,13 @@ def upsert_whatsapp_phone_link(
     contact_name: str | None = None,
     auto_snapshot: bool | None = False,
     move_board: bool = True,
+    board_scoped: bool = False,
 ):
-    """Create or reuse a WhatsAppPhoneLink so one chat identity maps to one row.
+    """Create or reuse a WhatsAppPhoneLink for a conversation.
 
     If a variant of the JID already exists, update that row (optionally moving board)
-    instead of inserting a second link.
+    instead of inserting a second link. Incoming uses board_scoped=True to retain
+    independent links to other projects; older callers keep their moving behavior.
     """
     from distr.core.db import WhatsAppPhoneLink
 
@@ -119,7 +126,8 @@ def upsert_whatsapp_phone_link(
     if not jid:
         raise ValueError("phone_jid is required")
     number = str(phone_number or "").strip() or whatsapp_jid_local_part(jid)
-    existing = find_existing_whatsapp_link(session, phone_jid=jid, phone_number=number)
+    existing = find_existing_whatsapp_link(session, phone_jid=jid, phone_number=number,
+                                           board_id=int(board_id) if board_scoped else None)
     if existing is not None:
         if move_board:
             existing.board_id = int(board_id)

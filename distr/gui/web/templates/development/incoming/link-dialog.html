@@ -11,3 +11,17 @@
             <menu><button type="button" data-dialog-close class="secondary-button">Cancel</button><button type="submit" value="default" class="primary-button">Link board</button></menu>
         </form>
     </dialog>
+    <dialog class="studio-dialog compact-dialog incoming-link-dialog" id="incoming-mail-project-dialog" aria-labelledby="incoming-mail-project-title">
+        <form method="dialog" id="incoming-mail-project-form">
+            <header><div><h2 id="incoming-mail-project-title">Link project</h2></div><button type="button" class="icon-button" data-dialog-close aria-label="Close project link">×</button></header>
+            <div class="incoming-link-dialog-body">
+                <p id="incoming-mail-project-subject"></p>
+                <div id="incoming-mail-project-current" class="incoming-current-links"></div>
+                <label for="incoming-mail-project-select">Project</label>
+                <select id="incoming-mail-project-select" required></select>
+                <p>Changes apply to all existing and future conversations from this sender. Removing a project keeps the other links.</p>
+                <p id="incoming-mail-project-error" class="incoming-link-error hidden" role="alert"></p>
+            </div>
+            <menu><button type="button" data-dialog-close class="secondary-button">Cancel</button><button type="submit" class="primary-button">Save link</button></menu>
+        </form>
+    </dialog>

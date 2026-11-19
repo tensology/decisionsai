@@ -276,6 +276,9 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                 conversation.links = Array.from(new Map(allLinks.filter((item) => item?.id).map((item) => [Number(item.id), item])).values());
                 conversation.boardId = Number(conversation.links[0]?.board_id || link.board_id || 0);
                 conversation.boardName = conversation.links[0]?.board_name || link.board_name || '';
+                conversation.projectId = Number(latest.project_id) || null;
+                conversation.projectIds = Array.isArray(latest.project_ids) ? latest.project_ids.map(Number) : conversation.projectId ? [conversation.projectId] : [];
+                conversation.projectName = latest.project_name || conversation.projectIds.map(id => context.projects?.find(project => Number(project.id) === id)?.name).filter(Boolean).join(', ');
                 conversation.linkId = Number(conversation.links[0]?.id || link.link_id || 0);
                 conversation.pendingCount = conversation.messages.filter((item) => !item.processed && !item.from_me).length;
                 conversation.canSnapshot = conversation.messages.some((item) => !item.processed && !item.from_me);
@@ -430,7 +433,9 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                 voiceHtml = whatsappVoiceTranscribeHtml(item);
             }
         }
-        return `<div class="incoming-message-bubble${item.from_me ? ' outgoing' : ' incoming'}" data-incoming-msg="${actions.escapeHtml(incomingItemKey(item))}" data-wa-mid="${actions.escapeHtml(item.source_message_id || '')}"><small>${actions.escapeHtml(item.from_me ? 'You' : item.sender || conversation.label)}</small>${incomingMediaHtml(item)}${textHtml}${voiceHtml}<time>${actions.escapeHtml(actions.formatDateTime(item.created_at))}</time></div>`;
+        const canCopy = Boolean(textHtml || (voiceHtml && splitWhatsAppTranscript(item).transcript));
+        const copy = `<button type="button" class="incoming-wa-message-copy" data-wa-message-copy aria-label="Copy message" title="${canCopy ? 'Copy message' : 'No message text to copy'}"${canCopy ? '' : ' disabled'}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>`;
+        return `<div class="incoming-message-bubble${item.from_me ? ' outgoing' : ' incoming'}" data-incoming-msg="${actions.escapeHtml(incomingItemKey(item))}" data-wa-mid="${actions.escapeHtml(item.source_message_id || '')}"><small>${actions.escapeHtml(item.from_me ? 'You' : item.sender || conversation.label)}</small>${incomingMediaHtml(item)}${textHtml}${voiceHtml}<div class="incoming-wa-message-footer">${copy}<time>${actions.escapeHtml(actions.formatDateTime(item.created_at))}</time></div></div>`;
     }
 
     function applyWhatsAppTranscript(conversation, id, text) {
@@ -745,6 +750,26 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
 
     // Also used for voice notes appended live (patchIncomingInPlace), which skip paintWhatsAppReader.
     function bindWhatsAppVoiceButtons(root, conversation) {
+        root?.querySelectorAll('[data-wa-message-copy]:not([data-wa-bound])').forEach(button => {
+            button.dataset.waBound = '1';
+            button.addEventListener('click', async event => {
+                event.preventDefault();
+                event.stopPropagation();
+                const bubble = button.closest('.incoming-message-bubble');
+                const text = [...bubble.querySelectorAll(':scope > p, .incoming-wa-transcript > p')]
+                    .map(node => node.textContent).join('\n\n');
+                if (!text) return;
+                button.disabled = true;
+                try {
+                    await navigator.clipboard.writeText(text);
+                    actions.toast('Message copied.');
+                } catch (_) {
+                    actions.toast('Could not copy the message. Check clipboard permissions and try again.', 'error');
+                } finally {
+                    button.disabled = false;
+                }
+            });
+        });
         root?.querySelectorAll('[data-wa-transcribe]:not([data-wa-bound]), [data-wa-transcript-copy]:not([data-wa-bound])').forEach(button => {
             button.dataset.waBound = '1';
             button.addEventListener('click', event => {
@@ -895,7 +920,95 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
     function mailThreadButtonHtml(conversation, selectedKey, dataAttribute) {
         const latest = conversation.latest || {};
         const preview = latest.snippet || latest.text || 'No message text';
-        return `<button type="button" class="incoming-gmail-thread${conversation.pendingCount ? ' unread' : ''}${selectedKey === conversation.key ? ' selected' : ''}" ${dataAttribute}="${actions.escapeHtml(conversation.key)}"><span><strong>${actions.escapeHtml(conversation.label || '(No subject)')}</strong><time>${actions.escapeHtml(actions.formatDateTime(latest.created_at))}</time></span><small>${actions.escapeHtml(latest.sender || 'Unknown sender')}</small><p>${actions.escapeHtml(preview)}</p></button>`;
+        const project = conversation.projectName ? `<small class="incoming-mail-project-name">${actions.escapeHtml(conversation.projectName)}</small>` : '';
+        return `<button type="button" class="incoming-gmail-thread${conversation.pendingCount ? ' unread' : ''}${selectedKey === conversation.key ? ' selected' : ''}" ${dataAttribute}="${actions.escapeHtml(conversation.key)}"><span><strong>${actions.escapeHtml(conversation.label || '(No subject)')}</strong><time>${actions.escapeHtml(actions.formatDateTime(latest.created_at))}</time></span><small>${actions.escapeHtml(latest.sender || 'Unknown sender')}</small><p>${actions.escapeHtml(preview)}</p>${project}</button>`;
+    }
+
+    function bindMailThread(button, source) {
+        const config = MAIL_CHANNELS[source];
+        const key = button.dataset[config.dataKey];
+        button.addEventListener('click', () => {
+            state[config.stateKey] = key;
+            state.incomingMobileDetail = true;
+            renderIncomingWorkspace();
+        });
+        button.addEventListener('contextmenu', event => {
+            event.preventDefault();
+            openMailProjectDialog(key);
+        });
+    }
+
+    let mailProjectConversation = null;
+    function openMailProjectDialog(key) {
+        const dialog = el('incoming-mail-project-dialog');
+        if (!dialog || dialog.open) return;
+        const conversation = incomingConversations('').find(row => row.key === key && ['gmail', 'mailshot'].includes(row.source));
+        const received = conversation?.messages.find(item => !item.from_me && !(item.labels || []).includes('SENT') && item.source_message_id);
+        if (!received) return;
+        mailProjectConversation = { ...conversation, assignmentMessage: received };
+        el('incoming-mail-project-title').textContent = 'Manage sender projects';
+        el('incoming-mail-project-subject').textContent = conversation.label;
+        const select = el('incoming-mail-project-select');
+        select.replaceChildren(new Option('Choose project', ''));
+        const projects = [...(context.projects || [])].filter(project => !project.agent_ignored)
+            .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+        projects.forEach(project => select.add(new Option(project.name, project.id, false, Number(project.id) === conversation.projectId)));
+        const current = el('incoming-mail-project-current');
+        current.replaceChildren();
+        conversation.projectIds.forEach(projectId => {
+            const project = projects.find(row => Number(row.id) === projectId);
+            const row = document.createElement('div');
+            const name = document.createElement('span');
+            name.textContent = project?.name || `Project ${projectId}`;
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.textContent = 'Remove';
+            remove.setAttribute('aria-label', `Unlink ${name.textContent} from sender`);
+            remove.addEventListener('click', () => changeMailProject(projectId, true));
+            row.append(name, remove);
+            current.append(row);
+        });
+        el('incoming-mail-project-error').classList.add('hidden');
+        dialog.showModal();
+        select.focus();
+    }
+
+    async function saveMailProject(event) {
+        event.preventDefault();
+        return changeMailProject(Number(el('incoming-mail-project-select').value), false);
+    }
+
+    async function changeMailProject(projectId, remove) {
+        const conversation = mailProjectConversation;
+        const form = el('incoming-mail-project-form');
+        const select = el('incoming-mail-project-select');
+        const controls = [...form.querySelectorAll('button, select')];
+        const errorNode = el('incoming-mail-project-error');
+        if (!conversation || !projectId || select.disabled) return;
+        controls.forEach(control => { control.disabled = true; });
+        errorNode.classList.add('hidden');
+        try {
+            const result = await actions.api('/workflows/studio/incoming/mail/project', {
+                method: 'PUT', body: { source: conversation.source, thread_id: conversation.threadId,
+                    message_id: conversation.assignmentMessage.source_message_id, project_id: projectId,
+                    ...(remove ? { remove: true } : {}) }
+            });
+            ++channelLoadSeq;
+            state.incomingLoadedAt = 0;
+            await refreshIncomingData();
+            el('incoming-mail-project-dialog').close();
+            if (result.synced === false) actions.toast('Saved locally. Connect Tensology to synchronize this change.', 'info');
+            renderIncomingWorkspace();
+            const config = MAIL_CHANNELS[conversation.source];
+            const selector = `[${config.attr}="${CSS.escape(conversation.key)}"]`;
+            (state[config.stateKey] === conversation.key && el(config.reader).querySelector('[data-incoming-mail-project]')
+                || el(config.list).querySelector(selector))?.focus();
+        } catch (error) {
+            errorNode.textContent = error.data?.error || error.message || 'Could not save the project link. Try again.';
+            errorNode.classList.remove('hidden');
+        } finally {
+            controls.forEach(control => { control.disabled = false; });
+        }
     }
 
 
@@ -1011,8 +1124,10 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         const replySubject = actions.escapeHtml(draft?.subject ?? mailReplySubject(conversation));
         const replyMessageId = actions.escapeHtml(draft?.messageId ?? replySource.source_message_id ?? '');
         const messages = conversation.messages.slice().reverse().map(mailMessageCardHtml).join('');
+        const projectAction = latest.source_message_id
+            ? `<button type="button" class="proposal-btn ghost" data-incoming-mail-project="${actions.escapeHtml(conversation.key)}">${conversation.projectIds.length ? 'Change project' : 'Link project'}</button>` : '';
         const attachmentBar = mailAttachmentBarHtml(conversation);
-        return `<div class="incoming-gmail-messages">${messages}</div>${attachmentBar}<div class="incoming-quick-reply${draft?.open ? '' : ' hidden'}" data-incoming-quick-reply data-quick-reply-key="${actions.escapeHtml(conversation.key)}"><div class="incoming-quick-reply-fields"><label>To<input type="text" data-quick-reply-to value="${replyTo}" autocomplete="email"${draft?.sending ? ' disabled' : ''}></label><label>Subject<input type="text" data-quick-reply-subject value="${replySubject}"${draft?.sending ? ' disabled' : ''}></label><label>Message<textarea data-quick-reply-body rows="6" placeholder="Write your reply"${draft?.sending ? ' disabled' : ''}>${actions.escapeHtml(draft?.body || '')}</textarea></label><input type="hidden" data-quick-reply-message-id value="${replyMessageId}"></div><p role="status" data-quick-reply-status>${actions.escapeHtml(draft?.error || '')}</p><div class="incoming-quick-reply-actions"><button type="button" class="proposal-btn ghost" data-quick-reply-cancel${draft?.sending ? ' disabled' : ''}>Cancel</button>${statusButton}<button type="button" class="proposal-btn primary" data-quick-reply-send${draft?.sending || draft?.receiptStatus ? ' disabled' : ''}>${draft?.sending ? 'Sending...' : 'Send'}</button></div></div><footer class="incoming-mail-footer"><button type="button" class="proposal-btn ghost" data-incoming-quick-reply-open>Quick Reply</button><div class="incoming-mail-footer-right">${rightActions}</div></footer>`;
+        return `<div class="incoming-gmail-messages">${messages}</div>${attachmentBar}<div class="incoming-quick-reply${draft?.open ? '' : ' hidden'}" data-incoming-quick-reply data-quick-reply-key="${actions.escapeHtml(conversation.key)}"><div class="incoming-quick-reply-fields"><label>To<input type="text" data-quick-reply-to value="${replyTo}" autocomplete="email"${draft?.sending ? ' disabled' : ''}></label><label>Subject<input type="text" data-quick-reply-subject value="${replySubject}"${draft?.sending ? ' disabled' : ''}></label><label>Message<textarea data-quick-reply-body rows="6" placeholder="Write your reply"${draft?.sending ? ' disabled' : ''}>${actions.escapeHtml(draft?.body || '')}</textarea></label><input type="hidden" data-quick-reply-message-id value="${replyMessageId}"></div><p role="status" data-quick-reply-status>${actions.escapeHtml(draft?.error || '')}</p><div class="incoming-quick-reply-actions"><button type="button" class="proposal-btn ghost" data-quick-reply-cancel${draft?.sending ? ' disabled' : ''}>Cancel</button>${statusButton}<button type="button" class="proposal-btn primary" data-quick-reply-send${draft?.sending || draft?.receiptStatus ? ' disabled' : ''}>${draft?.sending ? 'Sending...' : 'Send'}</button></div></div><footer class="incoming-mail-footer"><button type="button" class="proposal-btn ghost" data-incoming-quick-reply-open>Quick Reply</button><div class="incoming-mail-footer-right">${projectAction}${rightActions}</div></footer>`;
     }
 
     function rememberQuickReply(panel) {
@@ -1049,6 +1164,9 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         });
         if (!root) return;
         bindProposalFilePreview(root);
+        root.querySelectorAll('[data-incoming-mail-project]').forEach(button =>
+            button.addEventListener('click', () => openMailProjectDialog(button.dataset.incomingMailProject))
+        );
         root.querySelectorAll('[data-incoming-snapshot]').forEach((button) =>
             button.addEventListener('click', () => snapshotIncomingWhatsApp(Number(button.dataset.boardId), Number(button.dataset.incomingSnapshot), button))
         );
@@ -1309,10 +1427,15 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         const proposalId = actions.escapeHtml(proposal.id || '');
         const tooltip = proposalFirstMessage(proposal) || `${origin} · ${source}`;
         const retry = reserved && proposal.merge_retry;
+        const linkedThread = proposal.linked_thread || proposal.followup_thread;
+        const threadStatus = linkedThread ? `<p class="proposal-desc">${actions.escapeHtml([
+            `Thread #${linkedThread.chat_id}`, linkedThread.ticket_key,
+            String(linkedThread.status || 'idle').replaceAll('_', ' ')
+        ].filter(Boolean).join(' · '))}</p>` : '';
         const push = retry
             ? `<button type="button" class="proposal-btn primary" data-incoming-retry-merge="${proposalId}"${incomingOperation || proposalMutations.size || dismissExpiredBusy ? ' disabled' : ''}>Retry merge</button>`
             : reserved ? '' : !needsProject
-            ? `<button type="button" class="proposal-btn primary" data-incoming-proposal-thread="${proposalId}" title="Creates the thread and hands it to Decisions, like Send to Decisions.">Create Thread</button>`
+            ? `<button type="button" class="proposal-btn primary" data-incoming-proposal-thread="${proposalId}"${proposal.thread_link_error ? ' disabled' : ''} title="${actions.escapeHtml(proposal.thread_link_error || (proposal.followup_thread ? 'Append this follow-up to the existing Development thread' : linkedThread ? 'Open the linked Development thread' : 'Creates the thread and hands it to Decisions, like Send to Decisions.'))}">${proposal.followup_thread ? 'Amend thread' : linkedThread ? 'Open thread' : 'Create Thread'}</button>`
             : `<button type="button" class="proposal-btn primary" data-incoming-proposal-confirm="${proposalId}">Confirm project</button>`;
         const dismiss = reserved ? '' : `<button type="button" class="proposal-btn ghost" data-incoming-proposal-dismiss="${proposalId}" title="Dismiss this proposal">Dismiss</button>`;
         const preparing = proposalReadRequest?.key === String(proposal.id);
@@ -1326,6 +1449,8 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                 <span class="proposal-source" title="${actions.escapeHtml(tooltip)}" data-incoming-proposal-open="${proposalId}">${incomingSourceGlyph(proposal.source)}${actions.escapeHtml(source)}</span>
             </div>
             ${description ? `<p class="proposal-desc">${actions.escapeHtml(description)}</p>` : ''}
+            ${threadStatus}
+            ${proposal.thread_link_error ? `<p class="proposal-desc" role="alert">${actions.escapeHtml(proposal.thread_link_error)}</p>` : ''}
             ${reserved ? `<p class="proposal-desc">${mergeReservationNotice}</p>` : ''}
             <div class="proposal-actions">${push}${dismiss}${read}<span class="proposal-tools"><button type="button" class="proposal-copy" data-incoming-proposal-copy="${proposalId}" title="Copy title and description" aria-label="Copy title and description"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>${needsProject ? '' : '<span class="proposal-drag" title="Drag onto another proposal on the same project to merge them into one ticket" aria-hidden="true">⠿</span>'}</span></div>
         </article>`;
@@ -2453,6 +2578,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             .sort((a, b) => String(a.name).localeCompare(String(b.name)))
             .map((p) => `<option value="${Number(p.id)}"${Number(p.id) === Number(proposal.project_id) ? ' selected' : ''}>${actions.escapeHtml(p.name)}</option>`).join('');
         const details = `${reserved ? `<p class="proposal-modal-desc">${mergeReservationNotice}</p>` : ''}
+            ${proposal.followup_thread ? `<p class="proposal-modal-desc">Follow-up to thread #${Number(proposal.followup_thread.chat_id)} · ${actions.escapeHtml(proposal.followup_thread.status || 'idle')}. Appends to the existing investigation.</p>` : ''}
             <div class="proposal-project-field"><label for="proposal-project-select">Project</label>
             <select id="proposal-project-select" aria-describedby="proposal-project-status"${reserved ? ' disabled' : ''}>${projectOptions}</select>
             <span id="proposal-project-status" role="status" aria-live="polite"></span></div>
@@ -2486,7 +2612,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             <footer>
                 ${proposal.review_key && !context.embeddedProposalReview ? '<p class="proposal-review-copy-status hidden" data-proposal-copy-status role="status"></p><button type="button" class="proposal-btn ghost proposal-copy-review" data-proposal-copy-review>Copy review link</button>' : ''}
                 <button type="button" class="proposal-btn ghost" data-proposal-close>Close</button>
-                <button type="button" class="proposal-btn primary" data-proposal-thread="${actions.escapeHtml(proposal.id || '')}"${reserved || proposalNeedsProject(proposal) ? ' disabled' : ''}>Create Thread</button>
+                <button type="button" class="proposal-btn primary" data-proposal-thread="${actions.escapeHtml(proposal.id || '')}"${reserved || proposalNeedsProject(proposal) || proposal.thread_link_error ? ' disabled' : ''}>${proposal.followup_thread ? 'Amend thread' : proposal.linked_thread ? 'Open thread' : 'Create Thread'}</button>
             </footer>
         </div>`;
         document.body.appendChild(overlay);
@@ -2832,6 +2958,15 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         if (button?.disabled || dismissExpiredBusy || proposalMutations.size) return;
         const proposal = reviewed || proposalById(proposalId);
         if (!proposal) return;
+        if (proposal.thread_link_error) {
+            actions.toast(proposal.thread_link_error, 'error');
+            return;
+        }
+        if (Number.isSafeInteger(proposal.linked_thread?.chat_id) && proposal.linked_thread.chat_id > 0) {
+            closeProposalDetail();
+            await actions.loadChat(proposal.linked_thread.chat_id);
+            return;
+        }
         const reviewKey = proposal.review_key || '';
         if (proposalNeedsProject(proposal)) {
             openProposalDetail(proposalId);
@@ -2881,7 +3016,14 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         }
     }
 
+    function incomingProposalCount() {
+        return state.incomingProposals.length + state.incomingPendingMerges.length;
+    }
+
     function renderIncomingWorkspace() {
+        // Keep navigation aligned after dismiss, restore, merge and thread creation.
+        const sidebarCount = el('sidebar-incoming-count');
+        if (sidebarCount) sidebarCount.textContent = String(incomingProposalCount());
         document.querySelectorAll('[data-incoming-quick-reply]').forEach(rememberQuickReply);
         scheduleProposalExpiry();
         const list = el('incoming-whatsapp-list-content');
@@ -2907,7 +3049,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         const proposalsPanel = el('incoming-panel-proposals');
         if (proposalsPanel) proposalsPanel.classList.toggle('hidden', state.incomingFilter !== 'proposals');
         const proposalsCount = el('incoming-proposals-count');
-        if (proposalsCount) proposalsCount.textContent = String(state.incomingProposals.length + state.incomingPendingMerges.length);
+        if (proposalsCount) proposalsCount.textContent = String(incomingProposalCount());
         const syncStatus = el('incoming-proposal-sync-status');
         if (syncStatus) {
             const sync = state.incomingProposalSync;
@@ -2921,7 +3063,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             syncStatus.textContent = !sync?.state ? '' : sync.state === 'pending'
                 ? 'Checking proposal synchronization...'
                 : incomplete
-                  ? ['Synchronization incomplete.', sync.error || '', conflicts.length ? `${conflicts.length} proposal${conflicts.length === 1 ? '' : 's'} could not be synchronized.` : ''].filter(Boolean).join(' ')
+                  ? ['Synchronization incomplete.', sync.error || '', conflicts.length ? `${conflicts.length} proposal${conflicts.length === 1 ? '' : 's'} could not be synchronized.` : '', conflicts[0]?.reason || ''].filter(Boolean).join(' ')
                   : changes;
             syncStatus.classList.toggle('hidden', !syncStatus.textContent);
         }
@@ -3063,24 +3205,20 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         }
         const gmailList = el('incoming-gmail-list-content');
         const gmailStatus = state.incomingChannels.gmail || {};
-        gmailList.innerHTML = refreshWarning + (gmailStatus.error
-              ? `<div class="incoming-channel-error"><strong>${gmailStatus.connected ? 'Reconnect Gmail' : 'Connect Gmail'}</strong><p>${actions.escapeHtml(gmailStatus.error)}</p><button type="button" data-google-reconnect>${gmailStatus.connected ? 'Reconnect Google' : 'Connect Google'}</button></div>`
-              : gmailConversations.length
-                ? gmailConversations
-                      .map((conversation) => mailThreadButtonHtml(conversation, state.selectedGmailThreadKey, 'data-incoming-gmail-thread'))
-                      .join('')
-                : refreshWarning ? '' : '<div class="development-empty">No Gmail inbox threads are available.</div>');
-        gmailList.querySelectorAll('[data-incoming-gmail-thread]').forEach((button) =>
-            button.addEventListener('click', () => {
-                state.selectedGmailThreadKey = button.dataset.incomingGmailThread || '';
-                state.incomingMobileDetail = true;
-                renderIncomingWorkspace();
-            })
-        );
+        const managedGmail = gmailStatus.authority === 'tensology';
+        const gmailRows = gmailConversations
+            .map(conversation => mailThreadButtonHtml(conversation, state.selectedGmailThreadKey, 'data-incoming-gmail-thread'))
+            .join('');
+        const gmailWarning = !gmailStatus.error ? '' : managedGmail
+            ? `<div class="incoming-channel-error" role="status"><strong>Gmail sync paused</strong><p>${actions.escapeHtml(gmailStatus.error)}</p></div>`
+            : `<div class="incoming-channel-error"><strong>${gmailStatus.connected ? 'Reconnect Gmail' : 'Connect Gmail'}</strong><p>${actions.escapeHtml(gmailStatus.error)}</p><button type="button" data-google-reconnect>${gmailStatus.connected ? 'Reconnect Google' : 'Connect Google'}</button></div>`;
+        gmailList.innerHTML = refreshWarning + gmailWarning
+            + (gmailRows || (refreshWarning || gmailWarning ? '' : '<div class="development-empty">No Gmail inbox threads are available.</div>'));
+        gmailList.querySelectorAll('[data-incoming-gmail-thread]').forEach(button => bindMailThread(button, 'gmail'));
         gmailList.querySelectorAll('[data-google-reconnect]').forEach((button) => button.addEventListener('click', reconnectGoogleFromIncoming));
         const selectedGmailThread = gmailConversations.find((conversation) => conversation.key === state.selectedGmailThreadKey) || null;
-        el('incoming-gmail-reader').innerHTML = gmailStatus.error
-            ? '<div class="incoming-reader-empty"><strong>Gmail is not available</strong><p>Reconnect the account to open and read inbox threads here.</p></div>'
+        el('incoming-gmail-reader').innerHTML = gmailStatus.error && !selectedGmailThread
+            ? `<div class="incoming-reader-empty"><strong>Gmail is not available</strong><p>${managedGmail ? 'Check Gmail sync in Tensology.' : 'Reconnect the account to open and read inbox threads here.'}</p></div>`
             : gmailReaderHtml(selectedGmailThread);
         bindIncomingActions(el('incoming-gmail-reader'));
 
@@ -3100,13 +3238,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                     .map((conversation) => mailThreadButtonHtml(conversation, state.selectedMailshotThreadKey, 'data-incoming-mailshot-thread'))
                     .join('')
               : refreshWarning ? '' : '<div class="development-empty">No Tensology Mailshot messages are available.</div>');
-        mailshotList.querySelectorAll('[data-incoming-mailshot-thread]').forEach((button) =>
-            button.addEventListener('click', () => {
-                state.selectedMailshotThreadKey = button.dataset.incomingMailshotThread || '';
-                state.incomingMobileDetail = true;
-                renderIncomingWorkspace();
-            })
-        );
+        mailshotList.querySelectorAll('[data-incoming-mailshot-thread]').forEach(button => bindMailThread(button, 'mailshot'));
         const selectedMailshotThread = mailshotConversations.find((conversation) => conversation.key === state.selectedMailshotThreadKey) || null;
         el('incoming-mailshot-reader').innerHTML = selectedMailshotThread && !mailshotStatus.error
             ? gmailReaderHtml(selectedMailshotThread) : '';
@@ -3146,7 +3278,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         el('incoming-link-error').classList.add('hidden');
         el('incoming-link-title').textContent = conversation.label;
         el('incoming-link-summary').textContent = conversation.links.length
-            ? 'Choose another board to move this conversation.'
+            ? 'Link another project board, or remove one of the current links.'
             : 'Link this person or group when the conversation belongs to active work.';
         el('incoming-current-links').innerHTML = conversation.links.length
             ? conversation.links
@@ -3202,6 +3334,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             });
             const id = Number(result.id);
             if (!result.success || !id) throw new Error(result.error || 'The board link could not be confirmed.');
+            if (result.synced === false) actions.toast('Saved locally. Connect Tensology to synchronize this change.', 'info');
             updateWhatsAppLink(id, {
                 id, board_id: boardId, board_name: board.name, auto_snapshot: autoSnapshot,
                 source: 'whatsapp', source_thread_id: conversation.threadId, label: conversation.label,
@@ -3415,6 +3548,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                 method: 'DELETE'
             });
             if (!result.success) throw new Error(result.error || 'The unlink could not be confirmed.');
+            if (result.synced === false) actions.toast('Saved locally. Connect Tensology to synchronize this change.', 'info');
         } catch (error) {
             if (error.status !== 404 || error.data?.detail !== 'Link not found') {
                 const message = error.message || 'Could not unlink the channel.';
@@ -3541,13 +3675,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                         return;
                     }
                     const config = MAIL_CHANNELS[source];
-                    upsertRow(el(config.list), `[${config.attr}="${CSS.escape(conversation.key)}"]`, mailThreadButtonHtml(conversation, state[config.stateKey], config.attr), (row) => {
-                        row.addEventListener('click', () => {
-                            state[config.stateKey] = row.dataset[config.dataKey] || '';
-                            state.incomingMobileDetail = true;
-                            renderIncomingWorkspace();
-                        });
-                    });
+                    upsertRow(el(config.list), `[${config.attr}="${CSS.escape(conversation.key)}"]`, mailThreadButtonHtml(conversation, state[config.stateKey], config.attr), (row) => bindMailThread(row, source));
                     if (conversation.key === state[config.stateKey]) {
                         appendMessagesInPlace(el(config.reader)?.querySelector('.incoming-gmail-messages'), oldestFirst(conversation.messages), mailMessageHtml);
                     }
@@ -3590,6 +3718,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         });
         if (next.length === before.length) return false;
         state.incomingProposals = next;
+        actions.renderSidebar();
         if (context.workspaceMode === 'incoming') renderIncomingWorkspace();
         return true;
     }
@@ -3699,6 +3828,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         channelLoadSeq++;
         const source = button.dataset.incomingChannelResync;
         const whatsapp = source === 'whatsapp';
+        const managedGmail = source === 'gmail' && state.incomingChannels.gmail?.authority === 'tensology';
         const name = whatsapp ? 'WhatsApp' : source === 'mailshot' ? 'Mailshot' : 'Gmail';
         const label = button.querySelector('strong');
         const status = el(`incoming-${source}-resync-status`);
@@ -3711,12 +3841,27 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         label.textContent = 'Syncing...';
         try {
             const sync = whatsapp ? await actions.api('/tickets/whatsapp/sync', { method: 'POST' }) : null;
+            if (managedGmail) {
+                const result = await actions.api('/workflows/studio/incoming/check', {
+                    method: 'POST', body: { sources: ['gmail'] },
+                });
+                if (!result.queued?.includes('gmail')) {
+                    throw new Error(result.failed?.gmail || 'Tensology could not queue Gmail sync.');
+                }
+            }
             const channelSeq = channelLoadSeq;
             const data = await actions.api('/workflows/studio/incoming?limit=150', { cache: 'no-store' });
             if (channelSeq !== channelLoadSeq) return;
             // Paint first so the lists reflect this response even when Gmail reports an error.
             paintIncomingChannels(data);
-            if (source === 'gmail' && data.channels?.gmail?.error) throw new Error(data.channels.gmail.error);
+            if (managedGmail) {
+                status.textContent = 'Gmail sync requested in Tensology.';
+                return;
+            }
+            if (source === 'gmail' && data.channels?.gmail?.error) {
+                if (data.channels.gmail.authority === 'tensology') return;
+                throw new Error(data.channels.gmail.error);
+            }
             state.incomingLoadedAt = Date.now();
             if (source === 'mailshot' && data.channels?.mailshot?.error) return;
             const issue = sync?.warning || sync?.error;
@@ -3746,6 +3891,59 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         const label = button.querySelector('strong');
         if (label) label.textContent = busy ? 'Checking...' : 'Check incoming';
     }
+    async function reviewLocalProposals(event) {
+        const opener = event.currentTarget;
+        const dialog = document.createElement('dialog');
+        dialog.className = 'studio-dialog submitted-proposal-source-dialog';
+        dialog.setAttribute('aria-labelledby', 'incoming-local-review-title');
+        dialog.innerHTML = `<form method="dialog"><header><div><h2 id="incoming-local-review-title">Review local proposals</h2></div>
+            <button class="proposal-btn ghost">Close</button></header>
+            <div class="submitted-proposal-source-body">
+                <p role="status" data-local-import-status>Checking saved proposals against Tensology...</p>
+                <div class="proposal-cards" data-local-import-rows></div>
+            </div></form>`;
+        dialog.addEventListener('close', () => {
+            dialog.remove();
+            opener.focus({ preventScroll: true });
+        }, { once: true });
+        document.body.appendChild(dialog);
+        dialog.showModal();
+        const status = dialog.querySelector('[data-local-import-status]');
+        const list = dialog.querySelector('[data-local-import-rows]');
+        const endpoint = '/workflows/studio/incoming/proposals/local-review';
+        try {
+            const { proposals } = await actions.api(endpoint, { cache: 'no-store' });
+            if (!dialog.open) return;
+            status.textContent = proposals.length ? '' : 'No local proposals need review.';
+            const esc = actions.escapeHtml;
+            for (const proposal of proposals) {
+                const card = document.createElement('article');
+                card.className = 'proposal-card';
+                card.innerHTML = `<p class="proposal-project">${esc([proposal.project, proposal.source].filter(Boolean).join(' · '))}</p>
+                    <h3 class="proposal-title">${esc(proposal.title)}</h3>
+                    <p class="proposal-desc">${esc(proposal.description)}</p>
+                    ${proposal.can_import ? '<div class="proposal-actions"><button type="button" class="proposal-btn primary">Import into Tensology</button></div>' : `<p class="proposal-desc">${esc(proposal.reason)}</p>`}`;
+                const button = card.querySelector('button');
+                button?.addEventListener('click', async () => {
+                    button.disabled = true;
+                    try {
+                        await actions.api(endpoint, { method: 'POST', body: { key: proposal.key, revision: proposal.revision } });
+                        card.remove();
+                        status.textContent = 'Proposal imported into Tensology.';
+                        if (dialog.open) dialog.querySelector('header button').focus();
+                        void refreshIncomingData({ force: true });
+                    } catch (error) {
+                        button.disabled = false;
+                        status.textContent = error.message || 'Could not import this proposal.';
+                    }
+                });
+                list.appendChild(card);
+            }
+        } catch (error) {
+            status.textContent = error.message || 'Could not check local proposals.';
+        }
+    }
+
     function refreshIncomingData(options) {
         if (dismissExpiredBusy) return Promise.resolve();
         if (state.incomingLoad && !options?.force) return state.incomingLoad;
@@ -3774,6 +3972,8 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
                 state.incomingPendingMerges = result.pending_merges || [];
                 state.incomingProposalsError = result.error || '';
                 state.incomingProposalSync = result.sync || null;
+                el('incoming-local-imports')?.classList.toggle('hidden', !result.can_review_local_imports);
+                actions.renderSidebar();
                 const autoAccept = el('incoming-auto-accept');
                 if (autoAccept && !autoAccept.disabled) autoAccept.checked = result.auto_accept === true;
                 setResyncBusy(false);
@@ -3836,6 +4036,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             el(`incoming-panel-${state.incomingFilter}`)?.querySelector('.selected')?.focus();
         }));
         el('incoming-resync')?.addEventListener('click', checkIncoming);
+        el('incoming-local-imports')?.addEventListener('click', reviewLocalProposals);
         document.querySelectorAll('[data-incoming-channel-resync]').forEach((button) =>
             button.addEventListener('click', () => resyncIncomingChannel(button))
         );
@@ -3862,6 +4063,10 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             }
             refreshIncomingData({ force: true });
         });
+        el('incoming-mail-project-form')?.addEventListener('submit', saveMailProject);
+        el('incoming-mail-project-dialog')?.addEventListener('cancel', event => {
+            if (el('incoming-mail-project-select').disabled) event.preventDefault();
+        });
         startIncomingAutoRefresh();
         el('incoming-link-form').addEventListener('submit', (event) => {
             event.preventDefault();
@@ -3877,6 +4082,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             clearProposalReview();
         },
         bindEvents,
+        incomingProposalCount,
         incomingConversations,
         openFilePreview,
         clearProposalReview,

@@ -1,5 +1,6 @@
 """Stale Gmail intake rows clear from the Gmail folder once the message leaves the inbox (2026-11-11)."""
 from contextlib import contextmanager
+from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import create_engine
@@ -53,6 +54,33 @@ DJANGO = {"event_id": 295150, "source": "gmail", "source_message_id": "gone-1", 
 
 def _keys(result):
     return [row["key"] for row in result["items"] if row["source"] == "gmail"]
+
+
+def test_connected_gmail_lists_and_opens_tensology_snapshots_only(isolated, monkeypatch):
+    from distr.core.incoming.proposal_conversation import _mail_conversation
+
+    calls = isolated(gmail_rows=[], gmail_status={}, intake_rows=[DJANGO], inbox_ids=set())
+    monkeypatch.setattr("distr.core.settings.load_settings_from_db", lambda: {
+        "tensology_enabled": True, "tensology_key": "test-key",
+    })
+    upstream = Mock()
+    upstream.get.return_value = {"emails": LIVE, "sync": {
+        "last_succeeded_at": "2026-11-19T13:44:00Z", "error": "Gmail is rate-limited.",
+    }}
+    monkeypatch.setattr("distr.core.tensology_client.configured_tensology_client", lambda **kwargs: upstream)
+    monkeypatch.setattr("distr.core.incoming.project_links.project_links", lambda **kwargs: [])
+    direct = Mock(side_effect=AssertionError("DecisionsAI must not fetch Gmail in connected mode"))
+    monkeypatch.setattr(incoming, "_load_gmail_inbox", direct)
+    listing = incoming.list_development_incoming(limit=50)
+    assert _keys(listing) == ["gmail:live-1"]
+    assert listing["channels"]["gmail"]["error"] == "Gmail is rate-limited."
+    messages, anchor = _mail_conversation("gmail", "t1", {"live-1"})
+    assert anchor == messages[0]["source_message_id"] == "live-1"
+    assert [entry.kwargs["query"] for entry in upstream.get.call_args_list] == [{"limit": 50}, {"thread": "t1"}]
+    upstream.get.side_effect = RuntimeError("Offline")
+    assert _keys(incoming.list_development_incoming(limit=50)) == []
+    assert calls["inbox_ids"] == 0
+    direct.assert_not_called()
 
 
 def test_cleared_gmail_message_no_longer_shows_as_intake_fallback(isolated):

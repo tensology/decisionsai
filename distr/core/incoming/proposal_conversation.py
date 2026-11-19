@@ -135,9 +135,21 @@ def _mail_item(source, thread, row):
 
 def _mail_conversation(source, thread, ids):
     if source == "gmail":
-        from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
+        from .proposal_sync import proposal_authority
+        from distr.core.settings import load_settings_from_db
+        from distr.core.tensology_client import TensologyApiError
 
-        rows = GoogleWorkspaceConnector().get_email_thread(thread)
+        if proposal_authority(load_settings_from_db()):
+            from .service import _canonical_gmail
+            try:
+                rows = _canonical_gmail({"thread": thread})["emails"]
+            except TensologyApiError as error:
+                if error.status == 404:
+                    return [], ""
+                raise
+        else:
+            from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
+            rows = GoogleWorkspaceConnector().get_email_thread(thread)
         if rows is None:
             raise RuntimeError("The Gmail conversation could not be checked.")
         rows = [row for row in rows if str(row.get("threadId") or "") == thread and row.get("id")]

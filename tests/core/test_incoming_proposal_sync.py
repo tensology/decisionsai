@@ -18,6 +18,7 @@ def remote():
 
 @pytest.fixture
 def client(monkeypatch):
+    monkeypatch.setattr('distr.core.incoming.project_links.project_links', lambda **kwargs: [])
     monkeypatch.setattr('distr.core.incoming.project_links.source_project_index', lambda **kwargs: {('gmail', 'thread'): {2, 3}})
     fake = Mock()
     fake.get.return_value = [{'id': 175, 'decisions_project_id': 2}, {'id': 191, 'decisions_project_id': 3}]
@@ -41,6 +42,103 @@ def test_explicit_project_identity_beats_display_name():
     assert mapped['project_id'] == 2
     assert mapped['updated_at'] == remote()['updated_at']
     assert mapped['task_completed_indexes'] == []
+
+
+def test_connected_refresh_only_lists_and_acknowledges_canonical_proposals(client, monkeypatch):
+    monkeypatch.setattr('distr.core.settings.load_settings_from_db', lambda: {
+        'tensology_enabled': True, 'tensology_key': 'test-key',
+    })
+    monkeypatch.setattr(incoming, '_project_map', lambda: {})
+    fetch = Mock(return_value=[remote()])
+    monkeypatch.setattr(sync, 'fetch_remote_proposals', fetch)
+    triage = Mock(side_effect=AssertionError('Local proposal triage must stay idle'))
+    legacy = Mock(side_effect=AssertionError('Local drafts must not be imported or mixed into the feed'))
+    monkeypatch.setattr(incoming, '_local_proposals', triage)
+    monkeypatch.setattr(incoming, '_saved_local_proposals', legacy)
+    monkeypatch.setattr(sync, 'reconcile', legacy)
+    incoming._store_proposals_list_cache({'proposals': [{'id': 'local', 'origin': 'local'}]})
+    read = Mock(return_value=[remote()])
+    monkeypatch.setattr('distr.core.tensology_client.fetch_pending_work_requests', read)
+
+    initial = incoming.list_incoming_proposals()
+    assert [row['id'] for row in initial['proposals']] == ['tensology:87']
+    read.assert_called_once()
+    refreshed = incoming.list_incoming_proposals(force=True, reconcile_request_id='check-1')
+    assert [row['id'] for row in refreshed['proposals']] == ['tensology:87']
+    assert refreshed['sync']['state'] == 'complete'
+    client.post.assert_called_once_with(
+        'work-requests/reconciliation', refreshed['sync'], idempotency_key='reconcile-check-1',
+    )
+    fetch.side_effect = RuntimeError('Tensology is offline')
+    offline = incoming.list_incoming_proposals(force=True)
+    assert offline['sync']['state'] == 'partial'
+    assert offline['proposals'] == []
+    triage.assert_not_called()
+    legacy.assert_not_called()
+
+
+def test_stale_local_card_cannot_import_or_create_work_when_tensology_owns_proposals(client, monkeypatch):
+    monkeypatch.setattr('distr.core.settings.load_settings_from_db', lambda: {
+        'tensology_enabled': True, 'tensology_key': 'test-key',
+    })
+    local = {'id': 'local:gmail:thread', 'source': 'gmail', 'project_id': 2}
+    with pytest.raises(ValueError, match='saved local proposal'):
+        sync.update_proposal(local, {'title': 'Changed'}, expected_updated_at=None)
+    with pytest.raises(ValueError, match='saved local proposal'):
+        incoming.create_proposal_thread(local)
+    with pytest.raises(ValueError, match='saved local proposal'):
+        incoming.merge_proposals({'id': 'tensology:87', 'source': 'gmail'}, local)
+    client.post.assert_not_called()
+    client.patch.assert_not_called()
+
+
+def test_local_import_requires_current_review_and_excludes_covered_evidence(client, monkeypatch):
+    first = {'id': 'local:gmail:new', 'origin': 'local', 'source': 'gmail', 'source_thread_id': 'thread',
+             'message_ids': ['m2'], 'title': 'Review this', 'project_id': 2, 'evidence': []}
+    exact = {**first, 'id': 'local:gmail:exact', 'message_ids': ['m1']}
+    overlap = {**first, 'id': 'local:gmail:overlap', 'message_ids': ['m1', 'm3']}
+    monkeypatch.setattr(sync, '_reviewable_local_rows', lambda: [first, exact, overlap])
+    monkeypatch.setattr(sync, 'fetch_remote_proposals', lambda: [remote()])
+    monkeypatch.setattr('distr.core.incoming.project_links.proposal_in_scope', lambda row: True)
+    upload = Mock(return_value={'id': 99, 'created': True})
+    monkeypatch.setattr(sync, '_upload', upload)
+
+    eligible, blocked = sync.review_local_imports()
+    assert eligible['can_import'] and not blocked['can_import']
+    assert 'already covered' in blocked['reason']
+    upload.assert_not_called()
+    with pytest.raises(ValueError):
+        sync.import_reviewed_local_proposal(eligible['key'], 'old-revision')
+    with pytest.raises(ValueError):
+        sync.import_reviewed_local_proposal(blocked['key'], blocked['revision'])
+    upload.assert_not_called()
+    assert sync.import_reviewed_local_proposal(eligible['key'], eligible['revision']) == {'id': 99, 'created': True}
+    upload.assert_called_once()
+
+
+def test_no_key_keeps_standalone_proposals_without_import(monkeypatch):
+    from distr.core.tensology_client import TensologyApiError
+
+    monkeypatch.setattr('distr.core.settings.load_settings_from_db', lambda: {'tensology_enabled': False})
+    monkeypatch.setattr(incoming, '_project_map', lambda: {})
+    monkeypatch.setattr('distr.core.incoming.project_links.project_links', lambda **kwargs: [])
+    monkeypatch.setattr(sync, 'fetch_remote_proposals', Mock(side_effect=TensologyApiError('No key', code='not_configured')))
+    update = Mock(side_effect=AssertionError('Standalone proposals must stay local'))
+    monkeypatch.setattr(sync, 'reconcile', update)
+    monkeypatch.setattr('distr.core.incoming.service.list_development_incoming', lambda **kwargs: {'items': []})
+    local = {'id': 'local:gmail:thread', 'origin': 'local', 'source': 'gmail', 'dedupe_key': 'gmail:thread',
+             'source_thread_id': 'thread', 'message_ids': ['m1'], 'title': 'Standalone proposal'}
+    monkeypatch.setattr(incoming, '_local_proposals', lambda *args: [local])
+    monkeypatch.setattr(incoming, '_record_local_proposals', lambda *args: None)
+    monkeypatch.setattr(incoming, '_saved_local_proposals', lambda: [])
+    monkeypatch.setattr(incoming, '_scoped_proposals', lambda rows: rows)
+    monkeypatch.setattr(incoming, '_accepted_proposal_keys', lambda **kwargs: set())
+
+    payload = incoming.list_incoming_proposals(force=True)
+    assert [row['id'] for row in payload['proposals']] == ['local:gmail:thread']
+    assert payload['can_review_local_imports'] is False
+    assert payload['tensology']['error'] == ''
+    update.assert_not_called()
 
 
 def test_newer_local_assignment_updates_canonical_once(client, monkeypatch):
@@ -80,6 +178,77 @@ def test_dry_run_never_writes(client, monkeypatch):
     assert result['planned_changes'][0]['action'] == 'reassign'
     client.patch.assert_not_called()
     client.post.assert_not_called()
+
+
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_local_only_mail_link_is_reported_as_partial_not_success(client, monkeypatch, dry_run):
+    monkeypatch.setattr('distr.core.incoming.project_links.mail_project_links', lambda: {('gmail', 'thread'): (2, 'm1')})
+    monkeypatch.setattr('distr.core.incoming.project_links.project_links', lambda: [])
+    monkeypatch.setattr('distr.core.initiative.attention.learned_thread_links', lambda: {})
+    monkeypatch.setattr(incoming, '_TRIAGE_CACHE', {'running': False})
+    local = incoming._from_tensology(remote(), {})
+    local.update(id='local:gmail:thread', origin='local')
+    _, result = sync.reconcile([local], [], dry_run=dry_run)
+    assert result['state'] == 'partial'
+    assert result['uploaded'] == 0
+    assert result['conflicts'][0]['proposal_id'] == local['id']
+    assert 'only in DecisionsAI' in result['conflicts'][0]['reason']
+    assert all(call.args[0] != 'work-requests/sync' for call in client.post.call_args_list)
+    if dry_run:
+        client.post.assert_not_called()
+    else:
+        assert client.post.call_args.args[1]['state'] == 'partial'
+
+
+@pytest.mark.parametrize('dry_run', [False, True])
+@pytest.mark.parametrize('preingested', [False, True])
+def test_future_thread_inherits_only_verified_existing_sender_grant(client, monkeypatch, dry_run, preingested):
+    sender = {'source': 'mail_sender', 'source_thread_id': 'client@example.test', 'revision': 'sender-rev',
+              'projects': [{'id': 175, 'decisions_project_id': 2}]}
+    monkeypatch.setattr('distr.core.incoming.project_links.mail_project_links', lambda: {('gmail', 'thread'): (2, 'm1')})
+    shared = [sender]
+    if preingested:
+        shared.append({'source': 'gmail', 'source_thread_id': 'thread', 'projects': [], 'link_explicit': False})
+    monkeypatch.setattr('distr.core.incoming.project_links.project_links', lambda: shared)
+    monkeypatch.setattr('distr.core.initiative.attention.learned_thread_links', lambda: {})
+    verified = Mock(return_value='client@example.test')
+    monkeypatch.setattr('distr.core.incoming.project_links.verified_mail_sender', verified)
+    monkeypatch.setattr(incoming, '_TRIAGE_CACHE', {'running': False})
+    local = incoming._from_tensology(remote(), {})
+    local.update(id='local:gmail:thread', origin='local')
+    client.post.side_effect = lambda path, body, **kwargs: dict(remote(), created=True) if path == 'work-requests/sync' else {}
+    _, result = sync.reconcile([local], [], dry_run=dry_run)
+    assert result['state'] == 'complete'
+    verified.assert_called_once_with('gmail', 'thread', 'm1')
+    if dry_run:
+        client.post.assert_not_called()
+        assert [row['action'] for row in result['planned_changes']] == ['inherit_sender_link', 'create']
+    else:
+        upload = next(call for call in client.post.call_args_list if call.args[0] == 'work-requests/sync')
+        assert upload.args[1]['sender_email'] == 'client@example.test'
+        assert upload.args[1]['sender_revision'] == 'sender-rev'
+        assert result['uploaded'] == 1
+
+
+@pytest.mark.parametrize('mode', ['removed_sender', 'removed_conversation', 'wrong_sender'])
+def test_future_sender_inheritance_never_restores_removed_or_different_links(client, monkeypatch, mode):
+    sender = {'source': 'mail_sender', 'source_thread_id': 'client@example.test', 'revision': 'sender-rev',
+              'projects': [] if mode == 'removed_sender' else [{'id': 175, 'decisions_project_id': 2}]}
+    links = [sender]
+    if mode == 'removed_conversation':
+        links.append({'source': 'gmail', 'source_thread_id': 'thread', 'projects': []})
+    monkeypatch.setattr('distr.core.incoming.project_links.mail_project_links', lambda: {('gmail', 'thread'): (2, 'm1')})
+    monkeypatch.setattr('distr.core.incoming.project_links.project_links', lambda: links)
+    monkeypatch.setattr('distr.core.initiative.attention.learned_thread_links', lambda: {})
+    monkeypatch.setattr('distr.core.incoming.project_links.verified_mail_sender',
+                        lambda *a: 'other@example.test' if mode == 'wrong_sender' else 'client@example.test')
+    monkeypatch.setattr(incoming, '_TRIAGE_CACHE', {'running': False})
+    local = incoming._from_tensology(remote(), {})
+    local.update(id='local:gmail:thread', origin='local')
+    _, result = sync.reconcile([local], [])
+    assert result['state'] == 'partial'
+    assert result['uploaded'] == 0
+    assert all(call.args[0] != 'work-requests/sync' for call in client.post.call_args_list)
 
 
 def test_partial_source_overlap_reports_conflict_instead_of_duplicate(client):

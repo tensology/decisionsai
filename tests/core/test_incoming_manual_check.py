@@ -10,6 +10,8 @@ def test_only_explicit_post_queues_upstream_check_and_get_is_read_only(monkeypat
     upstream.post.return_value = {'checks': {'whatsapp': {'source_state': 'queued'}}, 'queued': ['whatsapp'], 'failed': {}}
     upstream.get.return_value = {'checks': {'whatsapp': {'source_state': 'complete'}}}
     monkeypatch.setattr('distr.core.tensology_client.configured_tensology_client', lambda **kwargs: upstream)
+    local_check = Mock()
+    monkeypatch.setattr('distr.core.incoming.mail_check.start_mail_check', local_check)
     app, router = FastAPI(), APIRouter()
     register_routes(router, None)
     app.include_router(router)
@@ -22,17 +24,39 @@ def test_only_explicit_post_queues_upstream_check_and_get_is_read_only(monkeypat
     assert upstream.post.call_args.args == ('incoming/check', {'sources': ['whatsapp', 'gmail', 'mailshot']})
     assert client.get(url).status_code == 200
     assert upstream.post.call_count == 1
+    local_check.assert_not_called()
+
+
+def test_connected_source_check_only_queues_selected_channel(monkeypatch):
+    from distr.gui.web.routes.development.incoming import register_routes
+    upstream = Mock()
+    upstream.post.return_value = {'queued': ['gmail']}
+    monkeypatch.setattr('distr.core.tensology_client.configured_tensology_client', lambda **kwargs: upstream)
+    app, router = FastAPI(), APIRouter()
+    register_routes(router, None)
+    app.include_router(router)
+    client = TestClient(app)
+    url = '/workflows/studio/incoming/check'
+    assert client.post(url, json={'sources': ['gmail', 'gmail']}).json()['queued'] == ['gmail']
+    assert client.post(url, json={'sources': ['unknown']}).status_code == 400
+    upstream.post.assert_called_once()
+    assert upstream.post.call_args.args == ('incoming/check', {'sources': ['gmail']})
 
 
 def test_unavailable_upstream_does_not_claim_source_check_success(monkeypatch):
     from distr.gui.web.routes.development.incoming import register_routes
-    monkeypatch.setattr('distr.core.tensology_client.configured_tensology_client', Mock(side_effect=RuntimeError('old server')))
+    upstream = Mock()
+    upstream.post.side_effect = RuntimeError('offline')
+    monkeypatch.setattr('distr.core.tensology_client.configured_tensology_client', lambda **kwargs: upstream)
+    local_check = Mock()
+    monkeypatch.setattr('distr.core.incoming.mail_check.start_mail_check', local_check)
     app, router = FastAPI(), APIRouter()
     register_routes(router, None)
     app.include_router(router)
     response = TestClient(app).post('/workflows/studio/incoming/check')
     assert response.status_code == 503
     assert response.json()['success'] is False
+    local_check.assert_not_called()
 
 
 def test_forced_proposal_reconciliation_never_queues_a_manual_source_check(monkeypatch):

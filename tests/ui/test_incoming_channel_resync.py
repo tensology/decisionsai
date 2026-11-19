@@ -9,6 +9,100 @@ from tests.ui.test_incoming_dismiss_undo import fixture_base
 pytestmark = pytest.mark.e2e_playwright
 
 
+@pytest.mark.parametrize("width", [390, 1440])
+def test_saved_proposals_require_explicit_review_and_import(page, fixture_base, tmp_path, width):
+    _install_api(page, [])
+    imported = []
+    page.route("**/api/workflows/studio/incoming/proposals?*", lambda route: route.fulfill(json={
+        "proposals": [], "can_review_local_imports": True,
+    }))
+
+    def review(route):
+        if route.request.method == "POST":
+            imported.append(route.request.post_data_json)
+            return route.fulfill(json={"id": 99, "created": True})
+        return route.fulfill(json={"proposals": [
+            {"key": "local-new", "revision": "reviewed", "can_import": True, "title": "Saved proposal",
+             "description": "Follow up on the original request.", "project": "Example Project", "source": "whatsapp"},
+            {"key": "local-overlap", "can_import": False, "title": "Overlapping proposal", "source": "whatsapp",
+             "reason": "Part of this proposal is already covered in Tensology."},
+        ]})
+
+    page.route("**/api/workflows/studio/incoming/proposals/local-review", review)
+    page.set_viewport_size({"width": width, "height": 850})
+    page.goto(f"{fixture_base}/development/incoming/")
+    opener = page.get_by_role("button", name="Review local proposals")
+    opener.click()
+    dialog = page.get_by_role("dialog", name="Review local proposals")
+    expect(dialog.get_by_text("Follow up on the original request.")).to_be_visible()
+    expect(dialog.get_by_text("Part of this proposal is already covered in Tensology.")).to_be_visible()
+    expect(dialog.get_by_role("button", name="Import into Tensology")).to_have_count(1)
+    assert imported == []
+    page.screenshot(path=tmp_path / "local-review.png")
+    dialog.get_by_role("button", name="Import into Tensology").click()
+    expect(dialog.get_by_text("Proposal imported into Tensology.")).to_be_visible()
+    assert imported == [{"key": "local-new", "revision": "reviewed"}]
+    page.screenshot(path=tmp_path / "local-imported.png")
+    dialog.get_by_role("button", name="Close").click()
+    expect(opener).to_be_focused()
+
+
+@pytest.mark.parametrize("width", [390, 1440])
+def test_tensology_gmail_cooldown_keeps_cached_mail_readable(page, fixture_base, tmp_path, width):
+    _install_api(page, [])
+    state = {"available": True}
+    scheduled = []
+
+    def queue(route):
+        assert route.request.method == "POST"
+        scheduled.append(route.request.post_data_json)
+        route.fulfill(json={"queued": ["gmail"]})
+
+    def channels(route):
+        available = state["available"]
+        items = [{
+            "key": "gmail:cached", "source": "gmail", "source_thread_id": "cached",
+            "source_message_id": "cached", "subject": "Cached Gmail conversation",
+            "text": "Cached Gmail message", "sender": "Test sender",
+            "created_at": "2026-11-19T10:00:00Z",
+        }] if available else []
+        route.fulfill(json={"items": items, "channels": {"gmail": {
+            "authority": "tensology", "connected": available,
+            "error": "Gmail is rate-limited. Sync will retry automatically." if available else "The Tensology Gmail cache is unavailable.",
+        }}})
+
+    page.route("**/api/workflows/studio/incoming?*", channels)
+    page.route("**/api/workflows/studio/incoming/check", queue)
+    page.set_viewport_size({"width": width, "height": 850})
+    page.goto(f"{fixture_base}/development/incoming/")
+    page.get_by_role("tab", name="Gmail").click()
+    panel = page.get_by_role("tabpanel", name="Gmail")
+    expect(panel.get_by_text("Gmail sync paused")).to_be_visible()
+    expect(panel.get_by_role("button", name="Reconnect Google")).to_have_count(0)
+    row = panel.locator('[data-incoming-gmail-thread="gmail:cached"]')
+    expect(row).to_be_visible()
+    resync = panel.get_by_role("button", name="Resync Gmail")
+    with page.expect_response("**/api/workflows/studio/incoming?*"):
+        resync.click()
+    expect(resync).to_be_enabled()
+    expect(panel.get_by_text("Gmail sync requested in Tensology.")).to_be_visible()
+    assert scheduled == [{"sources": ["gmail"]}]
+    expect(panel.get_by_text("Gmail is rate-limited. Sync will retry automatically.")).to_have_count(1)
+    page.screenshot(path=tmp_path / "cooldown.png")
+    row.click()
+    expect(panel.locator("article").get_by_text("Cached Gmail message", exact=True)).to_be_visible()
+    if width == 390:
+        page.screenshot(path=tmp_path / "reader.png")
+        panel.get_by_role("button", name="Back to conversations").click()
+    state["available"] = False
+    page.reload()
+    page.get_by_role("tab", name="Gmail").click()
+    expect(panel.get_by_text("The Tensology Gmail cache is unavailable.")).to_be_visible()
+    expect(panel.get_by_role("button", name="Connect Google")).to_have_count(0)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=tmp_path / "unavailable.png")
+
+
 @pytest.mark.parametrize('width', [390, 1440])
 def test_resync_reloads_the_selected_conversation(page, fixture_base, tmp_path, width):
     requests = []

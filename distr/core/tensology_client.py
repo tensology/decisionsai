@@ -615,6 +615,8 @@ def _resolve_tensology_project(ticket: dict[str, Any]):
             project = db.get(Project, int(raw_id))
             if project is not None and project.deleted_at is not None:
                 return None
+        if project is None and ticket.get('connection_id'):
+            return None  # Customer mappings are explicit; a same-name project is not an execution target.
         if project is None and name:
             project = db.query(Project).filter(Project.deleted_at.is_(None), Project.name.ilike(name)).first()
         if project is None:
@@ -918,13 +920,17 @@ def _execution_prompt(
         "source": source,
         "attachments": attachments,
         "discussion": discussion,
+        "incoming_followups": [row for row in ticket.get('incoming_followups') or []
+                               if isinstance(row, dict) and row.get('dispatched') is True],
         "discussion_truncated": bool(ticket.get("discussion_truncated")),
         "local_image_paths": ticket.get("local_image_paths") if isinstance(ticket.get("local_image_paths"), list) else [],
         "local_attachment_paths": ticket.get("local_attachment_paths") if isinstance(ticket.get("local_attachment_paths"), list) else [],
     }, ensure_ascii=False, indent=2, default=str)
     return (
         f"Execute approved Tensology ticket {ticket.get('reference')}: {ticket.get('title')}\n\n"
-        f"Complexity: {complexity}.\n"
+        + ('Continue the existing work and address the accepted customer follow-ups below. Preserve earlier results and avoid repeating completed changes.\n\n'
+           if ticket.get('incoming_followups') else '')
+        + f"Complexity: {complexity}.\n"
         f"Description:\n{ticket.get('description') or 'No additional description.'}\n\n"
         f"Approved implementation plan:\n{ticket.get('implementation_plan') or 'Use the repository evidence and approved scope.'}\n\n"
         f"Tasks:\n{task_lines}\n\n"
@@ -1473,12 +1479,13 @@ def _process_tensology_ticket(client: TensologyClient, ticket: dict[str, Any]) -
     Returns True when the ticket is live in a Development thread.
     """
     project = _resolve_tensology_project(ticket)
-    if project is None:
+    if project is None and not ticket.get('connection_id'):
         project = _create_tensology_project(client, ticket)
     if project is None:
         _report_tensology_unmatched_project(client, ticket)
         return False
     chat_id = _existing_tensology_thread(ticket)
+    created_for_ticket = chat_id is None
     route = {
         "complexity": str(ticket.get("execution_complexity") or ""),
         "backend": str(ticket.get("decisions_backend") or ""),
@@ -1526,6 +1533,8 @@ def _process_tensology_ticket(client: TensologyClient, ticket: dict[str, Any]) -
             logging.getLogger(__name__).debug("Incoming ticket notification failed", exc_info=True)
 
     thread_url = f"http://127.0.0.1:8765/development/threads/{chat_id}/"
+    from distr.core.incoming.followups import append_ticket_followups
+    append_ticket_followups(ticket, chat_id, int(project['id']), included_in_initial_prompt=created_for_ticket)
     if str(ticket.get("decisions_thread_id") or "") != str(chat_id):
         claimed = client.post(
             f"tickets/{int(ticket['id'])}/execution",

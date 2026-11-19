@@ -12,6 +12,22 @@ _LAST_RESULT: dict[str, Any] = {"state": "idle", "uploaded": 0, "updated": 0, "c
 _WAITING_FOR_TRIAGE: set[str] = set()
 
 
+def proposal_authority(settings):
+    if settings.get("tensology_enabled") and str(settings.get("tensology_key") or "").strip():
+        return str(settings.get("tensology_url") or "https://www.tensology.com").rstrip("/")
+    return None
+
+
+def require_authoritative_proposal(proposal):
+    """Keep an old local card from bypassing the connected proposal authority."""
+    if str(proposal.get("id") or "").startswith("tensology:"):
+        return
+    from distr.core.settings import load_settings_from_db
+
+    if proposal_authority(load_settings_from_db()):
+        raise ValueError("This is a saved local proposal. Open its Tensology proposal before taking action.")
+
+
 def wait_for_triage(request_id):
     with _LOCK:
         _WAITING_FOR_TRIAGE.add(str(request_id or ''))
@@ -24,6 +40,9 @@ def finish_triage(rows):
         _WAITING_FOR_TRIAGE.clear()
     if not waiting:
         return
+    from distr.core.settings import load_settings_from_db
+    if proposal_authority(load_settings_from_db()):
+        return  # A standalone run may have been in flight when the integration was enabled.
     try:
         remote = fetch_remote_proposals()
         finished = False
@@ -130,6 +149,7 @@ def update_proposal(proposal, changes, *, expected_updated_at):
     """A user save must update the canonical row before the UI reports success."""
     from distr.core.incoming import proposals as incoming
     from distr.core.tensology_client import configured_tensology_client
+    require_authoritative_proposal(proposal)
     client = configured_tensology_client(source="incoming-edit")
     allowed = {"project_id", "title", "description", "tasks", "task_completed_indexes", "priority", "estimated_minutes"}
     if set(changes) - allowed:
@@ -160,7 +180,32 @@ def update_proposal(proposal, changes, *, expected_updated_at):
     return incoming._from_tensology(saved, incoming._project_map())
 
 
-def _upload(client, row, mapping):
+def _sender_import_context(row, shared_links):
+    """Inherit an existing sender grant for a new provider-verified conversation."""
+    if row.get('source') not in {'gmail', 'mailshot'}:
+        return {}
+    shared_links = [link for link in shared_links if isinstance(link, dict)]
+    key = (row.get('source'), row.get('source_thread_id'))
+    if any((link.get('source'), link.get('source_thread_id')) == key
+           and (link.get('projects') or link.get('link_explicit') is not False or link.get('is_archived')) for link in shared_links):
+        return {}  # Existing conversation links, including empty tombstones, are authoritative.
+    senders = [link for link in shared_links if link.get('source') == 'mail_sender']
+    if not senders or not row.get('message_ids'):
+        return {}
+    from .project_links import verified_mail_sender
+    sender = verified_mail_sender(row['source'], row['source_thread_id'], str(row['message_ids'][-1]))
+    canonical = next((link for link in senders if link.get('source_thread_id') == sender), None)
+    projects = {project.get('decisions_project_id') for project in (canonical or {}).get('projects') or []
+                if isinstance(project, dict) and type(project.get('decisions_project_id')) is int}
+    if not projects or (row.get('project_id') not in projects and not (row.get('needs_project') and row.get('project_id') is None)):
+        return {}
+    revision = canonical.get('revision')
+    if not isinstance(revision, str) or not revision:
+        raise ValueError('Tensology did not provide the sender link revision. Refresh Incoming before syncing.')
+    return {'sender_email': sender, 'sender_revision': revision}
+
+
+def _upload(client, row, mapping, *, sender_context=None):
     from .project_links import proposal_in_scope
     if not proposal_in_scope(row, allow_review=True):
         raise ValueError('Link the source conversation to this project before syncing its proposal.')
@@ -184,6 +229,10 @@ def _upload(client, row, mapping):
             "task_completed_indexes": row.get('task_completed_indexes') or [],
             "priority": row.get("priority") or "medium", "evidence": row.get("evidence") or [],
             "estimated_hours": str(Decimal(str(60 if minutes in (None, '') else minutes)) / 60)}
+    if sender_context is None:
+        from .project_links import project_links
+        sender_context = _sender_import_context(row, project_links())
+    body.update(sender_context)
     from distr.core.incoming.media import list_proposal_attachment_manifest
     body['attachments'] = [{key: item.get(key) for key in ('name', 'mime_type', 'kind', 'source_message_id', 'caption', 'transcript')}
                            for item in list_proposal_attachment_manifest(row)]
@@ -194,6 +243,8 @@ def reconcile(local_rows, remote_rows, *, request_id=None, dry_run=False):
     """Latest saved assignment wins; refreshes and triage reads are never edits."""
     from distr.core.incoming import proposals as incoming
     from distr.core.tensology_client import configured_tensology_client
+    from .project_links import mail_project_links, project_links
+    from distr.core.initiative.attention import learned_thread_links
     global _LAST_RESULT
     result = {"state": "complete", "uploaded": 0, "updated": 0, "conflicts": [], "request_id": request_id, "planned_changes": []}
     canonical = list(remote_rows)
@@ -209,6 +260,11 @@ def reconcile(local_rows, remote_rows, *, request_id=None, dry_run=False):
                 except ValueError:
                     continue
             accepted = incoming._accepted_proposal_keys()
+            local_mail = set(mail_project_links()) | {key for key in learned_thread_links() if key[0] in {"gmail", "mailshot"}}
+            shared_links = project_links() if local_mail else []
+            shared_mail = {(row.get('source'), row.get('source_thread_id')): {
+                project.get('decisions_project_id') for project in row.get('projects') or [] if isinstance(project, dict)
+            } for row in shared_links if isinstance(row, dict)}
             local_rows = incoming._scoped_proposals(incoming._undismissed_proposals([row for row in local_rows if incoming._proposal_handoff_key(row) not in accepted]))
             local_rows = [_with_source_context(row) for row in local_rows]
             for row in local_rows:
@@ -219,6 +275,12 @@ def reconcile(local_rows, remote_rows, *, request_id=None, dry_run=False):
                         raise ValueError("Several canonical proposals share this source snapshot.")
                     if not matches:
                         source_key = (row.get('source'), row.get('source_thread_id'))
+                        sender_context = {}
+                        if source_key in local_mail and row.get('project_id') not in shared_mail.get(source_key, set()):
+                            # The shared API accepts proposals only for conversations linked there.
+                            sender_context = _sender_import_context(row, shared_links)
+                            if not sender_context:
+                                raise ValueError('This email is linked to a project only in DecisionsAI. Its matching Tensology conversation link is missing or differs. Sync the sender/project link before importing the proposal.')
                         ids = set(map(str, row.get('message_ids') or []))
                         covered = {str(value) for other in canonical
                                    if (other.get('source'), (other.get('source_conversation') or {}).get('thread_id')) == source_key
@@ -232,9 +294,11 @@ def reconcile(local_rows, remote_rows, *, request_id=None, dry_run=False):
                         if row.get('project_id') not in mapping and not (row.get('needs_project') is True and row.get('project_id') is None):
                             raise ValueError("This proposal's project is not linked to Tensology.")
                         if dry_run:
+                            if sender_context:
+                                result['planned_changes'].append({'proposal_id': str(row.get('id') or ''), 'action': 'inherit_sender_link', 'project_id': mapping.get(row.get('project_id'))})
                             result["planned_changes"].append({"proposal_id": str(row.get("id") or ""), "action": "create", "source_identity": identity, "project_id": mapping.get(row.get("project_id"))})
                             continue
-                        saved = _upload(client, row, mapping)
+                        saved = _upload(client, row, mapping, sender_context=sender_context)
                         canonical.append(saved)
                         by_identity[identity] = [saved]
                         result["uploaded"] += bool(saved.get("created"))
@@ -296,6 +360,88 @@ def reconcile(local_rows, remote_rows, *, request_id=None, dry_run=False):
 
 def last_result():
     return dict(_LAST_RESULT)
+
+
+def acknowledge_canonical_refresh(request_id):
+    """A connected refresh acknowledges the canonical read without importing local rows."""
+    from distr.core.tensology_client import configured_tensology_client
+    global _LAST_RESULT
+    result = {"state": "complete", "uploaded": 0, "updated": 0, "conflicts": [], "request_id": request_id}
+    with _LOCK:
+        client = configured_tensology_client(source="incoming-reconcile")
+        client.post("work-requests/reconciliation", result, idempotency_key=f"reconcile-{request_id}")
+        _LAST_RESULT = result
+    return result
+
+
+def _reviewable_local_rows():
+    from . import proposals as incoming
+
+    saved = incoming._with_restored_snapshots(incoming._saved_local_proposals())
+    handed_off = incoming._accepted_proposal_keys(include_terminal=True)
+    available = incoming._undismissed_proposals([
+        row for row in saved if row.get("origin") == "local"
+        and row.get("source") in {"gmail", "mailshot", "whatsapp"}
+        and incoming._proposal_handoff_key(row) not in handed_off
+    ])
+    return incoming.apply_project_corrections(available)
+
+
+def _local_import_review(client):
+    from . import proposals as incoming
+    from .project_links import proposal_in_scope
+
+    canonical = fetch_remote_proposals()
+    rows = _reviewable_local_rows()
+    mapping = _mapped_projects(client) if rows else {}
+    covered = {}
+    for proposal in canonical:
+        thread = (proposal.get("source_conversation") or {}).get("thread_id")
+        covered.setdefault((proposal.get("source"), thread), set()).update(map(str, proposal.get("source_message_ids") or []))
+    for raw in rows:
+        row = _with_source_context(raw)
+        messages = set(row["message_ids"])
+        existing = covered.get((row.get("source"), row.get("source_thread_id")), set())
+        if messages and messages <= existing:
+            continue
+        reason = ""
+        if messages & existing:
+            reason = "Part of this proposal is already covered in Tensology. Review the overlapping work there."
+        elif not messages or not row.get("source_thread_id"):
+            reason = "The saved proposal is missing exact source evidence."
+        elif row.get("project_id") not in mapping or not proposal_in_scope(row):
+            reason = "Link the conversation and its project in both apps before importing."
+        revision = hashlib.sha256(json.dumps(row, sort_keys=True, default=str).encode()).hexdigest()
+        yield {
+            "key": incoming._proposal_handoff_key(raw), "revision": revision,
+            "title": row.get("title") or "", "description": row.get("description") or "",
+            "project": row.get("project_name") or "", "source": row["source"],
+            "reason": reason, "can_import": not reason,
+        }, row, mapping
+
+
+def review_local_imports():
+    from distr.core.tensology_client import configured_tensology_client
+
+    client = configured_tensology_client(source="incoming-local-review")
+    return [review for review, _, _ in _local_import_review(client)]
+
+
+def import_reviewed_local_proposal(key, revision):
+    from . import proposals as incoming
+    from distr.core.tensology_client import configured_tensology_client
+
+    client = configured_tensology_client(source="incoming-local-review")
+    with _LOCK:
+        for review, row, mapping in _local_import_review(client):
+            if review["key"] != key:
+                continue
+            if review["revision"] != revision or not review["can_import"]:
+                raise ValueError("This saved proposal changed or overlaps existing work. Review it again.")
+            imported = _upload(client, row, mapping)
+            incoming.invalidate_proposals_list_cache()
+            return {"id": imported["id"], "created": imported.get("created", False)}
+    raise ValueError("This saved proposal is already covered or no longer available. Refresh the review.")
 
 
 def _thread_receipts():
