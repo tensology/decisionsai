@@ -31,10 +31,20 @@ _DECISION_RE = re.compile(
 )
 # Never persist credentials or identifiers.
 _SENSITIVE_RE = re.compile(
-    r"(password|passcode|api[\s_-]?key|secret|token|pin\b|otp|iban|card\s+number|\b\d{6,}\b|"
-    r"[\w.+-]+@[\w-]+\.[\w.]+|sk-[a-z0-9]{8,})",
+    r"(password|passwd|passphrase|passcode|\bpwd\b|api[\s_-]?key|secret|token|\bpin\b|\botp\b|iban|"
+    r"credential|private[\s_-]?key|ssh[\s_-]?key|bearer\s|card\s+number|cvv|account\s+number|"
+    r"id\s+number|identity\s+number|passport|\b\d{6,}\b|"
+    r"[\w.+-]+@[\w-]+\.[\w.]+|\b(?:sk|pk|rk)-[a-z0-9_-]{8,}|gh[pousr]_[a-z0-9]{16,}|xox[abpr]-|AKIA[0-9A-Z]{12,})",
     re.IGNORECASE,
 )
+# Phone numbers written with spaces or dashes ("082 555 1234", "+27 82 555 1234").
+_PHONE_RE = re.compile(r"\+?\(?\d[\d\s()-]{7,}\d")
+
+
+def _is_sensitive(sentence: str) -> bool:
+    if _SENSITIVE_RE.search(sentence):
+        return True
+    return any(sum(ch.isdigit() for ch in m.group(0)) >= 9 for m in _PHONE_RE.finditer(sentence))
 _LEAD_IN_RE = re.compile(
     r"^(?:ok(?:ay)?|so|also|and|but|right|quick\s+one|note|fyi|something\s+for\s+you\s+to\s+remember)[\s,:;.-]+",
     re.IGNORECASE,
@@ -74,7 +84,7 @@ def extract_memories(text: str) -> list[tuple[str, str]]:
     for sentence in _sentences(joined):
         if sentence.endswith("?") or len(sentence) < 12:
             continue
-        if _SENSITIVE_RE.search(sentence):
+        if _is_sensitive(sentence):
             continue
         kind = "memory" if _DECISION_RE.search(sentence) else ("user" if _PREFERENCE_RE.search(sentence) else "")
         if not kind:
