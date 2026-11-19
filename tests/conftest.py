@@ -30,6 +30,14 @@ os.environ.setdefault(
     os.path.join(tempfile.mkdtemp(prefix="decisions-test-logs-"), "agent_death.log"),
 )
 os.environ.setdefault("DECISIONS_TEST_MODE", "1")
+# Tests must never reach the running Decisions app on 127.0.0.1:8765. Without this,
+# approval requests (chat_approvals / dev_approvals) posted real Approve/Deny cards
+# into Paul's live Chat thread and then waited 15 minutes for a click.
+if os.environ.get("DECISIONS_TESTS_ALLOW_LIVE_APP") != "1":
+    os.environ["DECISIONS_API_BASE"] = "http://127.0.0.1:9"  # discard port: refused at once
+    os.environ["DECISIONSAI_INTERNAL_TOKEN_FILE"] = os.path.join(
+        tempfile.mkdtemp(prefix="decisions-test-token-"), "internal_api_token")
+    os.environ.pop("DECISIONSAI_INTERNAL_API_TOKEN", None)
 
 
 @pytest.fixture(scope="session", autouse=True)

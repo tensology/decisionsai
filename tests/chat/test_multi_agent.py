@@ -408,16 +408,17 @@ def test_chat_browser_gating(ma, monkeypatch):
     ids = ma['ids']
     real_check_url = dbt.check_url
     monkeypatch.setattr(dbt, 'check_url', lambda url: None)
+    _cards(monkeypatch)  # default card: never answered => no
     plain = FakeBrowser({'text': 'Next', 'is_submit': False})
     # anyone can open (headless by default) without approval
     assert chat_browser('open', agent_id=ids['Uncle Roger'], url='https://example.com', transport=plain)['ok']
     assert ('open', False) in plain.calls
     # limited agent: click needs Paul's approval
     denied = chat_browser('click', agent_id=ids['Uncle Roger'], selector='text=Next', transport=plain)
-    assert not denied['ok'] and 'approval' in denied['summary']
+    assert not denied['ok'] and 'denied' in denied['summary']
     asked = []
     ok = chat_browser('click', agent_id=ids['Uncle Roger'], selector='text=Next', transport=plain,
-                      confirm=lambda s: asked.append(s) or True)
+                      approve=lambda tool, act, args, summary, details: asked.append(summary) or True)
     assert ok['ok'] and len(asked) == 1
     # primary clicks plain buttons freely, but a purchase-like submit still asks
     assert chat_browser('click', agent_id=ids['Hayley'], selector='text=Next', transport=plain)['ok']
@@ -425,7 +426,7 @@ def test_chat_browser_gating(ma, monkeypatch):
     assert not chat_browser('click', agent_id=ids['Hayley'], selector='#buy', transport=buy)['ok']
     # never types into password fields, even with approval
     pw = FakeBrowser({'is_password': True})
-    res = chat_browser('type', agent_id=ids['Hayley'], selector='#pw', text='x', transport=pw, confirm=lambda s: True)
+    res = chat_browser('type', agent_id=ids['Hayley'], selector='#pw', text='x', transport=pw, approve=lambda *a: True)
     assert not res['ok'] and 'password' in res['summary']
     # the Decisions app itself is refused
     monkeypatch.setattr(dbt, 'check_url', real_check_url)
@@ -441,31 +442,50 @@ def _broken_lookup(strict=False):
     return None
 
 
-def test_confirmation_fails_closed():
-    import queue
+def _cards(monkeypatch, answer=None):
+    """Replace the in-chat Approve/Deny card. answer(summary) -> Decision; default: never answered."""
+    from distr.core import chat_approvals
+    asked = []
+
+    def fake(tool, action, args, summary, details=None, **_):
+        asked.append(summary)
+        if answer is None:
+            return chat_approvals.Decision(False, f"No answer within 15 minutes, treated as denied: {summary}.")
+        return answer(summary)
+
+    monkeypatch.setattr(chat_approvals, 'request_in_chat', fake)
+    return asked
+
+
+def test_confirmation_fails_closed(monkeypatch):
+    from distr.core import chat_approvals
+    from distr.core.workflow import dev_approvals
     from distr.core.agent_capabilities import confirm_destructive, request_confirmation, safe_confirm
 
-    assert request_confirmation('t', 'm') is False                                   # no channel
-    assert request_confirmation('t', 'm', event_queue=queue.Queue()) is False        # no result store
-    class Boom:
-        def put(self, *_a, **_k):
-            raise RuntimeError('queue closed')
-    assert request_confirmation('t', 'm', event_queue=Boom(), confirmation_results_dict={}) is False
-    assert request_confirmation('t', 'm', event_queue=queue.Queue(), confirmation_results_dict={},
-                                timeout_s=0.3) is False                              # no answer
-    q, results = queue.Queue(), {}
-    import threading
-    def answer():
-        item = q.get(timeout=2)
-        results[item['confirmation_id']] = {'approved': True}
-    threading.Thread(target=answer).start()
-    assert confirm_destructive('Delete x?', event_queue=q, confirmation_results_dict=results, timeout_s=3) is True
-    q2, results2 = queue.Queue(), {}
-    def malformed():
-        item = q2.get(timeout=2)
-        results2[item['confirmation_id']] = {'approved': 'yes'}   # not True => no
-    threading.Thread(target=malformed).start()
-    assert confirm_destructive('Delete x?', event_queue=q2, confirmation_results_dict=results2, timeout_s=3) is False
+    # no Chat thread to show the card in => no
+    monkeypatch.setattr(chat_approvals, 'current_chat_id', lambda: None)
+    assert request_confirmation('t', 'm') is False
+    monkeypatch.setattr(chat_approvals, 'current_chat_id', lambda: 7)
+    # app unreachable => no
+    monkeypatch.setattr(dev_approvals, 'request_approval', lambda *a, **k: {'error': 'Decisions app not reachable'})
+    assert request_confirmation('t', 'm') is False
+    # request raises => no
+    def boom(*a, **k):
+        raise RuntimeError('db down')
+    monkeypatch.setattr(dev_approvals, 'request_approval', boom)
+    assert request_confirmation('t', 'm') is False
+    # card shown but no answer / denied => no
+    monkeypatch.setattr(dev_approvals, 'request_approval', lambda *a, **k: {'request_id': 'r1'})
+    for st in ({'status': 'pending'}, {'status': 'expired'}, {'status': 'denied'}, {'status': 'error'}):
+        monkeypatch.setattr(dev_approvals, 'wait', lambda rid, t, st=st: st)
+        assert confirm_destructive('Delete x?', timeout_s=0.1) is False
+    # approved but the one-shot approval cannot be consumed => no
+    monkeypatch.setattr(dev_approvals, 'wait', lambda rid, t: {'status': 'approved', 'approval_id': 'a1'})
+    monkeypatch.setattr(dev_approvals, 'consume', lambda *a, **k: False)
+    assert confirm_destructive('Delete x?', timeout_s=0.1) is False
+    # approved and consumed => yes
+    monkeypatch.setattr(dev_approvals, 'consume', lambda *a, **k: True)
+    assert confirm_destructive('Delete x?', timeout_s=0.1) is True
     def raises(_s):
         raise RuntimeError('ui gone')
     assert safe_confirm(raises)('x') is False and safe_confirm(None)('x') is False
@@ -480,7 +500,8 @@ def test_unresolvable_agent_is_refused(ma, monkeypatch):
     assert tool_block_reason('create_action').startswith('Not done')
     assert tool_block_reason('play_action').startswith('Not done')
     assert snippets_op('create', text='x').startswith('Not')
-    res = chat_browser('click', selector='text=Next', confirm=lambda s: True,
+    _cards(monkeypatch, answer=lambda s: __import__('distr.core.chat_approvals', fromlist=['Decision']).Decision(True, 'ok'))
+    res = chat_browser('click', selector='text=Next', approve=lambda *a: True,
                        transport=FakeBrowser({'text': 'Next', 'is_submit': False}))
     assert not res['ok']
 
@@ -491,16 +512,17 @@ def test_chat_browser_confirm_errors_mean_no(ma, monkeypatch):
 
     monkeypatch.setattr(dbt, 'check_url', lambda url: None)
     plain = FakeBrowser({'text': 'Next', 'is_submit': False})
-    def raises(_s):
+    def raises(*_a):
         raise RuntimeError('ui gone')
-    res = chat_browser('click', agent_id=ma['ids']['Uncle Roger'], selector='text=Next', transport=plain, confirm=raises)
+    res = chat_browser('click', agent_id=ma['ids']['Uncle Roger'], selector='text=Next', transport=plain, approve=raises)
     assert not res['ok']
-    # The tool without a confirmation channel refuses limited-agent clicks.
+    # The tool with no Chat thread to ask in refuses limited-agent clicks.
+    from distr.core import chat_approvals
+    monkeypatch.setattr(chat_approvals, 'current_chat_id', lambda: None)
     assert ChatBrowserTool()._confirm_action('Click Next?') is False
 
 
 def test_playwright_tool_fails_closed_and_follows_capabilities(ma, monkeypatch):
-    import queue, threading
     from distr.core import agent_groups as ag
     from distr.core.agent.tools.integrations.playwright_tool import PlaywrightTool
 
@@ -510,25 +532,25 @@ def test_playwright_tool_fails_closed_and_follows_capabilities(ma, monkeypatch):
     # primary: reading runs, clicking needs approval while the safety setting is on
     monkeypatch.setattr(ag, 'current_agent_id', lambda strict=False: ids['Hayley'])
     tool = PlaywrightTool()
+    from distr.core.chat_approvals import Decision
+    verdict = {'answer': None}
+    asked = _cards(monkeypatch, answer=lambda s: verdict['answer'](s) if verdict['answer'] else Decision(False, 'No answer.'))
     assert tool._safety_refusal(read, 'x') == ''
-    assert 'not approved' in tool._safety_refusal(click, 'x')              # no confirmation channel => no
-    ma['save']({'initiative_ask_file_changes': False})
+    assert 'not approved' in tool._safety_refusal(click, 'x')              # unanswered card => no
+    assert asked and 'Hayley wants to' in asked[-1]
+    ma['save']({'initiative_ask_sensitive': False})  # 'Ask before sensitive actions' off
     assert tool._safety_refusal(click, 'x') == ''                           # Paul's setting honoured for full agents
     # limited agent: clicking always asks, even with the setting off
     monkeypatch.setattr(ag, 'current_agent_id', lambda strict=False: ids['Uncle Roger'])
     assert tool._safety_refusal(read, 'x') == ''
     assert 'not approved' in tool._safety_refusal(click, 'x')
-    q, results = queue.Queue(), {}
-    def approve():
-        item = q.get(timeout=2)
-        results[item['confirmation_id']] = {'approved': True}
-    threading.Thread(target=approve).start()
-    assert PlaywrightTool(event_queue=q, confirmation_results_dict=results)._safety_refusal(click, 'x') == ''
-    # broken queue => refused, not "proceeding"
-    class Boom:
-        def put(self, *_a, **_k):
-            raise RuntimeError('queue closed')
-    assert 'not approved' in PlaywrightTool(event_queue=Boom(), confirmation_results_dict={})._safety_refusal(click, 'x')
+    verdict['answer'] = lambda s: Decision(True, 'Approved by Paul.')
+    assert tool._safety_refusal(click, 'x') == ''                           # Paul clicked Approve
+    def broken(s):
+        raise RuntimeError('card failed')
+    verdict['answer'] = broken
+    assert 'not approved' in tool._safety_refusal(click, 'x')               # broken card => refused
+    verdict['answer'] = None
     # unresolvable agent => refused entirely
     monkeypatch.setattr(ag, 'current_agent_id', _broken_lookup)
     assert 'not permitted' in tool._safety_refusal(read, 'x')
