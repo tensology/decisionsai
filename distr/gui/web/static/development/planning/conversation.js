@@ -1,7 +1,8 @@
-import { parseWireframe, renderWireframe, explainWireframeDiagnostics } from './wireframe.js';
+import { parseWireframe, renderWireframe, explainWireframeDiagnostics } from './wireframe.js?v=20261119-page-designer';
+import { mountPageDesigner } from './page-designer.js?v=20261119-page-designer';
 import { createPlanPolling } from './polling.js';
 import { buildResultsHtml } from './build-results.js';
-import { layoutConnectedSitemap, pageAccessGroup, SITEMAP_ACCESS_GROUPS } from './sitemap.js?v=20261028-responsive';
+import { layoutConnectedSitemap, pageAccessGroup, sitemapRouteKey, SITEMAP_ACCESS_GROUPS } from './sitemap.js?v=20261119-preview-routes';
 import { pageCaptureFor } from './page-captures.js?v=20261003-sitemap-groups';
 import { planningProviderLabel } from './routes.js';
 import { createInlineEditor, addUnsavedCheck, isRevisionConflict } from './inline-edit/editor.js?v=20261103-ifaces3';
@@ -11,8 +12,8 @@ import { userDocumentsEnabled, USER_DOCUMENT_TYPE } from './documents-config.js?
 import { mountErdItem, isErdMermaid, erdIsDirty } from './erd/mount.js?v=20261112-readable-data';
 import { availableBottom, fillToWindow, createCallout, advancedButton, pinDock, openDrawer } from './canvas-chrome.js?v=20261103-ifaces3';
 import { readSidecar, nodeIds, writeSidecar, slugId } from './flow-meta.js?v=20261113-rebuild-map15';
-import { buildIfaceModel, newScreenSource, SHAPE_KIND, LANES } from './iface-model.js?v=20261113-rebuild-map15';
-import { createIfaceCanvas } from './iface-canvas.js?v=20261113-rebuild-map15';
+import { buildIfaceModel, newScreenSource, SHAPE_KIND, LANES } from './iface-model.js?v=20261119-journey-links';
+import { createIfaceCanvas } from './iface-canvas.js?v=20261119-journey-links';
 import { decorateNode, nodeButton, openNodePopover, openNodePicker, closeNodePopover, warningsNotice } from './flow-nodes.js?v=20261113-rebuild-map15';
 import { rememberedRoute, rememberRoute, routeStore } from './route-memory.js?v=20261102-verify';
 import { chatHeaderHtml, chatStore, rememberChat, rememberedChat, pickActiveChat, validateImageFiles, rejectionMessage, isImageAsset, imageLabel } from './chat-header.js?v=20261113-rebuild-map15';
@@ -1319,7 +1320,14 @@ export function createPlanConversation(host, root) {
         }
         if (session.tab === 'wireframes') {
             const surfaceCleanup = interfacesSurface(preview);
-            const dockCleanup = ifaceTools ? pinDock(ifaceTools, preview) : null;
+            const pageLayer = session.pageLayers?.[item.id] || 'preview';
+            const inlineDock = item.content_format === 'wire'
+                && (pageLayer === 'design' || (pageLayer === 'preview' && session.previewModes?.[item.id] !== 'svg'));
+            if (inlineDock && ifaceTools) {
+                ifaceTools.classList.add('plan-preview-dock');
+                preview.after(ifaceTools);
+            }
+            const dockCleanup = inlineDock ? () => ifaceTools?.remove() : ifaceTools ? pinDock(ifaceTools, preview) : null;
             session.previewCleanup = () => { surfaceCleanup?.(); dockCleanup?.(); };
         }
         if (item.content_format === 'wire') {
@@ -1339,6 +1347,7 @@ export function createPlanConversation(host, root) {
                     const toolbar = document.createElement('div');
                     toolbar.className = 'plan-preview-toolbar';
                     const layerButtons = `<div class="plan-page-layers" role="tablist" aria-label="Page perspective">
+                        <button type="button" data-layer="design" aria-pressed="${layer === 'design'}">Design</button>
                         <button type="button" data-layer="preview" aria-pressed="${layer === 'preview'}">Preview</button>
                         <button type="button" data-layer="planning" aria-pressed="${layer === 'planning'}">Planning</button>
                         <button type="button" data-layer="development" aria-pressed="${layer === 'development'}">Development</button>
@@ -1403,6 +1412,34 @@ export function createPlanConversation(host, root) {
                     return;
                 }
 
+                if (page && layer === 'design') {
+                    const drafts = session.designerDrafts ||= {};
+                    const draft = drafts[item.id] || { source: item.content, baseSource: item.content, revision: revisionOf(item) };
+                    mountPageDesigner(preview, {
+                        item, pageIndex: screens.indexOf(page), draft, assets: previewAssets,
+                        onDraft: (changed) => {
+                            if (changed.source === changed.baseSource) delete drafts[item.id];
+                            else drafts[item.id] = changed;
+                        },
+                        onSave: async (source, pageId) => {
+                            const latest = session.workspace.items.find(row => row.id === item.id);
+                            if (latest?.id !== item.id || revisionOf(latest) !== draft.revision || latest.content !== draft.baseSource) {
+                                throw new Error('The stencil changed while you were editing. Discard this draft to open the latest version.');
+                            }
+                            await applyPageSource(session, latest, source, () => {
+                                delete drafts[item.id];
+                                if (session.openPage?.[item.id] === page.id) session.openPage[item.id] = pageId;
+                            });
+                        },
+                        onDiscard: async () => {
+                            await reload(session);
+                            delete drafts[item.id];
+                            renderArtifacts(session);
+                        },
+                    });
+                    return;
+                }
+
                 if (page && layer === 'planning') {
                     const ann = collectAnnotations(page);
                     const kids = (page.children || []).length;
@@ -1464,8 +1501,25 @@ export function createPlanConversation(host, root) {
                 if (session.previewModes[item.id] === 'html') {
                     const frame = document.createElement('iframe');
                     frame.title = page?.label || item.title || 'Page preview';
-                    frame.setAttribute('sandbox', '');
+                    // Wireframe HTML is generated from validated nodes with scripts disabled.
+                    // Keep raw HTML artifacts in the separate, opaque sandbox below.
+                    frame.setAttribute('sandbox', 'allow-same-origin');
                     frame.referrerPolicy = 'no-referrer';
+                    frame.addEventListener('load', () => {
+                        const previewDocument = frame.contentDocument;
+                        if (!previewDocument || previewDocument.URL !== 'about:srcdoc') return;
+                        previewDocument.addEventListener('click', event => {
+                            const link = event.target.closest?.('a[data-preview-route]');
+                            if (!link) return;
+                            const route = sitemapRouteKey(link.dataset.previewRoute);
+                            if (!route) return;
+                            event.preventDefault();
+                            const matches = screens.filter(screen => sitemapRouteKey(screen.attrs.route) === route);
+                            if (matches.length !== 1 || matches[0].id === page?.id) return;
+                            openIfacePage(session, item, { screenId: matches[0].id });
+                            preview.querySelector('iframe')?.focus();
+                        });
+                    });
                     frame.srcdoc = result.html;
                     preview.querySelector('.plan-wireframe-preview').replaceWith(frame);
                 }
@@ -1740,7 +1794,9 @@ export function createPlanConversation(host, root) {
         try {
             updated = await api(`/workflows/studio/plan-items/${encodeURIComponent(item.id)}`, { method: 'PATCH', body: { content: text, expected_revision: revisionOf(item) } });
         } catch (error) {
-            if (error?.status === 409 || isRevisionConflict(error)) throw new Error('This page has a newer revision. Your text is kept here; copy it, then reload the page to see the latest version.');
+            if (error?.status === 409 || isRevisionConflict(error)) {
+                throw Object.assign(new Error('This page has a newer revision. Your text is kept here; copy it, then reload the page to see the latest version.'), { status: 409 });
+            }
             throw error;
         }
         Object.assign(item, updated);
@@ -2800,7 +2856,7 @@ export function createPlanConversation(host, root) {
     }
 
     function requireSavedPlan(session, action) {
-        const ids = Object.keys(session.inlineDrafts || {}).map((key) => String(key).split('#')[0]);
+        const ids = [...Object.keys(session.inlineDrafts || {}).map(key => key.split('#')[0]), ...Object.keys(session.designerDrafts || {})];
         const names = [...new Set((session.workspace.items || []).filter((item) => ids.includes(String(item.id))).map((item) => item.title || 'Document'))];
         if (erdIsDirty(session)) names.push('Data');
         if (!ids.length && !names.length) return true;
@@ -3030,10 +3086,11 @@ export function createPlanConversation(host, root) {
         active = null;
     }
     // Unsaved = chat draft/attachments/pending turn, a stored inline draft, or a dirty ERD canvas.
+    const hasArtifactDraft = session => Object.keys(session.inlineDrafts || {}).length || Object.keys(session.designerDrafts || {}).length || erdIsDirty(session);
     const hasDraft = () => [...sessions.values()].some((session) => Boolean(session.draft || session.attachments.length || session.pending
         || [...(session.chatStates?.values() || [])].some(chat => chat.draft || chat.attachments.length)
-        || Object.keys(session.inlineDrafts || {}).length || erdIsDirty(session)));
-    addUnsavedCheck(() => [...sessions.values()].some((session) => Object.keys(session.inlineDrafts || {}).length || erdIsDirty(session)));
+        || hasArtifactDraft(session)));
+    addUnsavedCheck(() => [...sessions.values()].some(hasArtifactDraft));
     const animApi = () => window.__planDocEditAnim;
     if (animApi()) {
         animApi().reloadAndRefresh = async () => {

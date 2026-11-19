@@ -169,11 +169,18 @@ export function buildIfaceModel({ sitemap = null, screens = [], captures = null,
     const bySitemap = new Map(nodes.filter((n) => n.sitemapId).map((n) => [n.sitemapId, n]));
     const byScreenKey = new Map(nodes.filter((n) => n.screenKey).map((n) => [n.screenKey, n]));
     const edges = [];
-    const seenEdge = new Set();
-    const addEdge = (from, to, kind, label) => {
-        if (!from || !to || from === to || seenEdge.has(`${from}>${to}`)) return;
-        seenEdge.add(`${from}>${to}`);
-        edges.push({ from, to, kind, label: label || '' });
+    const seenEdges = new Map();
+    const addEdge = (from, to, kind, label, journey = false) => {
+        if (!from || !to || from === to) return;
+        const key = `${from}>${to}`;
+        const existing = seenEdges.get(key);
+        if (existing) {
+            if (journey && !existing.journey) Object.assign(existing, { kind, label, journey });
+            return;
+        }
+        const edge = { from, to, kind, label: label || '', journey };
+        seenEdges.set(key, edge);
+        edges.push(edge);
     };
     for (const e of graph.edges) {
 const a = bySitemap.get(e.from), b = bySitemap.get(e.to);
@@ -181,27 +188,31 @@ const a = bySitemap.get(e.from), b = bySitemap.get(e.to);
     }
     for (const n of nodes) for (const [target, label] of Object.entries(n.links || {})) {
         const b = byScreenKey.get(target);
-        if (b) addEdge(n.key, b.key, 'link', String(label || ''));
+        if (b) addEdge(n.key, b.key, 'link', String(label || ''), true);
     }
     const byRoute = new Map();
     for (const n of nodes) {
         if (!n.route || n.lane === 'guidance' || isJourneyMap(n.label, n.route, n.lane)) continue;
         if (!byRoute.has(n.route)) byRoute.set(n.route, n);
     }
-    const walkLinks = (screenNode, found) => {
+    const walkLinks = (screenNode, found, inNavigation = false) => {
         if (!screenNode || typeof screenNode !== 'object') return;
         const route = routeKey(screenNode.attrs?.route || screenNode.attrs?.href || '');
+        const shared = inNavigation || ['nav', 'header', 'footer', 'menu'].includes(screenNode.type);
         if ((screenNode.type === 'link' || screenNode.type === 'button') && route) {
-            found.push({ route, label: String(screenNode.label || '') });
+            const target = byRoute.get(route);
+            const label = String(screenNode.label || '');
+            const journey = !shared && (screenNode.type === 'button' || (label && label.toLowerCase() !== target?.label.toLowerCase()));
+            found.push({ target, label, journey: Boolean(journey) });
         }
-        for (const child of screenNode.children || []) walkLinks(child, found);
+        for (const child of screenNode.children || []) walkLinks(child, found, shared);
     };
     for (const screen of screens) {
         const from = nodes.find((n) => n.screenId === String(screen.id));
         if (!from) continue;
         const found = [];
         walkLinks(screen, found);
-        for (const link of found) addEdge(from.key, byRoute.get(link.route)?.key, 'link', link.label);
+        for (const link of found) addEdge(from.key, link.target?.key, 'link', link.label, link.journey);
     }
     for (const n of nodes) {
         if (!n.route || n.route === '/' || n.lane === 'guidance' || isJourneyMap(n.label, n.route, n.lane)) continue;
@@ -272,7 +283,7 @@ function markChromeEdges(nodes, edges) {
         const from = byKey.get(edge.from);
         const manyIn = (incoming.get(edge.to) || 0) >= threshold;
         const overviewOut = from && (isJourneyMap(from.label, from.route, from.lane) || (/^overview\b/i.test(from.label || '') && (outgoing.get(edge.from) || 0) >= threshold));
-        edge.chrome = Boolean(manyIn || overviewOut);
+        edge.chrome = !edge.journey && Boolean(manyIn || overviewOut);
     }
 }
 

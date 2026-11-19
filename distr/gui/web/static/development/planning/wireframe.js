@@ -109,7 +109,9 @@ function validate(node, diagnostics) {
 export function parseWireframe(source) {
     const diagnostics = [], roots = [], path = [], ids = new Set();
     const empty = { type: 'screen', label: 'Wireframe', attrs: {}, children: [], line: 0, column: 1, id: 'wf-root' };
-    const result = (screens = [], templates = []) => ({ ...(screens[0] || empty), screens, templates, diagnostics });
+    const result = (screens = [], templates = [], sourceScreens = screens) => ({
+        ...(screens[0] || empty), screens, templates, sourceScreens, diagnostics
+    });
     if (typeof source !== 'string' || source.length > LIMIT.source) {
         diagnostic(diagnostics, null, 'SOURCE_LIMIT', `Source must be a string of at most ${LIMIT.source} characters.`);
         return result();
@@ -202,6 +204,7 @@ export function parseWireframe(source) {
     if (screens.length && loose.length) loose.forEach(node => diagnostic(diagnostics, node, 'STRUCTURE', 'Place root controls inside a screen when declaring screens.'));
     else if (!screens.length) screens = [{ ...empty, children: loose }];
     if (diagnostics.some(d => d.severity === 'error')) return result(screens, templates);
+    const sourceScreens = screens;
     let expanded = 0;
     const name = node => node.attrs.name || shown(node) || 'content';
     function copy(node, prefix, depth = 0) {
@@ -245,7 +248,7 @@ export function parseWireframe(source) {
         }
         screens.forEach(screen => depthCheck(screen));
     } catch (error) { diagnostic(diagnostics, null, 'EXPANSION_LIMIT', error.message); }
-    return result(screens, templates);
+    return result(screens, templates, sourceScreens);
 }
 
 // Conservative glyph metrics, including wide Unicode glyphs. Hard-wrap long words
@@ -399,12 +402,12 @@ function renderHTML(box, assetURLs = {}) {
         const nav = a.href || a.route;
         if (nav) {
             const url = String(nav).startsWith('/') ? `#${nav}` : nav;
-            body = `<a href="${esc(url)}" class="button-link"${enabled(node, 'active') ? ' aria-current="page"' : ''}>${label || 'Button'}</a>`;
+            body = `<a href="${esc(url)}"${String(nav).startsWith('/') ? ` data-preview-route="${esc(nav)}"` : ''} class="button-link"${enabled(node, 'active') ? ' aria-current="page"' : ''}>${label || 'Button'}</a>`;
         } else body = `<button${accessible} type="button">${label || 'Button'}</button>`;
     }
     else if (t === 'link') {
         const url = a.href || a.route || '#';
-        body = `<a href="${esc(url.startsWith('/') ? `#${url}` : url)}"${enabled(node, 'active') ? ' aria-current="page"' : ''}>${label || 'Link'}</a>`;
+        body = `<a href="${esc(url.startsWith('/') ? `#${url}` : url)}"${url.startsWith('/') ? ` data-preview-route="${esc(url)}"` : ''}${enabled(node, 'active') ? ' aria-current="page"' : ''}>${label || 'Link'}</a>`;
     } else if (t === 'calendar') {
         const calendar = calendarCells(node);
         body += `<div class="calendar-month">${calendar.title}</div><div class="calendar-days" role="group" aria-label="Calendar">${calendar.cells.map((value, i) => i < 7 || !value ? `<span>${value}</span>` : `<button type="button" aria-label="${calendar.month}-${value.padStart(2, '0')}"${Number(value) === calendar.selected ? ' aria-pressed="true"' : ''}${bools}>${value}</button>`).join('')}</div>`;

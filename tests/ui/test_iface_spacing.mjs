@@ -184,6 +184,20 @@ test('shared navigation and an overview map are marked as chrome links', () => {
     assert.ok(chrome.length >= 8, 'shared-nav edges are chrome');
 });
 
+test('a page action survives when shared navigation already links to that destination', () => {
+    const link = (label, route, type = 'link') => ({ type, label, attrs: { route }, children: [] });
+    const nav = { type: 'nav', children: [link('Book', '/book')] };
+    const model = buildIfaceModel({ screens: [
+        screen('home', 'Home', '/', [nav]),
+        screen('services', 'Services', '/services', [nav, link('Book a repair', '/book', 'button')]),
+        screen('book', 'Book', '/book'),
+        screen('confirmation', 'Confirmation', '/saved', [nav]),
+    ] });
+    const toBooking = model.edges.filter(edge => edge.to === 'w:book');
+    assert.deepEqual(toBooking.filter(edge => !edge.chrome).map(edge => edge.label), ['Book a repair']);
+    assert.equal(toBooking.length, 3);
+});
+
 test('pinned pages keep their coordinates while unpinned pages are still placed', () => {
     const model = buildIfaceModel({ screens: [
         screen('home', 'Home', '/home'),

@@ -132,7 +132,7 @@ export function createIfaceCanvas(opts) {
     }
     let labelsPlaced = false;
     let edges = drawEdges();
-    const canFilterLinks = layout.large && edges.length > 0;
+    const canFilterLinks = Boolean(layout.large) && edges.length > 0;
     function setAllLinks(show) {
         lines.classList.toggle('selected-links-only', canFilterLinks && !show);
     }

@@ -56,6 +56,168 @@ def plan_server(tmp_path):
 
 
 @pytest.mark.parametrize("width", [390, 768, 1440])
+def test_interactive_preview_follows_declared_page_links(page: Page, plan_server, width):
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(plan_server)
+    expect(page.locator('.iface-edge[data-chrome="no"]')).to_be_visible()
+    page.wait_for_load_state("networkidle")
+    page.locator(".iface-node", has_text="Saved").press("Enter")
+    frame = page.frame_locator("#plan-preview iframe")
+    expect(frame.get_by_text("Customer saved", exact=True)).to_be_visible()
+
+    frame.get_by_role("link", name="Back to customers").press("Enter")
+    expect(frame.get_by_role("textbox", name="Email")).to_be_visible()
+    expect(page.locator("#plan-preview iframe")).to_have_attribute("title", "Customers")
+    assert page.url == plan_server + "/"
+
+    page.get_by_role("button", name="Back to all pages").click()
+    expect(page.locator(".iface-node")).to_have_count(2)
+
+
+@pytest.mark.parametrize("width", [390, 768, 1280, 1440])
+def test_page_designer_saves_a_responsive_stencil(page: Page, plan_server, tmp_path, width):
+    page.set_default_timeout(8000)
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(plan_server)
+    expect(page.locator(".iface-node")).to_have_count(2)
+    page.wait_for_load_state("networkidle")
+    page.locator(".iface-node", has_text="Saved").press("Enter")
+    page.get_by_role("button", name="Design", exact=True).click()
+    designer = page.get_by_role("region", name="Page designer")
+    canvas = page.frame_locator('iframe[title="Design canvas"]')
+    designer.get_by_role("button", name="Add stack").click()
+    designer.get_by_role("button", name="Add row").click()
+    designer.get_by_role("button", name="Add field").click()
+    designer.get_by_role("textbox", name="Widget label").fill("Bike model")
+    designer.get_by_role("button", name="Apply label").click()
+    expect(canvas.get_by_role("textbox", name="Bike model")).to_be_visible()
+    designer.get_by_role("button", name="Add field").click()
+    designer.get_by_role("button", name="Move up").click()
+    expect(canvas.locator(".row input").first).to_have_attribute("aria-label", "Text field")
+    expect(canvas.locator(".stack .row input")).to_have_count(2)
+
+    designer.get_by_role("button", name="Phone", exact=True).click()
+    if width == 1440:
+        expect(designer.locator("iframe")).to_have_css("width", "390px")
+    expect(canvas.locator(".row input").last).to_be_visible()
+    tops = canvas.locator(".row input").evaluate_all("inputs => inputs.map(input => input.getBoundingClientRect().top)")
+    assert tops[1] > tops[0]
+    designer.get_by_role("button", name="Full width").click()
+    out = Path(os.environ.get("DECISIONS_DESIGN_EVIDENCE", str(tmp_path)))
+    out.mkdir(parents=True, exist_ok=True)
+    page.locator(".plan-detail-body").evaluate("body => { body.scrollTop = 0; }")
+    page.locator("#plan-preview").evaluate("preview => { preview.scrollTop = 0; }")
+    page.screenshot(path=out / f"page-designer-{width}.png", animations="disabled")
+
+    page.get_by_role("button", name="Preview", exact=True).click()
+    expect(page.frame_locator('#plan-preview iframe').get_by_role("textbox", name="Bike model")).to_have_count(0)
+    page.get_by_role("button", name="Design", exact=True).click()
+    expect(canvas.get_by_role("textbox", name="Bike model")).to_be_visible()
+    with page.expect_response(lambda response: response.request.method == "PATCH" and "/plan-items/" in response.url) as saved:
+        designer.get_by_role("button", name="Save design").click()
+    assert saved.value.ok
+    assert '    stack\n      row\n        input "Text field"\n        input "Bike model"' in saved.value.request.post_data_json["content"]
+    expect(designer.get_by_role("button", name="Save design")).to_be_disabled()
+    page.reload()
+    expect(page.locator(".iface-node")).to_have_count(2)
+    page.wait_for_load_state("networkidle")
+    page.locator(".iface-node", has_text="Saved").press("Enter")
+    preview = page.frame_locator('#plan-preview iframe[title="Saved"]')
+    expect(preview.get_by_role("textbox", name="Bike model")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    assert not errors
+
+
+def _drag_designer_widget(page, start, end):
+    start.scroll_into_view_if_needed()
+    end.scroll_into_view_if_needed()
+    source_box, target_box = start.bounding_box(), end.bounding_box()
+    assert source_box and target_box
+    source_point = (source_box["x"] + 12, source_box["y"] + 12)
+    target_point = (target_box["x"] + 12, target_box["y"] + 12)
+    page.mouse.move(*source_point)
+    page.mouse.down()
+    page.mouse.move(*target_point, steps=18)
+    page.mouse.move(target_point[0] + 2, target_point[1] + 2)
+    page.mouse.up()
+
+
+def test_page_designer_drops_palette_widget(page: Page, plan_server):
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(plan_server)
+    expect(page.locator(".iface-node")).to_have_count(2)
+    page.wait_for_load_state("networkidle")
+    page.locator(".iface-node", has_text="Saved").press("Enter")
+    page.get_by_role("button", name="Design", exact=True).click()
+    designer = page.get_by_role("region", name="Page designer")
+    canvas = page.frame_locator('iframe[title="Design canvas"]')
+    designer.get_by_role("button", name="Add row").click()
+    row = canvas.locator(".row")
+    expect(row).to_have_attribute("data-design-empty", "")
+    _drag_designer_widget(page, designer.get_by_role("button", name="Add text"), row)
+    expect(row.locator(".text")).to_have_count(1)
+
+
+def test_page_designer_move_and_revision_conflict(page: Page, plan_server, tmp_path):
+    page.set_default_timeout(8000)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(plan_server)
+    expect(page.locator(".iface-node")).to_have_count(2)
+    page.get_by_role("button", name="Advanced · page source").click()
+    source = page.get_by_role("textbox", name="Page source")
+    original = source.input_value() + '''
+screen "Services" route=/services
+  heading "Services"
+screen "Book" route=/book
+  heading "Book"
+'''
+    source.fill(original)
+    page.get_by_role("button", name="Apply", exact=True).click()
+    expect(page.locator(".iface-node")).to_have_count(4)
+    page.locator(".iface-node", has_text="Saved").press("Enter")
+    page.get_by_role("button", name="Design", exact=True).click()
+    designer = page.get_by_role("region", name="Page designer")
+    canvas = page.frame_locator('iframe[title="Design canvas"]')
+    add_row = designer.get_by_role("button", name="Add row")
+    add_row.click()
+    rows = canvas.locator(".row")
+    expect(rows.first).to_have_attribute("data-design-empty", "")
+    out = Path(os.environ.get("DECISIONS_DESIGN_EVIDENCE", str(tmp_path)))
+    page.screenshot(path=out / "page-designer-empty-row.png", animations="disabled")
+
+    designer.get_by_role("button", name="Add text").click()
+    expect(rows.first.locator(".text")).to_have_count(1)
+    designer.get_by_role("combobox", name="Layer").select_option(index=1)
+    add_row.click()
+    expect(rows.last).to_have_attribute("data-design-empty", "")
+    _drag_designer_widget(page, rows.first.locator(".text"), rows.last)
+    expect(rows.last.locator(".text")).to_have_count(1)
+    expect(rows.first).to_have_attribute("data-design-empty", "")
+
+    workspace = page.request.get(plan_server + "/api/workflows/studio/plan-workspaces/1").json()
+    item = next(item for item in workspace["items"] if item["item_type"] == "wireframe")
+    latest = original.replace('heading "Customer saved"', 'heading "Booking confirmed"')
+    updated = page.request.patch(
+        f"{plan_server}/api/workflows/studio/plan-items/{item['id']}",
+        data={"content": latest, "expected_revision": item["revision_count"]},
+    )
+    assert updated.ok
+    designer.get_by_role("button", name="Save design").click()
+    expect(designer.get_by_role("status")).to_contain_text("newer revision")
+    expect(rows.last.locator(".text")).to_have_count(1)
+    page.screenshot(path=out / "page-designer-conflict.png", animations="disabled")
+    designer.get_by_role("button", name="Discard", exact=True).click()
+    expect(canvas.get_by_text("Booking confirmed", exact=True)).to_be_visible()
+    expect(rows).to_have_count(0)
+    page.get_by_role("button", name="Back to all pages").click()
+    expect(page.locator(".iface-node")).to_have_count(4)
+    page.locator(".iface-node", has_text="Services").press("Enter")
+    expect(page.frame_locator('#plan-preview iframe').get_by_text("Services", exact=True)).to_be_visible()
+
+
+@pytest.mark.parametrize("width", [390, 768, 1440])
 def test_desktop_reopen_rejects_plan_from_previous_project(page: Page, plan_server, width):
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(plan_server)

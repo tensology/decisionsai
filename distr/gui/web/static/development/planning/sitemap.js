@@ -56,7 +56,7 @@ const SITEMAP_NODE = { width: 210, height: 176, gapX: 84, gapY: 44 };
 const SITEMAP_EDGE_KINDS = ['parent', 'navigation', 'journey', 'auth', 'redirect', 'success', 'failure'];
 const SITEMAP_STATUSES = ['verified', 'inferred', 'incomplete', 'missing'];
 
-function sitemapRouteKey(value) {
+export function sitemapRouteKey(value) {
     if (typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//')) return '';
     const path = value.split(/[?#]/)[0];
     if (path === '/') return '/';
