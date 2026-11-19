@@ -382,6 +382,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
             # ── Agentic tool loop: keep calling LLM while it returns tool_calls ──
             MAX_TOOL_ROUNDS = 10
             round_num = 0
+            from distr.core.agent.loop_guard import ReadLoopGuard
+
+            read_guard = ReadLoopGuard.for_chat()
 
             # If the LLM jumped straight to tool calls with no acknowledgment text,
             # speak a brief acknowledgment so the user isn't left in silence during
@@ -434,6 +437,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 # actually call that tool immediately instead of being told to
                 # wait for another user message.
                 tools_list = self._tools_list_for_message(last_user_msg)
+                tools_list = OpenAICompatibleLLMService._apply_read_loop_guard(
+                    self, read_guard, tool_calls, tools_list
+                )
 
                 # Auto-send file to Telegram if applicable
                 auto_sent = await self._auto_send_file_to_telegram()
@@ -486,6 +492,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
             if round_num >= MAX_TOOL_ROUNDS and tool_calls:
                 logger.warning("%s: Hit MAX_TOOL_ROUNDS (%d) — stopping tool loop with %d pending tool calls",
                                self.SERVICE_NAME, MAX_TOOL_ROUNDS, len(tool_calls))
+                OpenAICompatibleLLMService._notify_round_cap(self, MAX_TOOL_ROUNDS, tool_calls)
 
             # ── Final handling (no more tool calls) ──
             if not tool_calls:
@@ -703,6 +710,10 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     logger.warning("%s: Model rejects system instruction, retrying without it", self.SERVICE_NAME)
                     continue
 
+                if self._is_unresolvable_host_error(e):
+                    # DNS for the provider is gone; retrying only delays failover.
+                    raise
+
                 if self._is_transient_provider_error(err):
                     if attempt < max_retries - 1:
                         logger.warning("%s: attempt %d/%d failed: %s. Retrying in %.1fs…",
@@ -714,6 +725,27 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 raise
 
         raise last_error or Exception(f"Failed to create {self.SERVICE_NAME} stream")
+
+    @staticmethod
+    def _is_unresolvable_host_error(error: BaseException) -> bool:
+        """True when the provider host cannot be resolved (offline, DNS outage)."""
+        import socket
+
+        seen = 0
+        current = error
+        while current is not None and seen < 8:
+            if isinstance(current, socket.gaierror):
+                return True
+            text = str(current).lower()
+            if any(token in text for token in (
+                "[errno 8]", "nodename nor servname", "name or service not known",
+                "temporary failure in name resolution", "getaddrinfo failed",
+                "no address associated with hostname",
+            )):
+                return True
+            current = current.__cause__ or current.__context__
+            seen += 1
+        return False
 
     @staticmethod
     def _is_transient_provider_error(error: object) -> bool:
@@ -729,14 +761,21 @@ class OpenAICompatibleLLMService(BaseLLMService):
         delay = 1.0
         for attempt in range(max_retries):
             emitted = False
+            # _call_stream already retries a failed request; repeating that
+            # here multiplied the wait before failover (about 24s offline).
+            stream = await self._call_stream(messages, tools_list, max_retries=max_retries)
             try:
-                stream = await self._call_stream(messages, tools_list, max_retries=max_retries)
                 async for chunk in stream:
                     emitted = True
                     yield chunk
                 return
             except Exception as exc:
-                if emitted or attempt == max_retries - 1 or not self._is_transient_provider_error(exc):
+                if (
+                    emitted
+                    or attempt == max_retries - 1
+                    or OpenAICompatibleLLMService._is_unresolvable_host_error(exc)
+                    or not self._is_transient_provider_error(exc)
+                ):
                     raise
                 logger.warning(
                     "%s: stream failed before first chunk: %s. Retrying in %.1fs",
@@ -1002,6 +1041,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                         "Do NOT use mouse_movement for this step; retry with "
                         "accessibility tree or screenshot_analyzer."
                     )
+                    OpenAICompatibleLLMService._log_skipped_tool(self, chat_id, func_name, func_args, result_str, "visual_target_guard")
                     resp = {"tool_call_id": tc["id"], "role": "tool", "name": func_name, "content": result_str}
                     self._messages.append(resp)
                     continue
@@ -1011,6 +1051,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     "Skipped by computer-use guard: only one actioning computer-use step "
                     "is executed per round. Re-run next step after observing updated context."
                 )
+                OpenAICompatibleLLMService._log_skipped_tool(self, chat_id, func_name, func_args, result_str, "computer_use_guard")
                 resp = {"tool_call_id": tc["id"], "role": "tool", "name": func_name, "content": result_str}
                 self._messages.append(resp)
                 continue
@@ -1117,10 +1158,51 @@ class OpenAICompatibleLLMService(BaseLLMService):
                         )
                     resp = {"tool_call_id": tc["id"], "role": "tool", "name": matched.name, "content": str(result)}
                 else:
+                    OpenAICompatibleLLMService._log_skipped_tool(
+                        self, chat_id, func_name, func_args, f"Tool '{func_name}' not found", "unknown_tool"
+                    )
                     resp = {"tool_call_id": tc["id"], "role": "tool", "name": func_name,
                             "content": f"Error: Tool '{func_name}' not found"}
 
             self._messages.append(resp)
+
+    def _log_skipped_tool(self, chat_id, func_name, func_args, reason: str, guard: str) -> None:
+        """Every tool call the model makes lands in the event log, including skips."""
+        from distr.core.agent.loop_guard import log_skipped_tool
+
+        log_skipped_tool(chat_id, func_name, func_args, reason, guard, getattr(self, "event_queue", None))
+
+    def _apply_read_loop_guard(self, guard, tool_calls, tools_list):
+        """Nudge after many reads in a row; withhold tools so the model must answer."""
+        from distr.core.agent.loop_guard import observe_tool_calls, stop_instruction
+
+        verdict = observe_tool_calls(guard, tool_calls)
+        if verdict == "nudge":
+            logger.info("%s: read-loop guard nudge after %d reads", self.SERVICE_NAME, guard.consecutive_reads)
+            self._messages.append({"role": "user", "content": guard.nudge_message()})
+        elif verdict == "stop":
+            logger.warning("%s: read-loop guard stopped tool use: %s", self.SERVICE_NAME, guard.reason)
+            self._messages.append({"role": "user", "content": stop_instruction(guard)})
+            self._read_loop_stopped = guard.reason
+            return None
+        return tools_list
+
+    def _notify_round_cap(self, rounds: int, tool_calls) -> None:
+        """Tell the user the tool-round cap was hit instead of only logging it."""
+        from distr.core.agent.loop_guard import round_cap_notice
+
+        pending = [str((call.get("function") or {}).get("name") or "") for call in tool_calls or []]
+        notice = round_cap_notice(rounds, pending)
+        self._round_cap_notice = notice
+        try:
+            self._save_assistant_message(notice)
+        except Exception:
+            logger.debug("Could not save round-cap notice", exc_info=True)
+        if getattr(self, "event_queue", None) is not None:
+            try:
+                self.event_queue.put(("tool_round_cap_reached", {"rounds": rounds, "pending": pending, "message": notice}), block=False)
+            except Exception:
+                logger.debug("Could not emit round-cap event", exc_info=True)
 
     async def _process_follow_up(self, tools_list=None):
         """Make a follow-up API call after tool execution. Returns (content, tool_calls).

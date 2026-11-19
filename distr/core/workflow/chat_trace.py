@@ -9,6 +9,32 @@ from distr.core.db.time import utc_now_naive
 
 logger = logging.getLogger(__name__)
 _ACTIVE_TURN = object()
+# A workflow with no owning turn may only join the chat's active turn while
+# that turn is fresh. On 11 Nov a clipboard turn stayed open for hours and
+# unrelated bank-statement workflow reports were filed under it, so the chat
+# showed "read from the clipboard" running five workflows.
+ACTIVE_TURN_ATTACH_MAX_AGE_SEC = 10 * 60
+
+
+def _active_turn_is_stale(chat_id: int, max_age_sec: int = ACTIVE_TURN_ATTACH_MAX_AGE_SEC) -> bool:
+    try:
+        from distr.core.chat_turns import _root_and_turn
+        from distr.core.db import Chat, get_session
+
+        with get_session() as db:
+            _, active = _root_and_turn(db, int(chat_id), None)
+            if active is None:
+                return False
+            row = db.get(Chat, int(active))
+            created = getattr(row, "created_date", None) if row is not None else None
+            if created is None:
+                return False
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - created).total_seconds() > max_age_sec
+    except Exception:
+        logger.debug("active turn age check failed", exc_info=True)
+        return False
 
 
 def _preview(text: Optional[str], limit: int = 420) -> str:
@@ -172,6 +198,8 @@ def record_chat_workflow_event(
             activity_key = f"workflow:{run_id or workflow_id or 'chat'}:{step_id or 'run'}"
             terminal_statuses = {"completed", "passed", "failed", "cancelled", "skipped"}
             normalized_status = (status or "running").lower()
+            if turn_id is _ACTIVE_TURN and _active_turn_is_stale(resolved_chat_id):
+                turn_id = None  # not launched by the current request: keep it off that turn
             turn_scope = None if turn_id is _ACTIVE_TURN else turn_id
             existing_event_id = find_running_tool_event(resolved_chat_id, activity_key, turn_id=turn_scope) if turn_id is not None else None
             title = step_name or workflow_name or "Workflow"

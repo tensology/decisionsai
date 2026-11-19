@@ -260,6 +260,11 @@ def tool_execution_block_reason(
             "Blocked mutation because the latest user instruction explicitly said not to act. "
             "Respond with diagnosis or read-only inspection only."
         )
+    from distr.core.agent.side_effect_confirmation import confirmation_block_reason
+
+    confirm_reason = confirmation_block_reason(owner, tool_name, args, user_text)
+    if confirm_reason:
+        return confirm_reason
     state = _state(owner, user_text)
     scope, fingerprint = _mutation_keys(tool_name, args)
     if fingerprint in state["fingerprints"]:

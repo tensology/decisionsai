@@ -1809,6 +1809,13 @@ class InitiativeService:
             tn = action.suggested_tool.get("name", "")
             if tn:
                 msg = f"{msg} (I can use {tn} for this if you want.)"
+        try:
+            from distr.core.initiative.notice_dedup import should_post
+
+            if not should_post(msg, fingerprint=str(payload.get("state_fingerprint") or "") or None):
+                return
+        except Exception:
+            logger.debug("Initiative notice dedup check failed", exc_info=True)
         msg = f"{msg}{self._situational_suffix()}"
         # Chat gets a notice, not "Suggestion: <task brief>" (that reads like a reply to injection).
         self._log_to_chat(msg, settings)

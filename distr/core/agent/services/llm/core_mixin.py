@@ -67,13 +67,117 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         """Return the provider name for chat persistence. Inferred from class name."""
         return self.__class__.__name__.replace("LLMService", "")
 
+    def _last_user_text_for_failover(self) -> str:
+        from distr.core.agent.services.llm.oracle_context import strip_rag_block
+
+        for message in reversed(getattr(self, "_messages", []) or []):
+            if message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, list):
+                content = " ".join(
+                    str(part.get("text") or "") for part in content if isinstance(part, dict)
+                )
+            return strip_rag_block(str(content or "")).strip()
+        return ""
+
+    def _try_provider_failover(self, exc):
+        """Hand a provider-down turn to the next keyed provider.
+
+        Returns ``(handled, notice)``. ``handled`` means the session swapped to
+        a fallback provider and is replaying the user's message there, so the
+        raw provider error must not be shown. ``notice`` is the single plain
+        provider-down sentence (also used when no fallback exists).
+        """
+        try:
+            from distr.core.provider_failover import (
+                classify_provider_error,
+                log_failover,
+                next_failover,
+                provider_down_notice,
+                FAILOVER_CATEGORIES,
+            )
+        except Exception:
+            return False, ""
+        category = classify_provider_error(exc)
+        if category not in FAILOVER_CATEGORIES:
+            return False, ""
+        provider = self._get_provider_name()
+        model = str(getattr(self, "_model_name", "") or "")
+        tried = list(getattr(self, "_failover_tried", []) or [])
+        target = next_failover(provider, model, tried=tried, error=exc)
+        log_failover("chat", provider, model, exc, target)
+        notice = provider_down_notice(provider, model, exc, target)
+        handler = getattr(self, "_provider_failover_handler", None)
+        user_text = self._last_user_text_for_failover()
+        if target is None or not callable(handler) or not user_text:
+            if target is not None:
+                notice = provider_down_notice(provider, model, exc, None)
+            return False, notice
+        chat_id = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+        try:
+            handled = bool(handler(
+                target=target,
+                text=user_text,
+                chat_id=chat_id,
+                notice=notice,
+                tried=[*tried, (provider, model)],
+                is_telegram=bool(getattr(self, "_is_telegram_request", False)),
+            ))
+        except Exception:
+            logger.warning("Provider failover handler failed", exc_info=True)
+            handled = False
+        if not handled:
+            return False, provider_down_notice(provider, model, exc, None)
+        return True, notice
+
+    def _post_provider_notice(self, notice: str) -> None:
+        """Show the provider-down notice once (per provider, per 30 minutes)."""
+        try:
+            from distr.core.provider_failover import classify_provider_error, should_emit_notice
+
+            if not should_emit_notice(self._get_provider_name(), classify_provider_error(notice) or "notice"):
+                return
+        except Exception:
+            pass
+        try:
+            if self.chat_manager:
+                current_chat = self.chat_manager.get_current_chat()
+                if current_chat:
+                    # Not final: the replay on the backup provider is still coming.
+                    # A final save here closed the turn with only the notice, so API
+                    # and remote callers got "switched provider" instead of an answer.
+                    self.chat_manager.add_assistant_message(current_chat, notice, is_final=False)
+                    try:
+                        from distr.core.agent.tool_audit import record_tool_execution
+
+                        record_tool_execution(
+                            int(current_chat), "provider_failover", notice, "completed",
+                            instruction_hint="Switched model provider", chat_visible=True,
+                        )
+                    except Exception:
+                        logger.debug("Could not record provider failover activity", exc_info=True)
+        except Exception:
+            logger.debug("Could not persist provider notice", exc_info=True)
+        if getattr(self, "event_queue", None):
+            chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+            try:
+                self.event_queue.put(("provider_down_notice", {"notice": notice, "chat_id": chat_id}), block=False)
+            except Exception:
+                pass
+
     async def _surface_model_error(self, exc, operation: str = "generate a response") -> str:
         """Show model/provider failures in chat; speak a short human line only."""
         from distr.core.agent.libs import ErrorFrame, TextFrame
         from distr.core.llm_errors import format_model_error, format_model_error_for_tts
         from distr.core.agent.services.llm.text_utils import clean_text_for_tts
 
-        msg = format_model_error(
+        handled, notice = self._try_provider_failover(exc)
+        if handled:
+            self._post_provider_notice(notice)
+            return ""
+
+        msg = notice or format_model_error(
             exc,
             provider=self._get_provider_name(),
             model=getattr(self, "_model_name", ""),
@@ -819,84 +923,81 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             sticky_names = set(getattr(self, "_sticky_tool_names", set()))
             sticky = [t for t in self._tools if t.name not in retrieved_names and t.name in sticky_names]
 
-            # Provider-aware mail exposure repair.
-            qlow = (last_user_message or "").lower()
-            tensology_mail_keywords = ("tensology mail", "tensology inbox", "mailshot")
-            gmail_keywords = ("gmail", "email", "inbox", "google workspace")
-            calendar_keywords = (
-                "google calendar",
-                "gcal",
-                "calendar event",
-                "calendar events",
-                "event creation",
-                "create calendar",
-                "bulk event",
-                "recurring event",
-            )
-            explicit_tensology_mail = any(k in qlow for k in tensology_mail_keywords)
-            explicit_google_mail = any(k in qlow for k in ("gmail", "google mail", "google workspace"))
-            generic_mail_read = (
-                any(k in qlow for k in ("mail", "email", "inbox"))
-                and any(k in qlow for k in ("check", "read", "show", "list", "new", "unread", "inbox"))
-                and not any(k in qlow for k in ("send", "draft", "reply", "write"))
-            )
-            if explicit_tensology_mail and "tensology_workspace" in self._tools_dict:
-                tensology_tool = self._tools_dict["tensology_workspace"]
-                if tensology_tool.name not in retrieved_names:
-                    retrieved.append(tensology_tool)
-                    retrieved_names.add(tensology_tool.name)
-            if generic_mail_read and not explicit_tensology_mail and not explicit_google_mail:
-                for mail_tool_name in ("tensology_workspace", "google_workspace"):
-                    mail_tool = self._tools_dict.get(mail_tool_name)
-                    if mail_tool is not None and mail_tool.name not in retrieved_names:
-                        retrieved.append(mail_tool)
-                        retrieved_names.add(mail_tool.name)
-            workspace_exposure_keywords = gmail_keywords + calendar_keywords
-            if (
-                not explicit_tensology_mail
-                and not generic_mail_read
-                and any(k in qlow for k in workspace_exposure_keywords)
-                and "google_workspace" in self._tools_dict
-            ):
-                gw_tool = self._tools_dict["google_workspace"]
-                if gw_tool.name not in retrieved_names:
-                    retrieved.append(gw_tool)
-                    retrieved_names.add(gw_tool.name)
-            delegated_source_keywords = ("telegram", "remote", "desktop", "browser", "phone")
-            delegated_work_keywords = (
-                "pdf",
-                "document",
-                "attachment",
-                "file",
-                "scope",
-                "plan",
-                "prep",
-                "prepare",
-                "http://",
-                "https://",
-                "website",
-                "web page",
-                "playwright",
-                "browseruse",
-                "browser use",
-                "screenshot",
-                "click",
-            )
-            delegated_handoff_keywords = ("codex", "cursor", "handoff", "implement", "report back")
-            wants_delegated_plan = (
-                any(k in qlow for k in delegated_source_keywords)
-                and any(k in qlow for k in workspace_exposure_keywords + delegated_work_keywords)
-                and any(k in qlow for k in delegated_handoff_keywords + ("mouse", "keyboard", "copy", "paste"))
-            )
-            if wants_delegated_plan and "delegated_workflow" in self._tools_dict:
-                delegated_tool = self._tools_dict["delegated_workflow"]
-                if delegated_tool.name not in retrieved_names:
-                    retrieved.append(delegated_tool)
-                    retrieved_names.add(delegated_tool.name)
+            # Intent groups (Development state, planning, mail, calendar,
+            # delegated device work) pin the tools that answer them; these
+            # replaced the per-keyword exposure hacks that lived here.
+            from distr.core.agent.tool_relevance import intent_tool_names
+
+            for intent_name in intent_tool_names(last_user_message):
+                intent_tool = self._tools_dict.get(intent_name)
+                if intent_tool is not None and intent_tool.name not in retrieved_names:
+                    retrieved.append(intent_tool)
+                    retrieved_names.add(intent_tool.name)
             return retrieved + sticky
         except Exception as e:
             logger.debug("_get_filtered_tools fallback: %s", e)
             return self._tools
+
+    def _chat_project_id(self, chat_id) -> int | None:
+        if not chat_id:
+            return None
+        try:
+            from distr.core.db import Chat, get_session
+
+            with get_session() as session:
+                chat = session.get(Chat, int(chat_id))
+                if chat is None:
+                    return None
+                if chat.project_id:
+                    return int(chat.project_id)
+                if chat.parent_id:
+                    parent = session.get(Chat, int(chat.parent_id))
+                    if parent is not None and parent.project_id:
+                        return int(parent.project_id)
+        except Exception:
+            logger.debug("Could not resolve chat project", exc_info=True)
+        return None
+
+    def _ground_state_question(self, text: str, user_message_content: str) -> str:
+        """Call the read-only Development tools before answering a state question."""
+        try:
+            from distr.core.agent.state_grounding import ground_state, is_state_question
+        except Exception:
+            return user_message_content
+        if not is_state_question(text):
+            return user_message_content
+        chat_id = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+        try:
+            grounding = ground_state(
+                getattr(self, "_tools_dict", {}) or {},
+                chat_id=chat_id,
+                project_id=self._chat_project_id(chat_id),
+            )
+        except Exception:
+            logger.warning("State grounding failed", exc_info=True)
+            return user_message_content
+        self._last_state_grounding = grounding
+        return grounding.to_prompt_block(user_message_content)
+
+    def _apply_plan_step(self, text: str, user_message_content: str) -> str:
+        """Ask for a short numbered plan first when the request has several steps."""
+        try:
+            from distr.core.agent.plan_step import with_plan_step
+
+            content, planned = with_plan_step(text, user_message_content)
+        except Exception:
+            logger.debug("Plan step skipped", exc_info=True)
+            return user_message_content
+        self._last_plan_step = planned
+        if planned:
+            logger.info("Plan step requested for multi-step request")
+            queue = getattr(self, "event_queue", None)
+            if queue is not None:
+                try:
+                    queue.put(("plan_step_requested", {"text": str(text or "")[:200]}), block=False)
+                except Exception:
+                    pass
+        return content
 
     def _maybe_inject_rag_context(self, text: str) -> str:
         """When a local RAG index exists, prepend retrieved context for chat replies."""
@@ -912,6 +1013,18 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             )
 
             mp_ctx = prefer_read_rag_context(clean)
+            if not mp_ctx:
+                try:
+                    from distr.core.mempalace.wiring import _enabled as _mempalace_enabled
+
+                    enabled = _mempalace_enabled(None)
+                except Exception:
+                    enabled = False
+                logger.info(
+                    "MemPalace recall: %s (%d words)",
+                    "no match" if enabled else "backend off",
+                    len(clean.split()),
+                )
             if mp_ctx:
                 relevant = filter_rag_snippets(clean, mp_ctx)
                 if not relevant:
@@ -923,8 +1036,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 block = RAG_HEADER + "\n" + relevant[:2500]
                 logger.info("MemPalace RAG inject (%d of %d chars kept)", len(relevant), len(mp_ctx))
                 return block + USER_REQUEST_MARKER + clean
-        except Exception:
-            logger.debug("MemPalace RAG inject skipped", exc_info=True)
+        except Exception as exc:
+            logger.warning("MemPalace recall failed: %s", exc)
         try:
             from pathlib import Path as _Path
             from distr.core.agent.services.rag.integration import query_rag
@@ -1036,6 +1149,56 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         except Exception:
             logger.exception("Agent WorkIntake routing failed; continuing conversational path")
             return False
+
+    def _recent_user_texts(self, limit: int = 4) -> list[str]:
+        from distr.core.agent.services.llm.oracle_context import strip_rag_block
+
+        texts: list[str] = []
+        for message in reversed(getattr(self, "_messages", []) or []):
+            if message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                texts.append(strip_rag_block(content))
+            if len(texts) >= limit:
+                break
+        return list(reversed(texts))
+
+    def _defer_anaphoric_fast_action(self, fast_action, text: str) -> bool:
+        """Send "read it" to the model when "it" is a thread/message, not the clipboard."""
+        try:
+            from distr.core.agent.anaphora import should_defer_clipboard_read
+            from distr.core.agent.services.llm.fast_action_detector import ActionType
+
+            if fast_action is None or fast_action.action_type not in {ActionType.CLIPBOARD_READ, ActionType.CLIPBOARD_GET}:
+                return False
+            history = self._recent_user_texts()
+            clean = str(text or "").strip()
+            if history and history[-1].strip() == clean:
+                history = history[:-1]
+            referent = should_defer_clipboard_read(clean, history)
+        except Exception:
+            logger.debug("Anaphora check failed", exc_info=True)
+            return False
+        if referent:
+            logger.info("Deferred clipboard fast action: %r refers to %s", clean[:80], referent)
+            self._anaphora_referent = referent
+            messages = getattr(self, "_messages", None) or []
+            from distr.core.agent.services.llm.oracle_context import strip_rag_block
+
+            if (
+                messages
+                and messages[-1].get("role") == "user"
+                and isinstance(messages[-1].get("content"), str)
+                and strip_rag_block(messages[-1]["content"]).strip() == clean
+            ):
+                # The user turn is already queued for the model: add the hint now.
+                from distr.core.agent.anaphora import referent_hint
+
+                messages[-1]["content"] = messages[-1]["content"].rstrip() + "\n\n" + referent_hint(referent)
+                self._anaphora_referent = ""
+            return True
+        return False
 
     def _should_defer_type_text_fast_action(self, fast_action, text: str) -> bool:
         """Debounce type_text FAs so partial/growing ASR utterances do not double-fire.
@@ -1171,6 +1334,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         fast_action = detect_fast_action(last_message)
         if fast_action and fast_action.confidence >= 0.9 and fast_action.action_type not in (ActionType.CONVERSATIONAL, ActionType.UNKNOWN):
             if self._should_defer_type_text_fast_action(fast_action, last_message):
+                return None
+            if self._defer_anaphoric_fast_action(fast_action, last_message):
                 return None
             return fast_action
         if normalized not in repeat_phrases:
@@ -1763,7 +1928,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         try:
             from distr.core.developer_context import build_developer_context
 
-            developer_context_text = build_developer_context(chat_id=chat_id).to_prompt_text(max_chars=2200)
+            developer_context_text = build_developer_context(chat_id=chat_id).to_sectioned_prompt_text(max_chars=6000)
         except Exception:
             logger.warning("Could not build developer workflow context", exc_info=True)
 
@@ -1842,6 +2007,28 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
 
         persona = getattr(self, '_persona', None)
         content = f"{persona}\n\n{template}" if persona else template
+        try:
+            from distr.core.agent.owner_identity import owner_identity_block, owner_name
+
+            owner_block = owner_identity_block(owner_name(getattr(self, "_username", "")))
+        except Exception:
+            owner_block = ""
+        if owner_block:
+            content = (
+                f"{persona}\n\n{owner_block}\n\n{template}" if persona else f"{owner_block}\n\n{template}"
+            )
+        try:
+            from distr.core.agent.memory_capture import memory_prompt_block, remembered_entries
+
+            remembered = remembered_entries()
+            memory_block = memory_prompt_block(remembered)
+        except Exception:
+            remembered, memory_block = [], ""
+        if memory_block:
+            content = f"{content}\n\n{memory_block}"
+            if len(remembered) != getattr(self, "_last_memory_entry_count", None):
+                logger.info("Memory in prompt: %d remembered entries", len(remembered))
+                self._last_memory_entry_count = len(remembered)
 
         # Append recent tool reflection context so the LLM is aware of prior
         # tool outcomes (failures, loop patterns) when composing its response.
@@ -2194,6 +2381,13 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             skip_user_persist or should_bypass_fast_action_detection(text)
         )
         self._ensure_user_message_persisted(text, skip=skip_user_persist)
+        if not skip_user_persist and not getattr(self, "_is_automation_turn", False):
+            try:
+                from distr.core.agent.memory_capture import capture as _capture_memory
+
+                _capture_memory(text, chat_id=requested_chat_id or getattr(self, "current_chat_id", None))
+            except Exception:
+                logger.debug("Memory capture skipped", exc_info=True)
 
         # Handle vision input
         from distr.core.agent.services.llm.image_utils import (
@@ -2209,6 +2403,16 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         )
         if isinstance(user_message_content, str):
             user_message_content = self._maybe_inject_rag_context(user_message_content)
+        if isinstance(user_message_content, str):
+            user_message_content = self._ground_state_question(text, user_message_content)
+        if isinstance(user_message_content, str):
+            user_message_content = self._apply_plan_step(text, user_message_content)
+        referent = getattr(self, "_anaphora_referent", "")
+        if referent and isinstance(user_message_content, str):
+            from distr.core.agent.anaphora import referent_hint
+
+            user_message_content = user_message_content.rstrip() + "\n\n" + referent_hint(referent)
+            self._anaphora_referent = ""
         image_path = get_image_path_from_context(uploaded_image_path)
 
         if image_path and os.path.exists(image_path):
@@ -2219,7 +2423,10 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         elif image_path:
             logger.warning("Image path provided but file doesn't exist: %s", image_path)
 
-        self._messages.append({"role": "user", "content": user_message_content})
+        last = self._messages[-1] if self._messages else {}
+        replaying = bool(getattr(self, "_failover_replay", False)) or bool(getattr(self, "_failover_tried", None))
+        if not (replaying and last.get("role") == "user" and str(last.get("content")) == str(user_message_content)):
+            self._messages.append({"role": "user", "content": user_message_content})
 
         # Cancel any running background chain before starting new generation
         if hasattr(self, '_background_chain') and self._background_chain:
@@ -2234,6 +2441,23 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             except asyncio.CancelledError:
                 pass
             self._cancelled = False
+
+        try:
+            from distr.core.provider_failover import is_chat_capable_model
+
+            chat_capable = is_chat_capable_model(getattr(self, "_model_name", ""))
+        except Exception:
+            chat_capable = True
+        if not chat_capable:
+            # Batch-only / embedding / speech models can never answer a chat
+            # turn; fail over before calling the provider at all.
+            await self._surface_model_error(
+                RuntimeError(
+                    f"{getattr(self, '_model_name', '')} cannot be used with the chat/completions endpoint"
+                ),
+                operation="generate a response",
+            )
+            return
 
         self._generation_task = asyncio.create_task(self._generate_response())
 
@@ -2513,6 +2737,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 and fast_action.action_type != ActionType.CONVERSATIONAL
                 and (fast_action.action_type != ActionType.UNKNOWN or fast_action.tool_name)
             )
+            if can_execute_directly and self._defer_anaphoric_fast_action(fast_action, text):
+                can_execute_directly = False
             if can_execute_directly:
                 if self._should_defer_type_text_fast_action(fast_action, text):
                     if getattr(self, "_type_text_fa_soft_defer", False):

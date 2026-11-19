@@ -12,6 +12,7 @@ from distr.core.turn_runtime.contracts import (
     TurnEvent,
     TurnEventKind,
     TurnEventSink,
+    TurnCancelled,
     TurnRequest,
     TurnResult,
     TurnStatus,
@@ -142,6 +143,45 @@ class CliHarnessTurnRuntime:
 
         token = cancellation or CancellationToken()
         token.raise_if_cancelled()
+
+        # Anti-loop guard (18 Nov: 80+ Read/Grep/Ls calls, no edit, until Paul
+        # stopped it by hand). Counts read-only tool events between changes.
+        from distr.core.agent.loop_guard import ReadLoopGuard, is_harness_read
+
+        read_guard = ReadLoopGuard.for_development()
+        outer_on_event = on_event
+
+        def on_event(event: TurnEvent) -> None:  # noqa: F811 - wraps the caller's sink
+            if outer_on_event:
+                outer_on_event(event)
+            if event.kind != TurnEventKind.TOOL_COMPLETED or read_guard.tripped:
+                return
+            details = dict(event.details or {})
+            read = is_harness_read(event.tool_name or "", details)
+            if read is None:
+                return
+            verdict = read_guard.observe(
+                event.tool_name or "", {"call": details.get("command") or details.get("call_id") or ""}, read=read
+            )
+            if verdict and outer_on_event:
+                outer_on_event(
+                    TurnEvent(
+                        kind=TurnEventKind.STATUS,
+                        status=TurnStatus.WORKING if verdict == "nudge" else TurnStatus.FAILED,
+                        summary=(
+                            f"{read_guard.consecutive_reads} reads in a row without a change."
+                            if verdict == "nudge"
+                            else read_guard.stop_message("development")
+                        ),
+                        runtime_id=self.runtime_id,
+                        tool_name="",
+                        details={"read_loop_guard": verdict, "consecutive_reads": read_guard.consecutive_reads},
+                    )
+                )
+            if verdict == "stop":
+                # Unwinds the harness stream like a user stop, but is reported
+                # as a guard stop (see the except below), not "stopped by the user".
+                raise ReadLoopStopped(read_guard.reason)
 
         def relay(raw: dict[str, Any]) -> None:
             token.raise_if_cancelled()
@@ -392,26 +432,49 @@ class CliHarnessTurnRuntime:
             options["development_image_paths"] = image_paths
         if request.autonomy_level == "plan":
             options["read_only_expected"] = True
-        handle = await dispatch_harness(
-            HarnessContext(
-                project=request.project,
-                instruction=request.instruction,
-                backend_id=route.backend_id,
-                chat_id=request.scope.chat_id,
-                model=route.model,
-                ticket_id=request.scope.ticket_id,
-                board_id=request.scope.board_id,
-                ticket_complexity=request.complexity,
-                codex_reasoning_effort=str(options.get("reasoning_effort") or ""),
-                codex_service_tier=str(options.get("service_tier") or ""),
-                origin="development",
-                on_event=relay,
-                required_capabilities=list(request.required_capabilities),
-                adapter_options=options,
-                turn_id=request.scope.turn_id,
-                cancel_requested=lambda: token.cancelled,
+        try:
+            handle = await dispatch_harness(
+                HarnessContext(
+                    project=request.project,
+                    instruction=request.instruction,
+                    backend_id=route.backend_id,
+                    chat_id=request.scope.chat_id,
+                    model=route.model,
+                    ticket_id=request.scope.ticket_id,
+                    board_id=request.scope.board_id,
+                    ticket_complexity=request.complexity,
+                    codex_reasoning_effort=str(options.get("reasoning_effort") or ""),
+                    codex_service_tier=str(options.get("service_tier") or ""),
+                    origin="development",
+                    on_event=relay,
+                    required_capabilities=list(request.required_capabilities),
+                    adapter_options=options,
+                    turn_id=request.scope.turn_id,
+                    cancel_requested=lambda: token.cancelled,
+                )
             )
-        )
+        except ReadLoopStopped:
+            handle = None
+        if read_guard.tripped and not token.cancelled:
+            session_id = getattr(handle, "execution_session_id", None)
+            if session_id:
+                from distr.core.kanban.project_execution import cancel_execution_session
+
+                try:
+                    cancel_execution_session(session_id)
+                except Exception:
+                    pass
+            return TurnResult(
+                success=False,
+                status="failed",
+                runtime_id=self.runtime_id,
+                backend_id=route.backend_id,
+                model=route.model,
+                output="",
+                error=read_guard.stop_message("development"),
+                execution_session_id=session_id,
+                evidence={"read_loop_guard": read_guard.reason, "total_reads": read_guard.total_reads},
+            )
         if token.cancelled:
             from distr.core.kanban.project_execution import cancel_execution_session
 
@@ -435,6 +498,10 @@ class CliHarnessTurnRuntime:
                       **({"proposal_error": (getattr(result, "diagnostics", {}) or {}).get("proposal_error")}
                          if options.get("proposal_only") else {})},
         )
+
+
+class ReadLoopStopped(TurnCancelled):
+    """The Development read-loop guard stopped a harness run that was not progressing."""
 
 
 _INLINE_IMAGE_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"}

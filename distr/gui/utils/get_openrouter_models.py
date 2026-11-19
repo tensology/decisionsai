@@ -70,6 +70,11 @@ def _parse_openrouter_model(model: dict) -> dict | None:
     model_id = model.get('id', '')
     if not model_id:
         return None
+    # Batch-only ids (e.g. ``…:batch``) cannot serve chat/completions, so
+    # never offer them in a chat model picker.
+    from distr.core.provider_failover import is_chat_capable_model
+    if not is_chat_capable_model(model_id):
+        return None
 
     name = model.get('name', '') or _format_openrouter_model_name(model_id)
 

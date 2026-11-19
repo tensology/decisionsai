@@ -1139,7 +1139,61 @@ class AgentSession:
             ),
             tts_service=getattr(self, 'tts_service', None),
         )
+        try:
+            self.llm_service._provider_failover_handler = self._on_provider_failover
+        except Exception:
+            pass
         return self.llm_service
+
+    def _on_provider_failover(self, *, target, text, chat_id, notice, tried, is_telegram=False) -> bool:
+        """Swap the chat to the next keyed provider and replay the user's turn.
+
+        Called from inside the failing service's generation task, so the swap
+        and replay are scheduled on the agent loop instead of run inline. The
+        chat row is updated too, so the model shown is the model that runs.
+        """
+        import asyncio
+        from distr.core.agent.constants import ENGINE_TO_PROVIDER
+
+        provider_display = ENGINE_TO_PROVIDER.get(target.provider, target.provider)
+        if chat_id:
+            try:
+                from distr.core.db import Chat, get_session
+
+                with get_session() as db_sess:
+                    chat = db_sess.get(Chat, int(chat_id))
+                    if chat is not None:
+                        chat.provider = target.provider
+                        chat.model_name = target.model
+                        db_sess.commit()
+            except Exception:
+                self.logger.warning("Provider failover: could not persist chat model", exc_info=True)
+        try:
+            loop = asyncio.get_event_loop()
+        except Exception:
+            return False
+
+        def _swap_and_replay():
+            try:
+                self._hot_swap_llm_service(provider_display, target.model, chat_id)
+                service = self.llm_service
+                service._failover_tried = list(tried)
+                loop.create_task(
+                    service.process_chat_input(
+                        text,
+                        is_telegram=bool(is_telegram),
+                        skip_user_persist=True,
+                        requested_chat_id=chat_id,
+                    )
+                )
+                self.logger.warning(
+                    "Provider failover: chat %s now on %s/%s", chat_id, target.provider, target.model
+                )
+            except Exception:
+                self.logger.error("Provider failover: swap/replay failed", exc_info=True)
+
+        loop.call_soon(_swap_and_replay)
+        return True
 
     def _hot_swap_llm_service(
         self,

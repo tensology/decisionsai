@@ -160,9 +160,138 @@ class DeveloperWorkContext:
     workspace: dict[str, Any] = field(default_factory=dict)
     ecosystem: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    # Where active_project came from: "thread" (Development thread scope),
+    # "chat" (the chat row's own project) or "global_default" (the Settings
+    # in_use flag, which is NOT tied to the conversation).
+    project_source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    # Fixed per-section budgets for the ~6,000 character chat context. Each
+    # section is trimmed on its own, so a long plan can no longer squeeze
+    # tickets and runs out of the prompt.
+    SECTION_BUDGETS = {
+        "header": 260,
+        "project": 1000,
+        "thread": 900,
+        "tickets": 1000,
+        "runs": 1000,
+        "planning": 1450,
+        "notes": 390,
+    }
+
+    def _section_view(self, keep: set[str]) -> "DeveloperWorkContext":
+        from dataclasses import replace
+
+        cleared = {
+            "active_project": None,
+            "active_board": None,
+            "active_thread": {},
+            "ide_thread_locks": {},
+            "active_plan": None,
+            "planning_snapshot": {},
+            "plan_sections_text": "",
+            "active_tickets": [],
+            "active_workflows": [],
+            "active_executions": [],
+            "external_agent_context": {},
+            "user_memory_context": "",
+            "board_notes": [],
+            "recommended_skills": [],
+            "workspace": {},
+            "ecosystem": {},
+            "warnings": [],
+        }
+        for name in keep:
+            cleared.pop(name, None)
+        return replace(self, **cleared)
+
+    @staticmethod
+    def _strip_header(text: str) -> str:
+        header_prefixes = ("Developer workflow context:", "- now:", "- cwd:", "- current_chat_id:", "- debug_mode:")
+        return "\n".join(line for line in text.splitlines() if not line.startswith(header_prefixes)).strip()
+
+    @staticmethod
+    def _fit(text: str, budget: int) -> str:
+        text = (text or "").strip()
+        if len(text) <= budget:
+            return text
+        return text[: max(0, budget - 12)].rstrip() + " …(trimmed)"
+
+    def to_sectioned_prompt_text(self, max_chars: int = 6000) -> str:
+        """Render project, thread, tickets, runs and planning as fixed sections."""
+        budgets = dict(self.SECTION_BUDGETS)
+        scale = max_chars / float(sum(budgets.values()))
+        budgets = {key: max(80, int(value * scale)) for key, value in budgets.items()}
+
+        source = self.project_source or ("global_default" if self.active_project else "none")
+        header = [
+            "Developer workflow context (sectioned):",
+            f"- captured_at: {self.runtime.captured_at or 'unknown'} (state may have changed since)",
+            f"- current_chat_id: {self.runtime.current_chat_id}",
+            f"- project_source: {source}",
+        ]
+        sections: list[tuple[str, str]] = [("header", "\n".join(header))]
+
+        project_text = self._strip_header(
+            self._section_view({"active_project", "active_board", "board_notes"}).to_prompt_text(max_chars=100000)
+        )
+        if source == "global_default" and self.active_project:
+            project_text += (
+                "\n  note: this is the global default project from Settings, not tied to this chat. "
+                "Do not tell the user they are working on it without checking live state."
+            )
+        sections.append(("project", "## Project\n" + (project_text or "- none linked to this chat")))
+
+        thread_text = self._strip_header(
+            self._section_view({"active_thread", "ide_thread_locks"}).to_prompt_text(max_chars=100000)
+        )
+        sections.append(("thread", "## Thread\n" + (thread_text or "- no Development thread scope")))
+
+        tickets_text = self._strip_header(
+            self._section_view({"active_tickets"}).to_prompt_text(max_chars=100000)
+        )
+        if self.active_tickets and len(self.active_tickets) > 8:
+            extra = "\n".join(
+                f"  - #{t.id} {t.title} (lane={t.lane}, priority={t.priority})" for t in self.active_tickets[8:16]
+            )
+            tickets_text += "\n" + extra
+        sections.append(("tickets", "## Tickets\n" + (tickets_text or "- no active tickets")))
+
+        runs_text = self._strip_header(
+            self._section_view({"active_workflows", "active_executions", "external_agent_context"}).to_prompt_text(
+                max_chars=100000
+            )
+        )
+        sections.append(("runs", "## Runs\n" + (runs_text or "- no active workflow runs or executions")))
+
+        planning_parts: list[str] = []
+        if self.active_plan:
+            plan = self.active_plan
+            planning_parts.append(
+                f"- active_plan: #{plan.id} {plan.board_name} (board={plan.board_key}, status={plan.status}, items={plan.item_count})"
+            )
+        if self.planning_snapshot:
+            try:
+                from distr.core.planning.context import planning_prompt_text
+
+                planning_parts.append(planning_prompt_text(self.planning_snapshot, max_chars=budgets["planning"]))
+            except Exception:
+                logger.warning("Could not render planning snapshot", exc_info=True)
+        if self.plan_sections_text:
+            planning_parts.append(self.plan_sections_text)
+        sections.append(("planning", "## Planning\n" + ("\n".join(p for p in planning_parts if p) or "- no persisted plan")))
+
+        notes_text = self._strip_header(
+            self._section_view({"user_memory_context", "workspace", "recommended_skills", "warnings"}).to_prompt_text(
+                max_chars=100000
+            )
+        )
+        if notes_text:
+            sections.append(("notes", "## Notes\n" + notes_text))
+
+        return "\n\n".join(self._fit(text, budgets[name]) for name, text in sections)
 
     def to_prompt_text(self, max_chars: int = 4000) -> str:
         """Render compact, stable context for agent prompts."""
@@ -194,7 +323,8 @@ class DeveloperWorkContext:
         if self.active_project:
             project = self.active_project
             folder = f" ({project.folder_location})" if project.folder_location else ""
-            lines.append(f"- active_project: #{project.id} {project.name}{folder}")
+            source = f" [source: {self.project_source}]" if self.project_source else ""
+            lines.append(f"- active_project: #{project.id} {project.name}{folder}{source}")
             if project.description:
                 lines.append(f"  description: {_one_line(project.description, 180)}")
 
@@ -419,6 +549,9 @@ class DeveloperContextAssembler:
         )
         if scoped_project is not None:
             active_project = scoped_project
+            project_source = str(active_thread.get("project_source") or "thread")
+        else:
+            project_source = "global_default" if active_project is not None else ""
         active_board = _safe_call("active board", warnings, self._fetch_active_board, active_project)
         scoped_board = _safe_call(
             "scoped board", warnings, self._fetch_board_for_scope, active_thread, active_project
@@ -489,6 +622,7 @@ class DeveloperContextAssembler:
             workspace=workspace,
             ecosystem=ecosystem,
             warnings=warnings,
+            project_source=project_source,
         )
 
     def _fetch_planning_snapshot(self, active_project: DeveloperProjectContext | None, scope: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -540,6 +674,16 @@ class DeveloperContextAssembler:
                 **{key: value for key, value in metadata.items() if value not in (None, "")},
                 **{key: value for key, value in scope.items() if value not in (None, "")},
             }
+            if result.get("project_id"):
+                result.setdefault("project_source", "thread")
+            else:
+                chat_project = getattr(chat, "project_id", None)
+                if not chat_project and getattr(chat, "parent_id", None):
+                    parent = session.get(Chat, int(chat.parent_id))
+                    chat_project = getattr(parent, "project_id", None) if parent is not None else None
+                if chat_project:
+                    result["project_id"] = int(chat_project)
+                    result["project_source"] = "chat"
             ticket_id = result.get("ticket_id")
             if ticket_id:
                 from distr.core.kanban.lane_history import current_ticket_lane, recent_lane_history_for_ticket

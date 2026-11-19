@@ -214,15 +214,17 @@ class ToolRetriever:
 
     def _collect_descriptions(self, tools: list) -> tuple:
         """Build parallel name/description lists from tools."""
+        from distr.core.agent.tool_relevance import describe_tool
         from distr.core.agent.tools.loader import TOOL_DESCRIPTIONS
         names, descriptions = [], []
         for tool in tools:
             tool_name = tool.name
             class_name = type(tool).__name__
-            desc = TOOL_DESCRIPTIONS.get(class_name)
-            if not desc:
+            # MCP (Laya, Headroom, Composio) and built artifact tools are not in
+            # the static map; describe them from their server and own text.
+            desc = describe_tool(tool, TOOL_DESCRIPTIONS)
+            if desc == class_name:
                 logger.warning("Tool %r (class %s) missing description; using class name", tool_name, class_name)
-                desc = class_name
             names.append(tool_name)
             descriptions.append(desc)
         return names, descriptions
@@ -324,8 +326,9 @@ class ToolRetriever:
         if query_norm > 0:
             query_vec = query_vec / query_norm
         scores = query_vec @ self._matrix.T
-        top_k = np.argsort(scores)[::-1][:k]
-        return {self._names[i] for i in top_k}
+        from distr.core.agent.tool_relevance import select_by_relevance
+
+        return set(select_by_relevance(self._names, scores, k, "sbert"))
 
     def _retrieve_tfidf(self, user_message: str, k: int) -> set:
         """Retrieve top-K tool names using TF-IDF cosine sim."""
@@ -334,8 +337,9 @@ class ToolRetriever:
         # multiplication is both cheaper and more robust than passing an empty
         # out-of-vocabulary csr_matrix through sklearn's array validation.
         scores = (query_vec @ self._tfidf_matrix.T).toarray()[0]
-        top_k = np.argsort(scores)[::-1][:k]
-        return {self._names[i] for i in top_k}
+        from distr.core.agent.tool_relevance import select_by_relevance
+
+        return set(select_by_relevance(self._names, scores, k, "tfidf"))
 
     def retrieve(
         self, user_message: str, model_name: str, k: int | None = None
@@ -388,8 +392,10 @@ class ToolRetriever:
         try:
             from distr.core.agent.tool_intents import forced_tool_names_for_text
 
+            from distr.core.agent.tool_relevance import intent_tool_names
+
             forced = [
-                name for name in forced_tool_names_for_text(user_message)
+                name for name in forced_tool_names_for_text(user_message) + intent_tool_names(user_message)
                 if name in self._names
             ]
         except Exception:

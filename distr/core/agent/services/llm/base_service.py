@@ -311,6 +311,12 @@ class BaseLLMService(LLMSharedMixin, LLMService):
             decision = decisions[idx] if idx < len(decisions) else {"allow": True, "reason": "ok"}
             tool_name = tool_call["function"]["name"]
             if not decision.get("allow", True):
+                from distr.core.agent.loop_guard import log_skipped_tool
+
+                log_skipped_tool(
+                    chat_id, tool_name, tool_call["function"].get("arguments"),
+                    "Skipped by computer-use guard", "computer_use_guard", self.event_queue,
+                )
                 results.append({
                     "role": "tool",
                     "tool_call_id": tool_call["id"],
@@ -471,7 +477,19 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         from distr.core.llm_errors import format_model_error, format_model_error_for_tts
         from distr.core.agent.services.llm.text_utils import clean_text_for_tts
 
-        msg = format_model_error(
+        # This override shadows LLMSharedMixin._surface_model_error, so provider
+        # failover must be attempted here too or chat never fails over.
+        notice = ""
+        try_failover = getattr(self, "_try_provider_failover", None)
+        if callable(try_failover):
+            handled, notice = try_failover(exc)
+            if handled:
+                post = getattr(self, "_post_provider_notice", None)
+                if callable(post):
+                    post(notice)
+                return ""
+
+        msg = notice or format_model_error(
             exc,
             provider=self._get_provider_name(),
             model=getattr(self, "_model_name", ""),

@@ -31,6 +31,27 @@ from distr.core.agent.services.llm.tool_execution_policy import (
 logger = logging.getLogger(__name__)
 
 
+
+# Fast-action replies that never pass through the normal assistant-save path.
+_SELF_CONTAINED_RESPONSE_TYPES = frozenset({"tts", "tts_clipboard", "action_playback"})
+
+
+def _open_turn_id(chat_id):
+    """The chat's active turn when the fast action starts (captured up front so a
+    newer message sent during a long read-aloud is never closed by mistake)."""
+    if not chat_id:
+        return None
+    try:
+        from distr.core.chat_turns import _root_and_turn
+        from distr.core.db import get_session
+
+        with get_session() as session:
+            _root, turn = _root_and_turn(session, int(chat_id), None)
+        return turn
+    except Exception:
+        return None
+
+
 class FastActionMixin:
     """Mixin providing fast action execution for LLM services.
 
@@ -66,6 +87,8 @@ class FastActionMixin:
                 available = [t.name for t in self._tools] if self._tools else []
                 logger.error("Fast action tool '%s' NOT FOUND. Available: %s", fast_action.tool_name, available[:20])
                 return False
+
+            opening_turn_id = _open_turn_id(current_chat_id)
 
             # --- execute ---
             logger.info("Fast exec: %s(%s)", tool.name, fast_action.tool_args)
@@ -153,7 +176,13 @@ class FastActionMixin:
             }.get(fast_action.response_type)
 
             if handler:
-                return await handler(fast_action, current_chat_id, result, tool)
+                handled = await handler(fast_action, current_chat_id, result, tool)
+                if handled and fast_action.response_type in _SELF_CONTAINED_RESPONSE_TYPES:
+                    # These paths speak or act without saving an assistant reply,
+                    # so nothing else closes the turn. Left open, later workflow
+                    # updates attach to it and the chat shows "working" for hours.
+                    self._fa_close_turn(current_chat_id, opening_turn_id, fast_action, result)
+                return handled
 
             logger.warning("LLM: Unknown response_type '%s' for fast action, falling back to LLM", fast_action.response_type)
             return False
@@ -161,6 +190,25 @@ class FastActionMixin:
         except Exception as e:
             logger.error("LLM: Error executing fast action: %s", e, exc_info=True)
             return False
+
+    def _fa_close_turn(self, chat_id, turn_id, fast_action, result) -> None:
+        """Mark the fast action's own turn as answered (idempotent per turn)."""
+        if not chat_id or not turn_id:
+            return
+        try:
+            from distr.core.chat_turns import complete_turn
+
+            label = {
+                "tts_clipboard": "Read the clipboard aloud.",
+                "tts": "Read it aloud.",
+                "action_playback": "Done.",
+            }.get(fast_action.response_type, "Done.")
+            text = str(result or "")
+            if text.lower().startswith(("error", "could not", "failed")):
+                label = text[:240]
+            complete_turn(int(chat_id), turn_id=int(turn_id), display_text=label)
+        except Exception:
+            logger.warning("LLM: Could not close fast-action turn", exc_info=True)
 
     # --- fast-action sub-handlers (private) ---
 

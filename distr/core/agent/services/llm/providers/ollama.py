@@ -1072,6 +1072,12 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                 args_dict = {}
 
             if not decision.get("allow", True):
+                from distr.core.agent.loop_guard import log_skipped_tool
+
+                log_skipped_tool(
+                    self.chat_manager.get_current_chat() if self.chat_manager else None,
+                    tool_name, args_dict, "Skipped by computer-use guard", "computer_use_guard", self.event_queue,
+                )
                 results.append(
                     "Skipped by computer-use guard: only one actioning computer-use step "
                     "is executed per round. Re-run next step after observing updated context."
@@ -1194,6 +1200,12 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     except Exception as e:
                         results.append(f"Error executing tool {matched.name}: {e}")
                 else:
+                    from distr.core.agent.loop_guard import log_skipped_tool
+
+                    log_skipped_tool(
+                        self.chat_manager.get_current_chat() if self.chat_manager else None,
+                        tool_name, args_dict, f"Tool '{tool_name}' not found", "unknown_tool", self.event_queue,
+                    )
                     results.append(f"Tool '{tool_name}' not found. Available: {', '.join(list(self._tools_dict.keys())[:5])}...")
 
         return results
