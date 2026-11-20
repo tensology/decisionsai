@@ -1259,7 +1259,6 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             return
         try:
             import subprocess
-            import sys
             from pathlib import Path
 
             script = Path(__file__).resolve().parents[1] / "gui" / "dialogs" / "startup_splash.py"
