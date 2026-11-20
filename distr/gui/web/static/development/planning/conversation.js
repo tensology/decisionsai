@@ -90,6 +90,28 @@ export function createPlanConversation(host, root) {
         const rows = session.workspace.items || [];
         return rows.length > 0 && rows.every((item) => item.is_starter);
     };
+    const isScaffoldPreview = (item) => {
+        if (!item) return false;
+        const content = String(item.content || item.body || '');
+        return Boolean(
+            item.is_starter
+            || item.origin === 'scaffold'
+            || /Primary screen/i.test(content)
+            || /Describe the user journey/i.test(content)
+        );
+    };
+    const triggerGeneratePlan = () => {
+        const composer = document.getElementById('plan-composer-input')
+            || document.querySelector('.plan-composer textarea, .plan-composer input, #plan-prompt, [data-plan-composer-input]');
+        if (composer) {
+            composer.focus();
+            if ('value' in composer && !String(composer.value || '').trim()) {
+                composer.value = 'Generate a plan from this project.';
+                composer.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        }
+        document.querySelector('[data-plan-generate], #plan-generate, [data-plan-build], .plan-scan-generate')?.click();
+    };
 
     function monitor(session) {
         session.polling?.stop();
@@ -1338,6 +1360,16 @@ export function createPlanConversation(host, root) {
         }
         session.previewCleanup?.();
         session.previewCleanup = null;
+        if (item && isScaffoldPreview(item) && !session.viewedAsset) {
+            preview.innerHTML = `<div class="plan-canvas-empty" data-plan-empty-starter>
+                <p><strong>No preview yet</strong></p>
+                <p class="plan-empty-hint">This project does not have a generated plan yet. Generate one from the project, then review the screens here.</p>
+                <button type="button" class="header-button primary" data-plan-empty-generate>Generate plan</button>
+            </div>`;
+            preview.querySelector('[data-plan-empty-generate]')?.addEventListener('click', triggerGeneratePlan);
+            parkIfaceActions(session, preview);
+            return;
+        }
         if (session.tab === 'wireframes') nodeNotices(session, item, panel, preview);
         if (session.tab === 'wireframes' && item.content_format === 'wire' && mountIfaceCanvas(session, item, panel, preview, choices)) { parkIfaceActions(session, preview); return; }
         let ifaceTools = null;

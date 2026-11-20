@@ -17,6 +17,9 @@ def test_overflow_name_css_never_truncates_project_names():
     assert 'flex-shrink: 0' in text
     assert 'name-marquee-seamless' in text
     assert 'prefers-reduced-motion: reduce' in text
+    # Thread titles in the header use end-ellipsis, not a start-clipping marquee.
+    assert '.task-breadcrumb > #header-task' in text
+    assert 'text-overflow: ellipsis' in text
     # Must not un-hide the terminal-details breadcrumb the navigation worker removed.
     assert '.terminal-workspace .terminal-project-header' not in text or 'display: none' in text
 

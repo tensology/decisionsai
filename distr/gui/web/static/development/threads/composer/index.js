@@ -494,11 +494,106 @@ export function createThreadsComposer({ context, actions, el, token }) {
         el('task-prompt')?.focus();
     }
 
+    function hideComposerInlineStatus() {
+        const banner = el('composer-inline-status');
+        if (!banner) return;
+        banner.classList.add('hidden');
+        banner.innerHTML = '';
+        banner.removeAttribute('data-kind');
+        el('composer-board-picker')?.classList.remove('is-needed');
+    }
+
+    function showComposerInlineStatus(kind, message, buttons) {
+        const banner = el('composer-inline-status');
+        if (!banner) {
+            actions.toast(message, kind === 'board' ? 'error' : 'info');
+            return;
+        }
+        banner.dataset.kind = kind || 'info';
+        banner.classList.remove('hidden');
+        const actionsHtml = (buttons || []).map((button, index) =>
+            `<button type="button" class="header-button${button.primary ? ' primary' : ''}${button.danger ? ' danger' : ''}" data-inline-action="${index}">${actions.escapeHtml(button.label)}</button>`
+        ).join('');
+        banner.innerHTML = `<span>${actions.escapeHtml(message)}</span>${actionsHtml}`;
+        (buttons || []).forEach((button, index) => {
+            banner.querySelector(`[data-inline-action="${index}"]`)?.addEventListener('click', (event) => {
+                event.preventDefault();
+                button.onClick?.();
+            });
+        });
+        if (kind === 'board') el('composer-board-picker')?.classList.add('is-needed');
+    }
+
+    function showBoardNeededBanner(detail) {
+        const message = detail || 'Choose a board before starting this work. Tickets, approvals and workflows need a place to live.';
+        showComposerInlineStatus('board', message, [
+            {
+                label: 'Choose board',
+                primary: true,
+                onClick: () => {
+                    el('composer-board-button')?.click();
+                    el('composer-board-button')?.focus();
+                }
+            }
+        ]);
+        el('composer-board-button')?.focus();
+    }
+
+    function pendingPromptForQueue() {
+        return String(el('task-prompt')?.value || '').trim();
+    }
+
+    function showComposerBlockedFeedback(prompt) {
+        const text = String(prompt || pendingPromptForQueue()).trim();
+        if (context.routeLoading || !context.ready) {
+            showComposerInlineStatus('busy', 'This thread is still loading. Try sending again in a moment.');
+            return;
+        }
+        const runActive = activeWorkflowRun() || actions.isActiveAgentRun(context.currentRun);
+        if (runActive) {
+            showComposerInlineStatus(
+                'busy',
+                'This thread is already working. Queue your message to run next, or stop the current run.',
+                [
+                    {
+                        label: 'Queue',
+                        primary: true,
+                        onClick: async () => {
+                            if (!text) return;
+                            hideComposerInlineStatus();
+                            await sendPromptOnce(text);
+                        }
+                    },
+                    {
+                        label: 'Stop run',
+                        danger: true,
+                        onClick: () => stopRun()
+                    }
+                ]
+            );
+            return;
+        }
+        if (context.busy || context.submittingPrompt) {
+            showComposerInlineStatus(
+                'busy',
+                'The current send is still starting. Your message will stay in the box — send again when this finishes, or stop if it is stuck.',
+                [
+                    {
+                        label: 'Stop',
+                        danger: true,
+                        onClick: () => stopRun()
+                    }
+                ]
+            );
+            return;
+        }
+        showComposerInlineStatus('busy', 'The composer is busy right now. Wait a moment and try again.');
+    }
+
     async function sendPrompt(event) {
         if (event.target !== el('studio-composer')) return;
         event.preventDefault();
         if (event.submitter && event.submitter !== el('send-button')) return;
-        if (context.busy || !context.ready || context.routeLoading || el('send-button').disabled) return;
         const route = actions.developmentRoute();
         if (route.kind === 'thread' && Number(context.currentChat?.id || 0) !== Number(route.chatId)) {
             if (actions.developmentChatById && !actions.developmentChatById(route.chatId)) {
@@ -512,7 +607,12 @@ export function createThreadsComposer({ context, actions, el, token }) {
         }
         const prompt = el('task-prompt').value.trim();
         if (!prompt) return;
+        if (context.busy || !context.ready || context.routeLoading || el('send-button').disabled) {
+            showComposerBlockedFeedback(prompt);
+            return;
+        }
         if (context.submittingPrompt) return; // double submit (held Enter / repeat click) during routing checks
+        hideComposerInlineStatus();
         window.clearTimeout(routePreviewTimer);
         ++routeAssessmentRevision;
         context.submittingPrompt = true;
@@ -606,6 +706,13 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 actions.toast('Queued guidance updated.');
                 await actions.refreshShell({ preserveConversation: true });
             } else if (!context.currentChat) {
+                const board = actions.boardByKey(context.selectedBoardKey);
+                if (!board && !context.draft.project_id) {
+                    showBoardNeededBanner();
+                    el('task-prompt').value = prompt;
+                    actions.resizePrompt();
+                    return;
+                }
                 await createTask(fullPrompt, assessment);
             } else if (activeWorkflowRun() || actions.isActiveAgentRun(context.currentRun)) {
                 const result = await actions.api(`/workflows/studio/tasks/${context.currentChat.id}/commands`, {
@@ -652,6 +759,12 @@ export function createThreadsComposer({ context, actions, el, token }) {
             }
             if (error.data?.code === 'development_execution_busy' && context.currentChat?.id === submissionChatId) {
                 await actions.refreshShell({ preserveConversation: true });
+                showComposerBlockedFeedback(prompt);
+                return;
+            }
+            if (error.data?.code === 'board_required') {
+                showBoardNeededBanner(error.data?.detail || error.message);
+                return;
             }
             actions.toast(error.message || 'Could not submit the task.', 'error');
         } finally {

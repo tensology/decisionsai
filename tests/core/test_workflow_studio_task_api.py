@@ -567,7 +567,12 @@ def test_studio_task_with_explicit_workflow_dispatches_the_workflow_runner(monke
 
     response = _client().post(
         "/api/workflows/studio/tasks",
-        json={"prompt": "Implement and audit the ticket", "workflow_id": 44, "autonomy_level": "full"},
+        json={
+            "prompt": "Implement and audit the ticket",
+            "workflow_id": 44,
+            "autonomy_level": "full",
+            "board_key": "jira:engineering",
+        },
     )
 
     assert response.status_code == 200
@@ -587,6 +592,21 @@ def test_studio_task_with_explicit_workflow_dispatches_the_workflow_runner(monke
     }]
 
 
+def test_studio_workflow_task_without_a_board_is_blocked(monkeypatch):
+    _patch_studio_dependencies(monkeypatch, autonomy="full", workflow_id=44)
+
+    response = _client().post(
+        "/api/workflows/studio/tasks",
+        json={"prompt": "Build a full account area", "workflow_id": 44, "autonomy_level": "full"},
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["code"] == "board_required"
+    assert "Choose a board" in payload["detail"]
+    assert payload["task"] is None
+
+
 def test_explicit_workflow_preserves_manual_route_skills_and_browser_contract(monkeypatch):
     calls = _patch_studio_dependencies(monkeypatch, autonomy="full", workflow_id=44)
     monkeypatch.setattr(
@@ -600,6 +620,7 @@ def test_explicit_workflow_preserves_manual_route_skills_and_browser_contract(mo
             "prompt": "Implement and audit the responsive UI",
             "workflow_id": 44,
             "autonomy_level": "full",
+            "board_key": "jira:engineering",
             "route_mode": "manual",
             "backend": "cursor",
             "provider": "cursor",

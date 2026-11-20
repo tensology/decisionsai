@@ -249,6 +249,37 @@ def register_routes(router, templates):
             if selected_workflow_id is None and allocation.get("mode") == "workflow" and allocation.get("workflow_id"):
                 selected_workflow_id = int(allocation["workflow_id"])
             visible_reason = str(allocation.get("visible_reason") or "").strip()
+            from distr.core.workflow.studio_board import StudioBoardRequired, resolve_studio_work_board
+
+            # Large / workflow work needs a board. If the user picked a project
+            # but not a board, use or create that project's board. If they
+            # picked neither, stop with a clear prompt instead of starting a
+            # session that fails a few seconds later.
+            try:
+                if not data.board_key and data.project_id is not None:
+                    resolved_board = resolve_studio_work_board(
+                        project_id=data.project_id,
+                        board_key=data.board_key,
+                    )
+                    data.board_key = resolved_board["board_key"]
+                    if not data.board_provider:
+                        data.board_provider = "local"
+                    if data.project_id is None and resolved_board.get("project_id"):
+                        data.project_id = int(resolved_board["project_id"])
+                elif not data.board_key and selected_workflow_id is not None:
+                    raise StudioBoardRequired(
+                        "Choose a board before starting this work. "
+                        "A workflow needs a board so tickets and approvals have a place to live."
+                    )
+            except StudioBoardRequired as exc:
+                return JSONResponse(
+                    {
+                        "detail": str(exc),
+                        "code": getattr(exc, "code", "board_required"),
+                        "task": None,
+                    },
+                    status_code=422,
+                )
             chat_id, _ = await asyncio.to_thread(
                 ChatService.create_new_chat,
                 llm_provider=provider,

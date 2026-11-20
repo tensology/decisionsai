@@ -28,6 +28,23 @@ def test_connected_work_sources_include_saved_work_connectors():
     assert "openai" not in by_provider
 
 
+def test_throwaway_and_e2e_boards_do_not_get_backlog_proposals():
+    scan = {"proposals": []}
+    _add_board_proposals(
+        scan,
+        {
+            "id": 99,
+            "name": "E2E UX test 3 (safe to delete)",
+            "source_lane": "Current",
+            "lanes": [
+                {"name": "Backlog", "tickets": [{"id": 1}, {"id": 2}]},
+                {"name": "Current", "tickets": []},
+            ],
+        },
+    )
+    assert scan["proposals"] == []
+
+
 def test_board_proposals_use_spoken_clean_plural_wording():
     scan = {"proposals": []}
     _add_board_proposals(

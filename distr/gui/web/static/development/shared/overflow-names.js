@@ -39,7 +39,8 @@ export const PROJECT_NAME_SELECTORS = Object.freeze([
 
 // Thread / breadcrumb (non-project) titles that receive the shared marquee.
 export const MARQUEE_TARGETS = Object.freeze([
-    { selector: '#header-task', mode: 'auto', kind: 'breadcrumb-thread' },
+    // #header-task uses CSS end-ellipsis so the start of the title stays visible
+    // and is not clipped behind the status chip by the auto-scrolling marquee.
     { selector: '#development-task-header .task-breadcrumb strong[data-plan-crumb]', mode: 'auto', kind: 'breadcrumb' },
     { selector: '#development-kanban-view-label', mode: 'auto', kind: 'breadcrumb' },
     { selector: '.task-title', mode: 'hover', kind: 'thread-list', wrapText: true },

@@ -38,7 +38,106 @@ from distr.core.agent.ticket_intent import (
     recommend_skills_for_ticket,
 )
 
+
 logger = logging.getLogger(__name__)
+
+# Models often split move_ticket into two calls (ticket_id in one, lane_name in
+# the other) and then hit the tool-round cap. Parse "move #345 to QA" from free
+# text and require both fields in the same call, with a clear error if either
+# is still missing.
+_MOVE_TICKET_TEXT_RE = re.compile(
+    r"(?i)\bmove\s+(?:ticket\s+)?#?\s*(?P<id>\d+)\s+"
+    r"(?:from\s+.+?\s+)?(?:to|into|onto)\s+(?P<lane>[^.,;]+)"
+)
+_LANE_ALIASES = {
+    "qa": "QA",
+    "quality": "QA",
+    "quality assurance": "QA",
+    "in progress": "In Progress",
+    "in-progress": "In Progress",
+    "inprogress": "In Progress",
+    "doing": "In Progress",
+    "wip": "In Progress",
+    "current": "Current",
+    "backlog": "Backlog",
+    "todo": "Backlog",
+    "to-do": "Backlog",
+    "to do": "Backlog",
+}
+
+
+def parse_move_ticket_instruction(text: str = "", ticket_id: int = 0, lane_name: str = "") -> tuple[int, str]:
+    """Return (ticket_id, lane_name), filling gaps from 'move #N to Lane' text."""
+    tid = int(ticket_id or 0)
+    lane = str(lane_name or "").strip()
+    raw = str(text or "").strip()
+    if raw and (not tid or not lane):
+        match = _MOVE_TICKET_TEXT_RE.search(raw)
+        if match:
+            if not tid:
+                tid = int(match.group("id"))
+            if not lane:
+                lane = str(match.group("lane") or "").strip().rstrip(".,;: ")
+    return tid, lane
+
+
+def missing_move_ticket_params_error(ticket_id: int = 0, lane_name: str = "", text: str = "") -> str:
+    """Actionable error that names both required parameters."""
+    tid = int(ticket_id or 0) or "(missing)"
+    lane = str(lane_name or "").strip() or "(missing)"
+    message = (
+        "move_ticket needs both ticket_id and lane_name in the same call. "
+        "Example: action='move_ticket', ticket_id=345, lane_name='QA'. "
+        "You can also put 'move #345 to QA' in the text field. "
+        f"You sent ticket_id={tid} and lane_name={lane}."
+    )
+    return voice_then_reference(
+        "I need the ticket number and the lane together to move that.",
+        message,
+    )
+
+
+def resolve_lane_on_board(session, board_id: int, lane_name: str):
+    """Match a lane by exact name, alias, or fuzzy / case-insensitive contains."""
+    from distr.core.db.kanban import KanbanLane
+
+    wanted = str(lane_name or "").strip()
+    if not wanted:
+        return None
+    lanes = (
+        session.query(KanbanLane)
+        .filter_by(board_id=int(board_id))
+        .order_by(KanbanLane.position, KanbanLane.id)
+        .all()
+    )
+    if not lanes:
+        return None
+    lowered = wanted.lower()
+    alias = _LANE_ALIASES.get(lowered, wanted)
+    alias_lower = str(alias).lower()
+    for lane in lanes:
+        if str(lane.name or "").strip().lower() == alias_lower or str(lane.name or "").strip().lower() == lowered:
+            return lane
+    # Prefer a longer, unambiguous contains match over a 1-2 letter wildcard.
+    contains = [
+        lane for lane in lanes
+        if alias_lower and alias_lower in str(lane.name or "").lower()
+    ]
+    if len(contains) == 1:
+        return contains[0]
+    if contains:
+        # Prefer the shortest name that still contains the query (QA over QAT).
+        contains.sort(key=lambda lane: len(str(lane.name or "")))
+        return contains[0]
+    scored = []
+    for lane in lanes:
+        ratio = SequenceMatcher(None, alias_lower, str(lane.name or "").strip().lower()).ratio()
+        scored.append((ratio, lane))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    if scored and scored[0][0] >= 0.72:
+        return scored[0][1]
+    return None
+
 
 WHATSAPP_WORK_KEYWORDS = {
     "asap",
@@ -189,14 +288,14 @@ class KanbanTicketInput(BaseModel):
     board_id: int = Field(default=0, description="Board ID (exact)")
     target_board_name: str = Field(default="", description="Destination board name for move_ticket when moving a ticket across boards")
     target_board_id: int = Field(default=0, description="Destination board ID for move_ticket when moving a ticket across boards")
-    lane_name: str = Field(default="", description="Lane name (fuzzy matched, defaults to Backlog)")
+    lane_name: str = Field(default="", description="Lane to move a ticket into (fuzzy matched: QA, In Progress, Backlog, Current). For move_ticket this is required in the SAME call as ticket_id. Do not send lane_name in a follow-up call on its own.")
     title: str = Field(default="", description="Ticket title")
     description: str = Field(default="", description="Ticket description")
     tickets: List[TicketDraftInput] = Field(default_factory=list, description="For create_ticket_batch: 1-25 complete ticket drafts, created atomically in the supplied order")
     skip_existing_titles: bool = Field(default=True, description="For create_ticket_batch: skip titles already on the board to make retries idempotent")
     priority: str = Field(default="medium", description="Priority: low, medium, high, critical")
     complexity: str = Field(default="auto", description="Ticket complexity: auto, low, medium, high. Auto lets the orchestrator assess complexity; low/medium/high are manual overrides.")
-    ticket_id: int = Field(default=0, description="Ticket ID for get/update/move/delete/discuss actions")
+    ticket_id: int = Field(default=0, description="Ticket ID for get/update/move/delete/discuss. For move_ticket, pass ticket_id AND lane_name together in one call (or put 'move #123 to QA' in text).")
     keep_id: int = Field(default=0, description="Ticket ID to keep for merge_ticket (surviving ticket)")
     duplicate_id: int = Field(default=0, description="Ticket ID to archive for merge_ticket (merged into keep_id)")
     allow_cross_project: bool = Field(default=False, description="For merge_ticket: allow merging tickets that belong to different projects")
@@ -248,7 +347,7 @@ class KanbanTicketTool(BaseTool):
       get_ticket         — get ticket details (requires ticket_id)
       discuss_ticket     — load ticket into context for Q&A (ticket_id, external_issue_key, or recent #id / issue key in text); use when user wants to talk through a ticket without sending to project yet
       update_ticket      — update a ticket (requires ticket_id)
-      move_ticket        — move ticket to a different lane or board (requires ticket_id, plus lane_name or target_board_name/target_board_id)
+      move_ticket        — move a ticket to a different lane or board. Always pass ticket_id AND lane_name in the SAME call (example: ticket_id=345, lane_name='QA'). You may also put 'move #345 to QA' in text. Do not split ticket_id and lane_name across two calls.
       update_external_ticket  — update a remote Trello/Jira item (requires external_item_id or external_issue_key)
       move_external_ticket    — move a remote Trello/Jira item (requires external_item_id or external_issue_key and lane_name/status)
       comment_external_ticket — add a comment to a remote Trello/Jira item
@@ -345,7 +444,7 @@ class KanbanTicketTool(BaseTool):
         "Use action='merge_ticket' with keep_id and duplicate_id to copy the duplicate's notes, links, "
         "attachments and comments into the kept ticket, re-point references, and archive the duplicate "
         "(not hard-delete). Different projects require allow_cross_project=true. "
-        "Use action='move_ticket' with ticket_id and lane_name to move a ticket within the current board. "
+        "Use action='move_ticket' with ticket_id AND lane_name in the SAME call to move a ticket within the current board. Never split those two fields across calls. "
         "For a ticket that belongs on another board, use action='move_ticket' with ticket_id plus target_board_name "
         "or target_board_id; include lane_name only when the user named a specific destination lane. "
         "Use action='update_external_ticket', 'move_external_ticket', or 'comment_external_ticket' for follow-up changes "
@@ -1469,9 +1568,29 @@ class KanbanTicketTool(BaseTool):
                     complexity=complexity,
                 )
             elif action == "move_ticket":
+                parsed_id, parsed_lane = parse_move_ticket_instruction(
+                    text, ticket_id or self._last_ticket_id, lane_name
+                )
+                if parsed_id:
+                    self._last_ticket_id = parsed_id
+                if parsed_lane:
+                    self._last_lane_name = parsed_lane
+                if not parsed_lane and getattr(self, "_last_lane_name", ""):
+                    parsed_lane = self._last_lane_name
+                has_board_hint = bool(
+                    target_board_name
+                    or kwargs.get("destination_board_name")
+                    or target_board_id
+                    or kwargs.get("destination_board_id")
+                    or board_name
+                    or board_id
+                    or str(text or "").strip()
+                )
+                if not parsed_id or (not parsed_lane and not has_board_hint):
+                    return missing_move_ticket_params_error(parsed_id, parsed_lane, text)
                 return self._action_move_ticket(
-                    ticket_id or self._last_ticket_id,
-                    lane_name,
+                    parsed_id,
+                    parsed_lane,
                     target_board_name=target_board_name or kwargs.get("destination_board_name", ""),
                     target_board_id=target_board_id or kwargs.get("destination_board_id", 0) or None,
                     board_name=board_name,
@@ -2659,11 +2778,12 @@ class KanbanTicketTool(BaseTool):
         board_id: Optional[int] = None,
         text: str = "",
     ) -> str:
-        if not ticket_id:
-            return voice_then_reference(
-                "I need a ticket number to move that.",
-                "No ticket ID provided.",
-            )
+        ticket_id, lane_name = parse_move_ticket_instruction(text, ticket_id, lane_name)
+        if ticket_id:
+            self._last_ticket_id = ticket_id
+        has_board_hint = bool(target_board_name or target_board_id or board_name or board_id or str(text or "").strip())
+        if not ticket_id or (not lane_name and not has_board_hint):
+            return missing_move_ticket_params_error(ticket_id, lane_name, text)
         if lane_name:
             from distr.core.kanban.lifecycle import require_automation_lane
 
@@ -2733,16 +2853,10 @@ class KanbanTicketTool(BaseTool):
 
             target_board_id = target_board.id
             if not lane_name and target_board_id == old_board_id:
-                return voice_then_reference(
-                    "Say which lane or board to move it into.",
-                    "No destination lane or board provided.",
-                )
+                return missing_move_ticket_params_error(ticket_id, lane_name, text)
             new_lane = None
             if lane_name:
-                new_lane = s.query(KanbanLane).filter(
-                    KanbanLane.board_id == target_board_id,
-                    KanbanLane.name.ilike(f"%{lane_name}%")
-                ).first()
+                new_lane = resolve_lane_on_board(s, target_board_id, lane_name)
             elif target_board_id != old_board_id:
                 preferred_lane = (getattr(target_board, "agent_source_lane", None) or "").strip()
                 if not preferred_lane:

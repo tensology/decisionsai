@@ -44,12 +44,10 @@ test('project-name selectors never include thread-title hosts, and marquee targe
     assert.ok(PROJECT_NAME_SELECTORS.includes('.project-select span'));
     assert.ok(!PROJECT_NAME_SELECTORS.includes('#header-task'));
     const selectors = MARQUEE_TARGETS.map((t) => t.selector);
-    assert.ok(selectors.includes('#header-task'));
+    assert.ok(!selectors.includes('#header-task'));
     assert.ok(selectors.includes('.task-title'));
     assert.ok(selectors.includes('#development-task-header .task-breadcrumb strong[data-plan-crumb]'));
     assert.ok(!selectors.some((s) => /header-project|project-select|proposal-project|plan-project|terminal-project-titlebar|#terminal-project-name/.test(s)));
-    const header = MARQUEE_TARGETS.find((t) => t.selector === '#header-task');
     const list = MARQUEE_TARGETS.find((t) => t.selector === '.task-title');
-    assert.equal(header.mode, 'auto');
     assert.equal(list.mode, 'hover');
 });

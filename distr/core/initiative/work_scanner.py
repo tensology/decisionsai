@@ -469,6 +469,9 @@ _NON_RUNNABLE_WORKFLOW_STATUSES = frozenset({
 })
 _SMOKE_FIXTURE_MARKER = "[dai-smoke-loop-fixture]"
 _SMOKE_BOARD_RE = re.compile(r"\bsmoke\b", re.IGNORECASE)
+_THROWAWAY_BOARD_RE = re.compile(
+    r"(?i)\b(?:safe to delete|e2e ux test|e2e board-tool|e2e move me|e2e merge|throwaway)\b"
+)
 
 
 def _is_smoke_fixture_board(board: dict[str, Any]) -> bool:
@@ -476,6 +479,8 @@ def _is_smoke_fixture_board(board: dict[str, Any]) -> bool:
     name = str(board.get("name") or "")
     description = str(board.get("description") or "")
     if _SMOKE_FIXTURE_MARKER in name or _SMOKE_FIXTURE_MARKER in description:
+        return True
+    if _THROWAWAY_BOARD_RE.search(name) or _THROWAWAY_BOARD_RE.search(description):
         return True
     return bool(_SMOKE_BOARD_RE.search(name))
 

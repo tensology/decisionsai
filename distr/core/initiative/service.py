@@ -73,6 +73,49 @@ def _is_development_chat(chat_id: int) -> bool:
         return bool(chat is not None and development_thread_metadata(chat))
 
 
+def _throwaway_action_text(*parts: object) -> bool:
+    import re
+
+    blob = " ".join(str(part or "") for part in parts)
+    return bool(re.search(
+        r"(?i)\b(?:safe to delete|e2e ux test|e2e board-tool|e2e move me|e2e merge|throwaway)\b",
+        blob,
+    ))
+
+
+def _development_thread_for_action(action) -> int | None:
+    """If the proposed action belongs to tickets created in a Development thread, return that thread id."""
+    payload = getattr(action, "payload", None) or {}
+    if not isinstance(payload, dict):
+        return None
+    ticket_ids = payload.get("ticket_ids") or []
+    if payload.get("ticket_id"):
+        ticket_ids = list(ticket_ids) + [payload.get("ticket_id")]
+    ids = []
+    for raw in ticket_ids:
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return None
+    from distr.core.db import get_session
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.workflow.development_threads import development_thread_metadata
+
+    with get_session() as db:
+        for ticket_id in ids:
+            ticket = db.get(KanbanTicket, int(ticket_id))
+            chat_id = getattr(ticket, "source_chat_id", None) if ticket is not None else None
+            if not chat_id:
+                continue
+            from distr.core.db import Chat
+            chat = db.get(Chat, int(chat_id))
+            if chat is not None and development_thread_metadata(chat):
+                return int(chat_id)
+    return None
+
+
 def _hash_initiative_payload(action_type: str, payload: dict | None) -> str:
     raw = json.dumps(payload or {}, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(f"{action_type}:{raw}".encode("utf-8")).hexdigest()
@@ -2131,10 +2174,12 @@ class InitiativeService:
                 initiative_context=action_context,
             )
 
-        # Also log to chat
+        # Also log to chat — board nags for Development threads / test projects
+        # go to that thread, never the main assistant conversation.
         self._log_to_chat(
             self._pending_approval_line(resolved_tier, action),
             settings,
+            action=action,
         )
 
     # ------------------------------------------------------------------
@@ -2156,11 +2201,30 @@ class InitiativeService:
 
         return humanize_orchestrator_update(raw)
 
-    def _log_to_chat(self, message: str, settings: dict) -> None:
+    def _log_to_chat(self, message: str, settings: dict, action=None) -> None:
         if not self.chat_manager:
             return
         try:
             current_chat = self.chat_manager.get_current_chat()
+            thread_id = _development_thread_for_action(action) if action is not None else None
+            throwaway = _throwaway_action_text(
+                message,
+                getattr(action, "description", "") if action is not None else "",
+                (getattr(action, "payload", None) or {}).get("board_name") if action is not None else "",
+            )
+            if thread_id:
+                text = _initiative_update_text(message)
+                from distr.core.orchestrator_user_text import humanize_orchestrator_update
+
+                # Keep the notice on the Development thread itself, including
+                # throwaway test projects, so it does not appear in the main chat.
+                text = humanize_orchestrator_update(text, drop_throwaway=False)
+                if text:
+                    self._append_chat_notice(int(thread_id), text, hidden=False)
+                return
+            if throwaway:
+                logger.info("InitiativeService: dropped throwaway board-approval nag from main chat")
+                return
             if current_chat:
                 if _is_development_chat(int(current_chat)):
                     return

@@ -50,7 +50,6 @@
     flex: 0 1 auto;
     max-width: 100%;
 }
-.task-breadcrumb > #header-task,
 .task-breadcrumb > strong,
 .task-breadcrumb strong[data-plan-crumb],
 #development-kanban-view-label {
@@ -59,6 +58,15 @@
     overflow: hidden;
     text-overflow: clip;
     white-space: nowrap;
+}
+.task-breadcrumb > #header-task {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: ltr;
+    text-align: left;
 }
 
 /* Plan mode capped the whole breadcrumb (34% / 24%), which clipped the project name.

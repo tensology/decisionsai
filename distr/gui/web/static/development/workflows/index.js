@@ -26,21 +26,29 @@ export function createWorkflows({ context, actions, el }) {
     }
 
     function workflowSearchText(workflow) {
-        return `${workflow.name || ''} ${workflow.description || ''} ${workflowProjectName(workflow)}`.toLowerCase();
+        const { run } = workflowRunState(workflow);
+        return `${workflow.name || ''} ${workflow.description || ''} ${workflowProjectName(workflow)} ${lastRunText(run, workflow) || ''} ${workflow.id || ''}`.toLowerCase();
     }
 
     function applyWorkflowSearch(list) {
         const query = state.search.trim().toLowerCase();
         let visible = 0;
         list.querySelectorAll('[data-workflow-card]').forEach((card) => {
-            const matches = !query || String(card.dataset.workflowSearch || '').includes(query);
+            const matches = !query || String(card.dataset.workflowSearch || '').toLowerCase().includes(query);
             card.hidden = !matches;
+            card.classList.toggle('is-search-hidden', !matches);
             if (matches) visible += 1;
+        });
+        list.querySelectorAll('.workflow-project-group').forEach((group) => {
+            const anyVisible = [...group.querySelectorAll('[data-workflow-card]')].some((card) => !card.hidden);
+            group.hidden = Boolean(query) && !anyVisible;
         });
         let empty = list.querySelector('[data-workflow-search-empty]');
         if (query && !visible) {
             if (!empty) list.insertAdjacentHTML('beforeend', '<div class="development-empty" data-workflow-search-empty>No workflows match this search.</div>');
         } else empty?.remove();
+        const search = el('workflow-search');
+        if (search && search.value !== state.search) search.value = state.search;
     }
 
     // The URL names the open workflow so it survives reloads and can be shared.
@@ -326,12 +334,22 @@ export function createWorkflows({ context, actions, el }) {
             if (row?.automation_backed || builtinSlugOf(row)) button.remove();
         });
         list.querySelectorAll('[data-workflow-card-action]').forEach((button) =>
-            button.addEventListener('click', () => {
+            button.addEventListener('click', (event) => {
+                event.stopPropagation();
                 const workflowId = Number(button.dataset.workflowId);
                 if (button.dataset.workflowCardAction === 'open') selectWorkflow(workflowId);
                 else if (button.dataset.workflowCardAction === 'delete') deleteManagedWorkflow(workflowId);
             })
         );
+        list.querySelectorAll('[data-workflow-card]').forEach((card) => {
+            const workflowId = Number(card.dataset.workflowCard);
+            const workflow = context.workflows.find((item) => Number(item.id) === workflowId);
+            if (workflow) card.dataset.workflowSearch = workflowSearchText(workflow);
+            card.addEventListener('click', (event) => {
+                if (event.target.closest('[data-workflow-card-action], .scheduled-icon-button, .workflow-card-controls button')) return;
+                if (workflowId) selectWorkflow(workflowId);
+            });
+        });
         list.querySelectorAll('[data-active-execution-cancel]').forEach((button) =>
             button.addEventListener('click', async () => {
                 button.disabled = true;

@@ -2350,6 +2350,11 @@ button.thread-source-file:focus-visible { outline: 2px solid var(--studio-accent
 .queued-error { margin: 0; padding: 8px 12px; color: var(--studio-danger-text); font-size: 12px; }
 .queued-edit-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--studio-line); color: var(--studio-muted); font-size: 12px; }
 .queued-edit-status button { border: 0; border-radius: 6px; background: transparent; color: var(--studio-text); min-height: 32px; cursor: pointer; }
+.composer-inline-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; padding: 8px 12px; border-bottom: 1px solid rgba(249,115,22,.4); background: rgba(249,115,22,.1); color: var(--studio-text); font-size: 12px; line-height: 1.45; }
+.composer-inline-status.hidden { display: none; }
+.composer-inline-status > span { flex: 1 1 220px; min-width: 0; }
+.composer-inline-status .header-button { min-height: 32px; }
+#composer-board-picker.is-needed { outline: 2px solid var(--studio-accent, #f97316); outline-offset: 2px; border-radius: 8px; }
 .is-editing-queue .composer-attachment-icon { width: 48px; height: 48px; }
 .is-editing-queue .composer-attachment-icon button { display: grid; place-items: center; width: 24px; height: 24px; top: -4px; right: -4px; font-size: 14px; }
 .is-editing-queue .composer-toolbar { flex-wrap: wrap; }
