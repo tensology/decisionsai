@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Optional, TYPE_CHECKING
 
@@ -49,6 +50,24 @@ def _infer_acceptance_criteria(description: str, todos: list[dict]) -> list[str]
     if not criteria:
         criteria.append("Complete the requested ticket and report the evidence.")
     return criteria[:8]
+
+
+def _generated_plan_context(notes: str) -> tuple[str, list[str]]:
+    try:
+        contract = json.loads(notes)["plan_build"]
+        task = contract["task"]
+        revisions = contract["expected_revisions"]
+        workspace = contract["workspace_id"]
+        sources = task["source_item_ids"]
+        criteria = task["acceptance_criteria"]
+        if (contract["version"] != 1 or type(workspace) is not int or not isinstance(sources, list)
+                or not isinstance(criteria, list) or not all(isinstance(item, str) for item in criteria)
+                or not all(type(source) is int and type(revisions[str(source)]) is int for source in sources)):
+            return notes, []
+    except (ValueError, TypeError, KeyError):
+        return notes, []
+    refs = ", ".join(f"item #{source} (revision {revisions[str(source)]})" for source in sources)
+    return f"Plan #{workspace} sources: {refs}.", criteria
 
 
 def build_ticket_workflow_brief(
@@ -123,8 +142,14 @@ def build_ticket_workflow_brief(
         context_lines.append("Attachments:\n" + "\n".join(f"- {item['filename']}: {item['path']}" for item in attachments))
 
     context_notes = (getattr(ticket, "context_notes", None) or "").strip()
-    if context_notes:
+    plan_criteria = []
+    if context_notes and ticket.source_provider == "plan":
+        rendered_notes, plan_criteria = _generated_plan_context(context_notes)
+        context_lines.append(rendered_notes)
+    elif context_notes:
         context_lines.append("Ticket notes:\n" + context_notes)
+    criteria = (list(dict.fromkeys([item["text"] for item in todos if not item["done"]] + plan_criteria))[:8]
+                if plan_criteria else _infer_acceptance_criteria(description, todos))
 
     return {
         "source_type": "kanban_ticket",
@@ -148,7 +173,7 @@ def build_ticket_workflow_brief(
         "links": links,
         "attachments": attachments,
         "recommended_skills": recommended_skills,
-        "acceptance_criteria": _infer_acceptance_criteria(description, todos),
+        "acceptance_criteria": criteria,
         "verification_requirements": [
             "Do not mark the workflow complete until the acceptance criteria have evidence.",
             "If blocked, report the blocker and the last observed evidence instead of looping.",

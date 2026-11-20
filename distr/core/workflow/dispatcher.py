@@ -3358,10 +3358,6 @@ def _handle_run_briefing_response(
             db.commit()
 
     os.environ["DECISIONS_WORKFLOW_ID"] = str(workflow_id)
-    dispatch_result = _dispatch_workflow_step(run_id, first_step_id)
-    if "error" in dispatch_result:
-        complete_run(run_id, "failed")
-        return dispatch_result
     record_workflow_chat_event(
         run_id,
         "resumed",
@@ -3369,6 +3365,10 @@ def _handle_run_briefing_response(
         step_id=first_step_id,
         summary="Run confirmed. Starting first step.",
     )
+    dispatch_result = _dispatch_workflow_step(run_id, first_step_id)
+    if "error" in dispatch_result:
+        complete_run(run_id, "failed")
+        return dispatch_result
     return {
         "success": True,
         "action": "next_step",
@@ -3440,7 +3440,13 @@ def _handle_step_review_response(
                 run_data = json.loads(run.run_data or "{}") or {}
             except Exception:
                 run_data = {}
+            next_step = db.get(AutoWorkflowStep, next_step_id)
+            if (run.status != "waiting" or run_data.get("waiting_kind") != "step_review"
+                    or str(run_data.get("pending_next_step_id")) != str(next_step_id)
+                    or next_step is None or next_step.workflow_id != run.workflow_id):
+                return {"error": "The next workflow step no longer matches this review.", "status_code": 409}
             run.status = "running"
+            run.current_step_id = next_step_id
             step_row = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
             if step_row and step_row.status == "waiting":
                 step_row.status = "passed" if stored_passed else "failed"
@@ -3452,10 +3458,6 @@ def _handle_step_review_response(
             run.run_data = json.dumps(run_data)
             db.commit()
 
-    dispatch_result = _dispatch_workflow_step(run_id, next_step_id)
-    if "error" in dispatch_result:
-        complete_run(run_id, "failed")
-        return dispatch_result
     record_workflow_chat_event(
         run_id,
         "resumed",
@@ -3463,6 +3465,10 @@ def _handle_step_review_response(
         step_id=next_step_id,
         summary="Continuing to the next step.",
     )
+    dispatch_result = _dispatch_workflow_step(run_id, next_step_id)
+    if "error" in dispatch_result:
+        complete_run(run_id, "failed")
+        return dispatch_result
     return {
         "success": True,
         "action": "next_step",

@@ -1,3 +1,5 @@
+import json
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -76,3 +78,22 @@ def test_ticket_workflow_brief_extracts_actionable_context():
         assert "Acceptance criteria:" in rendered
     finally:
         s.close()
+
+
+def test_generated_plan_brief_shows_source_revisions_and_actual_acceptance_criteria():
+    with _memory_session() as session:
+        board = KanbanBoard(name="Northstar")
+        lane = KanbanLane(board=board, name="Backlog", position=0)
+        ticket = KanbanTicket(lane=lane, source_provider="plan", title="Deliver Northstar",
+                              description="Build the site and verify the journey.")
+        ticket.context_notes = json.dumps({"original_digest": "internal-digest", "plan_build": {
+            "version": 1, "workspace_id": 4, "expected_revisions": {"7": 2, "8": 1},
+            "task": {"source_item_ids": [7, 8], "acceptance_criteria": ["A booking survives reload"]},
+        }})
+        session.add(ticket)
+        session.flush()
+        brief = build_ticket_workflow_brief(session, ticket.id)
+        prompt = render_ticket_workflow_brief(brief)
+        assert brief["acceptance_criteria"] == ["A booking survives reload"]
+        assert "Plan #4 sources: item #7 (revision 2), item #8 (revision 1)." in prompt
+        assert "internal-digest" not in prompt

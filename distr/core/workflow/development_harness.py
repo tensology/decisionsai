@@ -1274,7 +1274,7 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
                 }
             return {**proactive, **result_marker, "turn_routes": turn_routes}
         if not execution:
-            from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep
+            from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep, AutoWorkflowStepResult
             from distr.core.workflow.draft_launch import approved_workflow_stop_reason
 
             run = (
@@ -1314,6 +1314,19 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
                     "execution_mode_decision": run_data.get("execution_mode_decision") or {},
                     "route_receipt": route_receipt,
                 }
+                if run.completed_at is not None:
+                    from distr.core.chat_turns import redact_text
+
+                    latest = db.query(AutoWorkflowStepResult).filter(
+                        AutoWorkflowStepResult.run_id == run.id,
+                        AutoWorkflowStepResult.agent_response.isnot(None),
+                        AutoWorkflowStepResult.agent_response != "",
+                    ).order_by(AutoWorkflowStepResult.id.desc()).first()
+                    if latest:
+                        workflow_execution["latest_step_output"] = {
+                            "step_id": int(latest.step_id),
+                            "text": redact_text(latest.agent_response, limit=1600),
+                        }
                 if run.status == "waiting" and run.completed_at is None:
                     from distr.core.chat_turns import redact_text
 

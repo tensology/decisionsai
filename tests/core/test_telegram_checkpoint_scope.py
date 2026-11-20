@@ -253,6 +253,29 @@ def test_each_continuation_transaction_rejects_a_replaced_checkpoint(checkpoint,
         assert db.get(AutoWorkflowStep,next_step).status=='waiting'
 
 
+def test_step_review_advances_the_run_before_dispatching_the_next_worker(checkpoint, monkeypatch):
+    session, _, scope, next_step, _ = checkpoint
+    with session() as db:
+        run = db.get(AutoWorkflowRun, scope["run_id"])
+        data = json.loads(run.run_data)
+        data.update(waiting_kind="step_review", pending_next_step_id=str(next_step))
+        run.run_data = json.dumps(data)
+        db.commit()
+
+    def dispatch(run_id, step_id):
+        assert step_id == next_step
+        with session() as db:
+            run = db.get(AutoWorkflowRun, run_id)
+            assert dispatcher.workflow_accepts_worker_result(db, run, step_id)
+            assert not dispatcher.workflow_accepts_worker_result(db, run, scope["step_id"])
+        return {"success": True}
+
+    monkeypatch.setattr(dispatcher, "_dispatch_workflow_step", dispatch)
+    monkeypatch.setattr(dispatcher, "record_workflow_chat_event", lambda *args, **kwargs: None)
+    result = dispatcher.continue_waiting_step(scope["run_id"], "continue")
+    assert result["dispatch"]["success"]
+
+
 def test_reissuing_controls_during_same_claim_reuses_identity(checkpoint):
     _,item,scope,_,_=checkpoint
     with interactions.engine.begin() as conn:

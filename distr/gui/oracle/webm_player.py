@@ -72,7 +72,8 @@ def elapsed_frame_steps(
         return 1, now
     interval_s = max(0.001, interval_ms / 1000.0)
     elapsed_s = max(0.0, now - last_advance_at)
-    steps = max(minimum_steps, int(elapsed_s / interval_s))
+    # Subtracting two clock readings can round an exact deadline down.
+    steps = max(minimum_steps, int((elapsed_s + 1e-9) / interval_s))
     return steps, min(now, last_advance_at + (steps * interval_s))
 
 
@@ -222,9 +223,6 @@ def _extract_frames_cv2(path: str, prepare_frame=None) -> Tuple[List[QImage], fl
 # WebMPlayer
 # ---------------------------------------------------------------------------
 
-_MIN_RENDER_INTERVAL_MS = 66  # limit GUI rendering to ~15 fps
-
-
 class _DecodeSignals(QObject):
     first_frame = pyqtSignal(int, QImage)
     next_frame = pyqtSignal(int, QImage)
@@ -310,9 +308,9 @@ class WebMPlayer(QObject):
         self._pingpong: bool = True
         self._timer = QTimer(self)
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._advance)
         self._source_interval_ms = 1000.0 / _DEFAULT_FPS
-        self._interval_ms = _MIN_RENDER_INTERVAL_MS
         self._last_advance_at: float | None = None
         self._size: QSize | None = None
         self._device_pixel_ratio: float = 1.0
@@ -347,9 +345,7 @@ class WebMPlayer(QObject):
         if not isfinite(fps) or fps <= 0:
             fps = _DEFAULT_FPS
         self._source_interval_ms = 1000.0 / fps
-        self._interval_ms = max(_MIN_RENDER_INTERVAL_MS, ceil(self._source_interval_ms))
-        if self._timer.isActive() and self._timer.interval() != self._interval_ms:
-            self._timer.setInterval(self._interval_ms)
+        self._schedule_next_frame()
 
     def load_async(self, webm_path, playback="pingpong", chroma_key=None,
                    chroma_threshold=35, *, priority=1):
@@ -451,9 +447,9 @@ class WebMPlayer(QObject):
         if not self._frames:
             return
         # Emit the first frame immediately
-        self.frame_ready.emit(self._frames[self._current_index])
         self._last_advance_at = time.monotonic()
-        self._timer.start(self._interval_ms)
+        self._schedule_next_frame()
+        self.frame_ready.emit(self._frames[self._current_index])
 
     def stop(self) -> None:
         """Stop playback."""
@@ -480,15 +476,22 @@ class WebMPlayer(QObject):
     # Internal
     # ------------------------------------------------------------------
 
+    def _schedule_next_frame(self) -> None:
+        if self._last_advance_at is None:
+            return
+        # Schedule from the source clock to avoid rounding every frame's
+        # duration up independently, especially at fractional frame rates.
+        remaining_ms = self._source_interval_ms - (time.monotonic() - self._last_advance_at) * 1000
+        self._timer.start(max(1, ceil(remaining_ms)))
+
     def _advance(self) -> None:
         """Advance to the next frame using pingpong or loop logic."""
-        if not self._frames:
+        if not self._frames or self._last_advance_at is None:
             return
-        now = time.monotonic()
-        # Display ticks may be farther apart than the clip's source frames.
         steps, self._last_advance_at = elapsed_frame_steps(
-            self._last_advance_at, now, self._source_interval_ms, minimum_steps=0
+            self._last_advance_at, time.monotonic(), self._source_interval_ms, minimum_steps=0
         )
+        self._schedule_next_frame()
         if not steps:
             return
         if self._decode_task is not None:

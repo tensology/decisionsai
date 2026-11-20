@@ -217,7 +217,7 @@ class TestWebMPlayerResourceLimits:
 
     @patch("distr.gui.oracle.webm_player.QPixmap", _Pixmap)
     @patch("distr.gui.oracle.webm_player._extract_frames_imageio")
-    def test_load_caps_frame_rate_and_releases_decoded_images(self, extract):
+    def test_load_sets_source_frame_rate_and_releases_decoded_images(self, extract):
         from distr.gui.oracle.webm_player import WebMPlayer
 
         extract.return_value = ([self._Image(), self._Image()], 60.0)
@@ -226,7 +226,6 @@ class TestWebMPlayerResourceLimits:
 
         player.load("small-oracle.webm")
 
-        assert player._interval_ms == 66
         assert player._source_interval_ms == pytest.approx(1000 / 60)
         assert len(player._frames) == 2
         assert player._source_images == []

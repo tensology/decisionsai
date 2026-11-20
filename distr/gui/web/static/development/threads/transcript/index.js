@@ -5,6 +5,7 @@ import { splitClientDraft } from './client-draft.js?v=20261112-message-client';
 // Owns threads transcript rendering, interactions, and private view state.
 export function createThreadsTranscript({ context, actions, el, token }) {
     const activityDisclosureState = new Map();
+    const workflowViewModes = new Map();
     function currentWorkflowRunner() {
         const runId = actions.workflowRunId?.(context.currentWorkflowRun);
         return runId ? el('message-list').querySelector(`[data-workflow-runner][data-run-id="${runId}"]`) : null;
@@ -512,10 +513,30 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         return `<article class="studio-message thread-event"><div class="thread-status-event"><span class="thread-status-dot" aria-hidden="true"></span>${label}${timestamp ? `<time>${actions.escapeHtml(timestamp)}</time>` : ''}</div></article>`;
     }
 
+    function readablePlanBrief(content) {
+        if (!content.startsWith('[TICKET WORKFLOW BRIEF]\n')) return content;
+        const notes = content.match(/\nTicket notes:\n(\{[^\n]+\})/);
+        if (!notes) return content;
+        try {
+            const { plan_build: plan, original_digest: digest } = JSON.parse(notes[1]);
+            const sources = plan?.task?.source_item_ids;
+            if (!/^[a-f0-9]{64}$/.test(digest || '') || plan?.version !== 1
+                || !Number.isInteger(plan.workspace_id) || !Array.isArray(sources)
+                || !sources.length || !sources.every(id => Number.isInteger(id) && Number.isInteger(plan.expected_revisions?.[id]))) return content;
+            const refs = sources.map(id => `item #${id} (revision ${plan.expected_revisions[id]})`).join(', ');
+            const readable = content.replace(notes[0], `\nPlan #${plan.workspace_id} sources: ${refs}.`);
+            const criteria = plan.task.acceptance_criteria;
+            if (!Array.isArray(criteria) || !criteria.length || !criteria.every(value => typeof value === 'string')) return readable;
+            return readable.replace('- Complete the requested ticket and report the evidence.', criteria.map(value => `- ${value}`).join('\n'));
+        } catch {
+            return content;
+        }
+    }
+
     function userMessagePresentation(message) {
         const marker = '\n\nFocused context for this turn:\n\n';
         const source = splitProposalSourceContext(message.content);
-        const content = source.content;
+        const content = readablePlanBrief(source.content);
         const markerIndex = content.indexOf(marker);
         const skills = Array.isArray(message.skills) ? [...message.skills] : [];
         if (markerIndex < 0) return { content, skills, evidence: source.evidence };
@@ -1082,10 +1103,8 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const statusSteps = workflowStepStatuses(namedSteps, run, event);
         const count = statusSteps.length;
         const runStatus = String(run?.status || event.status || (mode === 'done' ? 'completed' : 'running')).toLowerCase();
-        const activeIndex = Math.max(
-            0,
-            statusSteps.findIndex((step) => ['running', 'waiting', 'failed'].includes(String(step.status || '').toLowerCase()))
-        );
+        const workingIndex = statusSteps.findIndex(step => ['running', 'waiting', 'failed'].includes(String(step.status || '').toLowerCase()));
+        const activeIndex = workingIndex >= 0 ? workingIndex : mode === 'done' ? count - 1 : 0;
         const title = workflow?.name || event.workflow_name || 'Workflow';
         const stepRoutes = run?.step_routes || {};
         const routeDataFor = (step) => {
@@ -1117,6 +1136,8 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             return message || (type ? `${type.charAt(0).toUpperCase()}${type.slice(1)}.` : 'No feedback has been recorded for this step yet.');
         };
         const outputFor = (step) => {
+            if (Number(step.id) === Number(run?.latest_step_output?.step_id)) return String(run.latest_step_output.text || '');
+            if (mode === 'done') return '';
             const own = step.output || step.last_output || step.result || '';
             if (own) return String(own);
             return String(step.id) === String(activeStepId) ? String(event.summary || run?.last_output || run?.summary || '') : '';
@@ -1132,7 +1153,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             idPrefix: nextWorkflowLoopId(`thread-wf-steps-${String(run?.id || event.run_id || 'x')}-${mode}`),
             escapeHtml: actions.escapeHtml,
             routeFor,
-            outputFor,
+            outputFor: mode === 'done' ? () => '' : outputFor,
             ariaLabel: `${title} steps`
         });
         const runId = String(actions.workflowRunId?.(run) || event.run_id || '');
@@ -1147,6 +1168,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             resolving: 'Applying checkpoint decision',
             unconfirmed: 'Checkpoint decision unconfirmed',
         }[interaction?.decision_status] || (restarting ? 'Review interrupted workflow'
+            : interaction?.briefing ? (interaction.kind === 'step_review' ? 'Review this step' : 'Review before starting')
             : needsApproval ? 'Approval required' : 'Workflow checkpoint');
         const approval = run?.pending_route_approval || {};
         const budgetApproval = false; // budget gate removed
@@ -1163,15 +1185,18 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
                 || approvalStepRoute.rationale || approvalStepRoute.reason || '').trim()
             : '';
         const approvalFor = needsApproval && approvalStep?.name ? `Step ${activeIndex + 1} of ${count}: ${approvalStep.name}` : '';
-        const approvalWhyHtml = needsApproval && (approvalFor || approvalReason)
+        const approvalWhyHtml = needsApproval && !interaction?.briefing && (approvalFor || approvalReason)
             ? `<p class="thread-workflow-checkpoint-why" data-approval-why>${approvalFor ? `<span>${actions.escapeHtml(approvalFor)}</span>` : ''}${approvalReason ? `<span>Why: ${actions.escapeHtml(approvalReason)}</span>` : ''}</p>`
             : '';
         const checkpointNotice = interaction?.decision_status === 'unconfirmed'
             ? 'The desktop restarted before it could confirm the decision. Review this run before continuing.'
-            : interaction?.decision_status === 'resolving' ? '' : waitingPrompt;
+            : interaction?.decision_status === 'resolving' || interaction?.briefing ? '' : waitingPrompt;
+        const briefing = interaction?.briefing
+            ? `<div class="message-markdown thread-workflow-briefing">${assistantMarkdown(interaction.briefing.replace(/\n(?=\*\*)/g, '\n\n'))}</div>`
+            : '';
         const checkpoint = ['waiting', 'paused'].includes(runStatus)
             ? `<section class="thread-workflow-checkpoint" aria-label="${checkpointTitle}">
-                <div><strong>${checkpointTitle}</strong>${checkpointNotice ? `<p>${actions.escapeHtml(checkpointNotice)}</p>` : ''}${approvalWhyHtml}</div>
+                <div><strong>${checkpointTitle}</strong>${briefing}${checkpointNotice ? `<p>${actions.escapeHtml(checkpointNotice)}</p>` : ''}${approvalWhyHtml}</div>
                 ${actionable.length ? `<div class="thread-workflow-checkpoint-actions">${actionable.map((action, index) => `<button type="button" class="thread-workflow-checkpoint-action${index === 0 && action !== 'stop' ? ' primary' : ''}${action === 'stop' ? ' danger' : ''}" data-workflow-interaction-token="${actions.escapeHtml(interaction.token)}" data-workflow-interaction-action="${actions.escapeHtml(action)}">${actions.escapeHtml(action === 'approve' ? (budgetApproval ? 'Raise budget and continue' : 'Approve and continue') : actions.actionLabel(action, interaction.kind))}</button>`).join('')}</div>` : ''}
             </section>`
             : '';
@@ -1188,7 +1213,13 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             <div class="thread-workflow-live-feedback"><span class="thread-status-dot"></span><div><strong>${['running', 'waiting', 'paused', 'queued'].includes(runStatus) ? 'Live feedback' : 'Last feedback'}</strong><p>${actions.escapeHtml(activityText(currentActivity))}</p></div>${currentActivity.at ? `<time datetime="${actions.escapeHtml(currentActivity.at)}">${actions.escapeHtml(messageTime(currentActivity.at))}</time>` : ''}</div>
         </section>`;
         // One or two steps read better as a short list than as a ring.
-        const viewMode = count <= 2 ? 'list' : 'loop';
+        const viewMode = workflowViewModes.get(activityKey(`workflow-mode:${runId}`)) || (count <= 2 ? 'list' : 'loop');
+        const resultSummary = mode === 'done' ? String(run?.summary || run?.result_packet?.summary || event.summary || '').trim() : '';
+        const latestOutput = mode === 'done' ? String(run?.latest_step_output?.text || '').trim() : '';
+        const outputStep = latestOutput ? statusSteps.find(step => Number(step.id) === Number(run.latest_step_output.step_id)) : null;
+        const result = resultSummary || latestOutput
+            ? `<section class="thread-workflow-feedback message-body" data-workflow-run-result="${actions.escapeHtml(runId)}"><strong>Run result</strong>${resultSummary ? `<div class="message-markdown">${assistantMarkdown(resultSummary)}</div>` : ''}${latestOutput && latestOutput !== resultSummary ? `<div class="thread-workflow-result-output"><span>${actions.escapeHtml(outputStep?.name || 'Latest step output')}</span><pre>${actions.escapeHtml(latestOutput)}</pre></div>` : ''}</section>`
+            : '';
         const ringPrefix = nextWorkflowLoopId(`thread-wf-${String(run?.id || event.run_id || 'x')}-${mode}`);
         const ring = workflowLoopHtml(statusSteps, {
             compact: true,
@@ -1207,6 +1238,7 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             <div class="thread-workflow-runner ${mode}" data-view="${viewMode}" data-status="${actions.escapeHtml(runStatus)}" role="region" aria-label="${actions.escapeHtml(title)} workflow" aria-live="${mode === 'live' ? 'polite' : 'off'}">
                 <div class="thread-workflow-runner-head"><strong>${actions.escapeHtml(title)}</strong><div class="thread-workflow-runner-tools"><span class="thread-workflow-status-badge ${actions.escapeHtml(runStatus)}">${actions.escapeHtml(runBadge)}</span>${workflowViewSwitchHtml(viewMode, { attr: 'data-thread-workflow-view', className: 'workflow-view-switch thread-workflow-view-switch' })}</div></div>
                 ${checkpoint}
+                ${result}
                 <div class="thread-workflow-ring">${ring}</div>
                 <div class="thread-workflow-steps">${numbers}</div>
                 ${feedback}
@@ -1246,8 +1278,9 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
             runner.querySelectorAll('[data-thread-workflow-view]').forEach((toggle) => {
                 toggle.addEventListener('click', () => {
                     const next = toggle.dataset.threadWorkflowView === 'list' ? 'list' : 'loop';
-                    document.querySelectorAll('.thread-workflow-runner').forEach((card) => card.setAttribute('data-view', next));
-                    document.querySelectorAll('[data-thread-workflow-view]').forEach((item) => item.setAttribute('aria-pressed', String(item.dataset.threadWorkflowView === next)));
+                    workflowViewModes.set(activityKey(`workflow-mode:${runner.dataset.runId}`), next);
+                    runner.querySelector('.thread-workflow-runner')?.setAttribute('data-view', next);
+                    runner.querySelectorAll('[data-thread-workflow-view]').forEach((item) => item.setAttribute('aria-pressed', String(item.dataset.threadWorkflowView === next)));
                 });
             });
             runner.querySelectorAll('[data-workflow-interaction-action]').forEach((button) => {
@@ -1306,8 +1339,10 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         });
         const status = String(matchingRun.status || event.status || '');
         const label = inHistory ? `Run #${eventRunId} · ${status === 'failed' ? 'Failed' : actions.statusLabel(status)}` : 'View workflow';
+        const hasLaterMessage = messages.slice(index + 1).some(item => item.role === 'user'
+            || ((item.role || 'assistant') === 'assistant' && !item.spoken && !ticketMovePresentation(item)));
         return done
-            ? `<details class="turn-activity-disclosure" data-activity-key="${actions.escapeHtml(activityKey(`workflow:${eventRunId || index}`))}"${matchesCurrent ? ' open' : ''}><summary>${actions.escapeHtml(label)}<span class="turn-activity-chevron" aria-hidden="true">›</span></summary>${runner}</details>`
+            ? `<details class="turn-activity-disclosure" data-activity-key="${actions.escapeHtml(activityKey(`workflow:${eventRunId || index}`))}"${matchesCurrent && !hasLaterMessage ? ' open' : ''}><summary>${actions.escapeHtml(label)}<span class="turn-activity-chevron" aria-hidden="true">›</span></summary>${runner}</details>`
             : runner;
     }
 
@@ -1320,13 +1355,9 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         if (messages.some((message) => message.role === 'workflow' && Number(message.workflow_event?.run_id) === runId)) return '';
         // Some chats expose workflow events only in root metadata, not as
         // transcript messages. Keep the completed own run inspectable anyway.
-        const runner = workflowRunnerHtml({
-            workflow, run: { ...run, summary: '', last_output: '' }, mode: 'done'
-        });
-        const result = run.summary
-            ? `<section class="thread-workflow-feedback message-body" data-workflow-run-result="${runId}"><strong>Run result</strong><div class="message-markdown">${assistantMarkdown(run.summary)}</div></section>`
-            : '';
-        return `<details class="turn-activity-disclosure" data-activity-key="${actions.escapeHtml(activityKey(`workflow:${runId}`))}" open><summary>View workflow<span class="turn-activity-chevron" aria-hidden="true">›</span></summary>${runner}${result}</details>`;
+        const runner = workflowRunnerHtml({ workflow, run, mode: 'done' });
+        const hasReply = messages.some(item => (item.role || 'assistant') === 'assistant' && !item.spoken && !ticketMovePresentation(item));
+        return `<details class="turn-activity-disclosure" data-activity-key="${actions.escapeHtml(activityKey(`workflow:${runId}`))}"${hasReply ? '' : ' open'}><summary>View workflow<span class="turn-activity-chevron" aria-hidden="true">›</span></summary>${runner}</details>`;
     }
 
     function liveLegacyActivityEvents(chat) {

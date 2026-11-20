@@ -247,6 +247,7 @@ html.dev-board-route #chrome-play-group #development-kanban-more { display: grid
 
 .thread-workflow-runner {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
     width: 100%;
     margin: 0 auto;
@@ -342,6 +343,9 @@ html.dev-board-route #chrome-play-group #development-kanban-more { display: grid
 .thread-workflow-checkpoint > div:first-child { min-width: 0; }
 .thread-workflow-checkpoint strong { color: #f6d58a; font-size: 12px; }
 .thread-workflow-checkpoint p { margin: 3px 0 0; color: var(--studio-text); font-size: 11px; line-height: 1.45; }
+.thread-workflow-briefing { overflow-wrap: anywhere; }
+.thread-workflow-result-output span { color: var(--studio-muted); font-size: 11px; }
+.thread-workflow-result-output pre { margin: 3px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
 .thread-workflow-checkpoint-actions { display: flex; flex: 0 0 auto; gap: 7px; }
 .thread-workflow-checkpoint-action {
     min-height: 34px;
@@ -1361,6 +1365,7 @@ html.dev-board-route #chrome-play-group #development-kanban-more { display: grid
 .thread-workflow-runner[data-view="list"] .thread-workflow-ring { display: none; }
 .thread-workflow-checkpoint-why { display: grid; gap: 2px; margin: 6px 0 0; color: var(--studio-muted); font-size: 12px; line-height: 1.45; }
 .thread-workflow-checkpoint-why span:first-child { color: var(--studio-text); }
+.thread-workflow-steps .workflow-step-numbers { grid-template-columns: minmax(0, 1fr); }
 .thread-workflow-steps .workflow-step-panel strong { font-size: 12px; }
 .thread-workflow-steps .workflow-step-panel > div > span,
 .thread-workflow-steps .workflow-step-pill { font-size: 10px; }
@@ -1426,7 +1431,7 @@ html.dev-board-route #chrome-play-group #development-kanban-more { display: grid
 .thread-workflow-ring .workflow-loop-map.dense .workflow-loop-node { width: clamp(84px, 17%, 112px); }
 @media (max-width: 720px) {
     .thread-workflow-checkpoint { align-items: stretch; flex-direction: column; }
-    .thread-workflow-checkpoint-actions { width: 100%; }
+    .thread-workflow-checkpoint-actions { width: 100%; flex-wrap: wrap; }
     .thread-workflow-checkpoint-action { min-height: 44px; flex: 1; }
     .thread-workflow-ring .workflow-loop-node { top: var(--loop-mobile-y); left: var(--loop-mobile-x); width: 92px; }
     .thread-workflow-ring .workflow-loop-path { inset: 9% 14%; width: 72%; }
@@ -1436,6 +1441,10 @@ html.dev-board-route #chrome-play-group #development-kanban-more { display: grid
     .thread-workflow-runner-head { align-items: stretch; flex-direction: column; }
     .thread-workflow-runner-head strong { white-space: normal; }
     .thread-workflow-runner-tools { justify-content: space-between; }
+    .thread-workflow-steps .workflow-step-panel > div { flex-wrap: wrap; }
+    .thread-workflow-steps .workflow-step-panel strong,
+    .thread-workflow-feedback-head strong { white-space: normal; overflow-wrap: anywhere; }
+    .thread-workflow-steps .workflow-step-panel > div > span { margin-left: 0; }
     .thread-workflow-ring .workflow-loop-map.compact { height: 210px; min-height: 210px; }
     .thread-workflow-ring .workflow-loop-node,
     .thread-workflow-ring .workflow-loop-map.dense .workflow-loop-node { width: clamp(44px, 20%, 68px); }

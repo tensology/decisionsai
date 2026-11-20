@@ -192,11 +192,17 @@ def test_motion_starts_before_decode_finishes_and_waits_at_buffer_end(app, monke
         app.processEvents()
 
 
-@pytest.mark.parametrize(("playback", "expected_index"), [("loop", 5), ("pingpong", 3)])
-def test_webm_render_cap_preserves_source_speed(app, monkeypatch, playback, expected_index):
+@pytest.mark.parametrize(
+    ("fps", "playback", "late_index"),
+    [(25, "loop", 5), (25, "pingpong", 3),
+     (24000 / 1001, "loop", 4), (24000 / 1001, "pingpong", 4)],
+)
+def test_webm_presents_each_source_frame_until_the_gui_stalls(
+    app, monkeypatch, fps, playback, late_index
+):
     monkeypatch.setattr(
         webm, "_extract_frames_imageio",
-        lambda path, prepare_frame: ([prepare_frame(image()) for _ in range(10)], 25),
+        lambda path, prepare_frame: ([prepare_frame(image()) for _ in range(10)], fps),
     )
     now = 0.0
     monkeypatch.setattr(webm, "time", SimpleNamespace(monotonic=lambda: now))
@@ -205,17 +211,17 @@ def test_webm_render_cap_preserves_source_speed(app, monkeypatch, playback, expe
     wait_for(app, lambda: player._decode_task is None)
     try:
         player.play()
-        assert player._timer.interval() == 66
-        for tick in range(1, 10):
-            now = tick * 0.066
+        for expected_index in [*range(1, 10), 0 if playback == "loop" else 8]:
+            assert 39 <= player._timer.interval() <= 42
+            now += player._timer.interval() / 1000
             player._advance()
-        # 594 ms at 25 fps advances 14 source frames in nine renders.
-        assert player._current_index == 4
-        now = 0.599
-        player._advance()
-        assert player._current_index == 4
-        now = 0.625
+            assert player._current_index == expected_index
+        assert now == pytest.approx(10 / fps, abs=0.0011)
+        now = 0.419  # The next source frame isn't due yet.
         player._advance()
         assert player._current_index == expected_index
+        now = 0.625  # A late callback catches up to the source clock.
+        player._advance()
+        assert player._current_index == late_index
     finally:
         player.stop()

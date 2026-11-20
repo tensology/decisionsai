@@ -670,7 +670,20 @@ def development_pending_interactions(*, run_id: int | None, development_chat_id:
             data = json.loads(run.run_data or "{}")
         except ValueError:
             return pending
-        if not isinstance(data, dict) or data.get("waiting_kind") != "restart_recovery":
+        if not isinstance(data, dict):
+            return pending
+        waiting_kind = data.get("waiting_kind")
+        if waiting_kind in ("run_briefing", "step_review"):
+            from distr.core.chat_turns import redact_text
+
+            brief = data.get(f"{waiting_kind}_text")
+            kinds = {"approval", "run_briefing"} if waiting_kind == "run_briefing" else {"step_review"}
+            if isinstance(brief, str) and brief.strip():
+                for item in pending:
+                    if item["status"] == "pending" and item["kind"] in kinds:
+                        item["briefing"] = redact_text(brief, limit=3000)
+            return pending
+        if waiting_kind != "restart_recovery":
             return pending
         recovery = data.get("restart_recovery")
         if isinstance(recovery, dict) and recovery.get("auto_resume_pending"):

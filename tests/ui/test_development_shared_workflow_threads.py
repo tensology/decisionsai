@@ -250,6 +250,9 @@ def test_completed_chat_without_workflow_messages_retains_keyboard_inspectable_o
     page.keyboard.press('Enter')
     expect(own).to_be_visible()
     expect(page.locator('[data-run-id="98"]')).to_have_count(0)
+    card = own.locator('.thread-workflow-runner')
+    assert card.evaluate('node => node.scrollWidth <= node.clientWidth + 1')
+    own.get_by_role('button', name='Loop', exact=True).click()
     own.locator('.thread-workflow-ring [data-wf-step]').first.click()
     dialog = page.locator('#thread-workflow-step-dialog')
     expect(dialog).to_be_visible()
@@ -260,6 +263,7 @@ def test_completed_chat_without_workflow_messages_retains_keyboard_inspectable_o
     expect(result).to_contain_text('Run result')
     expect(result).to_contain_text('TELEGRAM_PROPOSAL_E2E_OK')
     expect(result).to_contain_text('pwd')
+    assert result.evaluate("node => Boolean(node.compareDocumentPosition(node.parentElement.querySelector('.thread-workflow-ring')) & Node.DOCUMENT_POSITION_FOLLOWING)")
     assert result.evaluate('node => node.scrollWidth <= node.clientWidth'), 'Run result must contain long command output on mobile'
     summary.focus()
     page.keyboard.press('Enter')

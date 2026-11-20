@@ -24,7 +24,7 @@ import { createBoards } from './boards/index.js?v=20261112-ticket-draft-project'
 
 import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261110-startup-only1';
 
-import { createThreadsTranscript } from './threads/transcript/index.js?v=20261120-wfplan';
+import { createThreadsTranscript } from './threads/transcript/index.js?v=20261120-workflow-thread-result';
 import { openSourceReply } from './threads/source-reply.js?v=20261112-recipient-select';
 
 import { createThreadsComposer } from './threads/composer/index.js?v=20261112-human-review';

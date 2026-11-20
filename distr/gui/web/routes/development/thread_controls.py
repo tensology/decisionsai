@@ -448,6 +448,7 @@ def register_routes(router, templates):
                     "expires_at": item.get("expires_at"),
                     "error": item.get("error"),
                     **({"review_notice": item["review_notice"]} if item.get("review_notice") else {}),
+                    **({"briefing": item["briefing"]} if item.get("briefing") else {}),
                     "telegram_linked": bool(item.get("telegram_chat_id")),
                     "telegram_delivery": telegram_checkpoint_delivery_status(item),
                     **({"decision_status": item["status"]} if item.get("status") in {"resolving", "unconfirmed"} else {}),
