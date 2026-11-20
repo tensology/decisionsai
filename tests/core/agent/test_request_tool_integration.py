@@ -345,3 +345,44 @@ def test_gmail_query_uses_existing_google_workspace_when_already_active(
     assert payload["success"] is True
     assert payload.get("injected_tool_name") == "google_workspace"
     assert payload.get("injection_performed") is False
+
+
+def test_create_ticket_query_injects_kanban_tool(
+    request_tool_harness_factory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Models ask for the board tool by name=create_ticket, not KanbanTicketTool.
+
+    A live chat failed when request_tool scored registry class names only
+    (fuzzy 51) and returned "Tool not found".
+    """
+    from distr.core.agent.tools.loader import get_cached_tool
+
+    inst = get_cached_tool("create_ticket")
+    if inst is None:
+        pytest.skip("create_ticket was not cached")
+
+    harness = request_tool_harness_factory(exclude_names=frozenset({"create_ticket"}))
+    assert "create_ticket" not in harness._tools_dict
+
+    caplog.set_level(logging.INFO, logger="distr.core.agent.tool_telemetry")
+    rtt = harness._tools_dict["request_tool"]
+    msg = rtt._run(
+        text="create_ticket tool for Kanban board operations (list_tickets, move_ticket, delete_ticket)"
+    )
+
+    assert "create_ticket" in harness._tools_dict
+    assert harness._tools_dict["create_ticket"] is inst
+    assert "not found" not in msg.lower()
+    assert "create_ticket" in msg
+
+    payload = None
+    for record in reversed(caplog.records):
+        if record.name == "distr.core.agent.tool_telemetry" and "TOOL_TELEMETRY {" in record.getMessage():
+            payload = json.loads(record.getMessage().split(" ", 1)[1])
+            break
+    assert payload is not None
+    assert payload["event"] == "request_tool"
+    assert payload["success"] is True
+    assert payload.get("injected_tool_name") == "create_ticket"
+    assert payload.get("injection_performed") is True

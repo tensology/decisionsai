@@ -218,6 +218,12 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\b(?:tickets?|work\s+items?)\b.{0,80}\b(?:independently\s+executable|dependencies|dependency|workflow|backlog)\b",
             r"\b(move|transfer|relocate)\b.+\b(ticket|card|issue)\b.+\bboard\b",
             r"\b(ticket|card|issue)\b.+\b(move|transfer|relocate)\b.+\bboard\b",
+            r"\b(move|transfer|relocate)\b.{0,80}\b(tickets?|cards?|issues?)\b",
+            r"\b(tickets?|cards?|issues?)\b.{0,80}\b(move|transfer|relocate)\b",
+            r"\bmerge\b.{0,60}\b(tickets?|cards?|issues?)\b",
+            r"\b(tickets?|cards?|issues?)\b.{0,60}\bmerge\b",
+            r"\bcreate_ticket\b",
+            r"\b(list_tickets|move_ticket|delete_ticket|update_ticket|get_ticket)\b",
             r"\bwhats\s*app\b.+\b(sync|latest|activity|overview|contacts?|chats?|messages?|thread|context|snapshot|ticket|reply|send)\b",
             r"\b(sync|latest|activity|overview|list|show|read|open|snapshot|create|make|draft|reply|send)\b.+\bwhats\s*app\b",
             r"\b(groups?|chats?|threads?)\b.+\b(messages?|photos?|screenshots?|voice\s+notes?)\b",
@@ -470,6 +476,8 @@ _FOLLOW_UP_LEAD = r"^(?:(?:so|then|okay|ok|yes|yeah|yep|sure)[,.]?\s+)*"
 
 _WORKFLOW_FOLLOW_UP_PATTERNS: tuple[str, ...] = (
     r"^(?:yes|yeah|yep|sure|okay|ok)[.!?]?$",
+    r"^(?:yes|yeah|yep|sure|okay|ok)[,.]?\s+(?:please\s+)?(?:can|could|will)\s+you(?:\s+please)?[.!?]?$",
+    r"^(?:please\s+)?(?:can|could|will)\s+you(?:\s+please)?[.!?]?$",
     _FOLLOW_UP_LEAD + r"(?:please\s+)?(?:try|retry)(?:\s+it|\s+that)?\s+again[.!?]?$",
     _FOLLOW_UP_LEAD + r"(?:please\s+)?do\s+(?:it|that)(?:\s+again)?[.!?]?$",
     _FOLLOW_UP_LEAD + r"(?:please\s+)?(?:go\s+ahead|continue|finish\s+it)[.!?]?$",

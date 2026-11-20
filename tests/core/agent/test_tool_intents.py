@@ -55,6 +55,8 @@ def test_clipboard_to_calendar_instruction_forces_both_tools():
 
 def test_calendar_event_follow_ups_are_recognized():
     assert is_workflow_follow_up("Yes.")
+    assert is_workflow_follow_up("Yeah, can you?")
+    assert is_workflow_follow_up("Can you?")
     assert is_workflow_follow_up("Try again.")
     assert is_workflow_follow_up("Create the fucking event.")
     assert is_workflow_follow_up("do it, read or ingest the clipboard and do it.")
@@ -128,6 +130,12 @@ def test_forces_ticket_tool_for_local_and_remote_ticket_requests(monkeypatch):
     assert "create_ticket" in forced_tool_names_for_text("make a Trello card for the UI bug")
     assert "create_ticket" in forced_tool_names_for_text("move ticket 12 from the wrong board to DecisionsAI")
     assert "create_ticket" in forced_tool_names_for_text("transfer this card to the ThatShirtShow board")
+    assert "create_ticket" in forced_tool_names_for_text("merge those two tickets")
+    assert "create_ticket" in forced_tool_names_for_text("Merge tickets 290 and 328 on Merrypak")
+    assert "create_ticket" in forced_tool_names_for_text("move the backlog tickets into Current")
+    assert "create_ticket" in forced_tool_names_for_text(
+        "create_ticket tool for Kanban board operations (list_tickets, move_ticket, delete_ticket)"
+    )
     assert "create_ticket" in forced_tool_names_for_text(
         "Break this project down into tickets and then run the work."
     )

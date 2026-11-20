@@ -673,13 +673,86 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                         )
                         return (True, msg, True)
 
-            # Score against registry keys and description values
+            # Kanban / ticket boards: models request create_ticket by its tool
+            # name and actions, but fuzzy match scores registry class names
+            # (KanbanTicketTool is one unsplit token) and often misses.
+            ticket_routing_tokens = (
+                "create_ticket",
+                "list_tickets",
+                "move_ticket",
+                "delete_ticket",
+                "update_ticket",
+                "get_ticket",
+                "list tickets",
+                "move ticket",
+                "delete ticket",
+                "update ticket",
+                "merge ticket",
+                "merge tickets",
+                "kanban board operations",
+            )
+            if any(token in qlow for token in ticket_routing_tokens):
+                tn = "create_ticket"
+                existing = self._tools_dict.get(tn)
+                if existing is not None:
+                    msg = (
+                        f"Use the '{tn}' tool directly — it is already in your active set. "
+                        "For board work use action='list_tickets', 'move_ticket', "
+                        "'update_ticket', or 'delete_ticket'."
+                    )
+                    log_request_tool_event(
+                        query=qnorm,
+                        success=True,
+                        injected_tool_name=tn,
+                        model_name=_mn,
+                        injection_performed=False,
+                        message=msg,
+                    )
+                    return (True, msg, False)
+                cached = _tool_cache.get(tn)
+                if cached is not None:
+                    self._tools.append(cached)
+                    self._tools_dict[cached.name] = cached
+                    if not hasattr(self, "_sticky_tool_names"):
+                        self._sticky_tool_names = set()
+                    self._sticky_tool_names.add(cached.name)
+                    msg = (
+                        f"Tool '{tn}' is now available for ticket board operations. "
+                        "Call it with action='list_tickets', 'move_ticket', "
+                        "'update_ticket', or 'delete_ticket'."
+                    )
+                    log_request_tool_event(
+                        query=qnorm,
+                        success=True,
+                        injected_tool_name=tn,
+                        model_name=_mn,
+                        injection_performed=True,
+                        message=msg,
+                    )
+                    return (True, msg, True)
+
+            # Score against registry keys, tool names, and description values
+            class_to_tool_name: dict[str, str] = {}
+            for cached_tool in list_all_cached_tool_instances():
+                class_to_tool_name[type(cached_tool).__name__] = cached_tool.name
+
+            def _ident_phrase(value: str) -> str:
+                spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", value or "")
+                return spaced.replace("_", " ")
+
             scores: list[tuple[str, int]] = []
             for class_name in TOOL_REGISTRY:
                 name_score = fuzz.token_set_ratio(qlow, class_name.lower())
                 desc = TOOL_DESCRIPTIONS.get(class_name, "")
                 desc_score = fuzz.token_set_ratio(qlow, desc.lower()) if desc else 0
-                best = max(name_score, desc_score)
+                tool_name = class_to_tool_name.get(class_name, "")
+                tool_name_score = 0
+                if tool_name:
+                    tool_name_score = max(
+                        fuzz.token_set_ratio(qlow, tool_name.lower()),
+                        fuzz.token_set_ratio(qlow, _ident_phrase(tool_name).lower()),
+                    )
+                best = max(name_score, desc_score, tool_name_score)
                 if class_name == "GetWorkflowTool" and wf_topic and wf_detail:
                     best = min(100, best + 28)
                 if class_name == "GoogleWorkspaceTool" and (
