@@ -30,14 +30,34 @@ _SCOPED_RESTRICTION_RE = re.compile(
 
 
 def _latest_user_instruction(user_text: str) -> str:
-    """Use the current user request, not injected memory/RAG around it."""
+    """Use the current user request, not injected memory, RAG, or plan-step wrappers."""
     try:
-        from distr.core.agent.services.llm.oracle_context import strip_rag_block
+        from distr.core.agent.services.llm.oracle_context import (
+            USER_REQUEST_MARKER,
+            strip_rag_block,
+        )
 
         text = strip_rag_block(user_text)
+        # Grounding and other prefixes can sit in front of the RAG header, so
+        # startswith-based stripping misses them. Prefer the text after the
+        # last explicit user-request marker when one is present.
+        if isinstance(text, str) and USER_REQUEST_MARKER in text:
+            text = text.rsplit(USER_REQUEST_MARKER, 1)[1]
     except Exception:
         text = user_text
-    return str(text or "").strip()
+    text = str(text or "")
+    try:
+        from distr.core.agent.plan_step import PLAN_HEADER
+
+        marker = "\n\n" + PLAN_HEADER
+        idx = text.find(marker)
+        if idx != -1:
+            text = text[:idx]
+        elif text.lstrip().startswith(PLAN_HEADER):
+            text = ""
+    except Exception:
+        pass
+    return text.strip()
 
 
 _READ_ACTION_PREFIXES = (

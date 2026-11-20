@@ -222,3 +222,43 @@ def test_rag_memory_no_action_phrase_does_not_block_current_request() -> None:
         {"action": "move_ticket", "ticket_id": 343, "lane_name": "QA"},
         text,
     ) == ""
+
+
+def test_plan_first_wrapper_does_not_block_requested_mutations() -> None:
+    from distr.core.agent.plan_step import plan_instruction, with_plan_step
+
+    request = (
+        "List the tickets, then move ticket #343 to QA, "
+        "and merge ticket #345 into ticket #344."
+    )
+    wrapped, planned = with_plan_step(request, request)
+    assert planned
+    assert "[PLAN FIRST]" in wrapped
+    # The old plan wording ("change anything the user did not ask for") used
+    # to make no_action_requested(True) on every multi-step ticket request.
+    assert not no_action_requested(wrapped)
+    assert tool_execution_block_reason(
+        _owner(wrapped),
+        "create_ticket",
+        {"action": "move_ticket", "ticket_id": 343, "lane_name": "QA"},
+        wrapped,
+    ) == ""
+    assert tool_execution_block_reason(
+        _owner(wrapped),
+        "create_ticket",
+        {"action": "merge_ticket", "keep_id": 344, "duplicate_id": 345},
+        wrapped,
+    ) == ""
+    # Historical wrapper text must also be ignored when it is only a suffix.
+    legacy = (
+        request
+        + "\n\n[PLAN FIRST] This request has several steps. Do not start a "
+        "workflow, send anything, or change anything the user did not ask for."
+    )
+    assert not no_action_requested(legacy)
+    assert tool_execution_block_reason(
+        _owner(legacy),
+        "create_ticket",
+        {"action": "merge_ticket", "keep_id": 344, "duplicate_id": 345},
+        legacy,
+    ) == ""

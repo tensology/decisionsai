@@ -43,8 +43,8 @@ def is_multi_step_request(text: str) -> bool:
 def plan_instruction() -> str:
     return (
         f"{PLAN_HEADER} This request has several steps. Before your first tool call, write a short "
-        "numbered plan (at most 5 lines, one line per step). Then do the steps in order. Do not start a "
-        "workflow, send anything, or change anything the user did not ask for. In your final answer, "
+        "numbered plan (at most 5 lines, one line per step). Then do the steps in order. Stay inside "
+        "the steps the user asked for, and skip any extra workflow or send. In your final answer, "
         "list each step as done, skipped or blocked, with the reason for anything not done."
     )
 
