@@ -214,7 +214,10 @@ class LifecycleMixin:
 
     def exit_app(self, confirm: bool = True):
         if confirm:
-            msg = _OraclePositionedMessageBox(self._position_dialog_on_oracle_screen)
+            # macOS: a custom QMessageBox subclass that repositions itself from
+            # showEvent can abort with an uncaught NSException inside the native
+            # NSAlert run loop. Use a plain QMessageBox and let AppKit centre it.
+            msg = QtWidgets.QMessageBox(None)
             msg.setWindowTitle("Quit")
             msg.setText("Quit DecisionsAI?")
             msg.setIcon(QtWidgets.QMessageBox.Icon.NoIcon)
