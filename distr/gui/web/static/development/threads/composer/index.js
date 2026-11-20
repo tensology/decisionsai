@@ -615,6 +615,12 @@ export function createThreadsComposer({ context, actions, el, token }) {
                 return;
             }
         }
+        const runActive = activeWorkflowRun() || actions.isActiveAgentRun(context.currentRun);
+        if (runActive && !context.editingCommandId) {
+            // Offer Queue / Stop instead of silently queueing a follow-up.
+            showComposerBlockedFeedback(prompt);
+            return;
+        }
         if (context.busy || !context.ready || context.routeLoading || el('send-button').disabled) {
             showComposerBlockedFeedback(prompt);
             return;
