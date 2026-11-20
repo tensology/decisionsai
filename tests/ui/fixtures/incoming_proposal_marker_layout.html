@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SYNTHETIC incoming proposal marker layout</title>
+<link rel="stylesheet" href="/distr/gui/web/static/development/shell.css">
+<link rel="stylesheet" href="/distr/gui/web/static/development/incoming/styles.css">
+<style>
+  html, body { height: 100%; margin: 0; background: #0d1642; }
+  .hidden { display: none !important; }
+  #studio-shell { height: 100%; }
+  #incoming-workspace { height: 100%; }
+</style>
+</head>
+<body>
+<div id="studio-shell">
+<section class="development-workspace incoming-workspace" id="incoming-workspace" aria-label="Incoming communications">
+  <div class="scheduled-workspace-inner">
+    <div class="incoming-layout">
+      <nav class="incoming-folder-tabs" role="tablist">
+        <button type="button" id="incoming-folder-proposals" data-incoming-filter="proposals"><span aria-hidden="true">◆</span><strong>Proposals</strong><small id="incoming-proposals-count">0</small></button>
+        <button type="button" id="incoming-folder-whatsapp" data-incoming-filter="whatsapp"><span aria-hidden="true">◫</span><strong>WhatsApp</strong><small id="incoming-whatsapp-count">0</small></button>
+        <button type="button" id="incoming-folder-gmail" data-incoming-filter="gmail"><strong>Gmail</strong><small id="incoming-gmail-count">0</small></button>
+        <button type="button" id="incoming-folder-mailshot" data-incoming-filter="mailshot"><strong>Mailshot</strong><small id="incoming-mailshot-count">0</small></button>
+        <button type="button" class="incoming-resync" id="incoming-resync"><span aria-hidden="true">↻</span><strong>Resync</strong></button>
+      </nav>
+      <div class="incoming-folder-containers">
+        <section class="incoming-folder-panel" id="incoming-panel-proposals">
+          <header class="incoming-folder-header">
+            <input id="incoming-auto-accept" type="checkbox">
+            <button id="incoming-dismiss-expired" type="button">Dismiss expired</button>
+            <button type="button" id="incoming-dismissed-toggle">Recently dismissed</button>
+          </header>
+          <div id="incoming-dismissed-panel" class="hidden"></div>
+          <div id="incoming-proposals-list" class="proposal-cards"></div>
+        </section>
+        <section class="incoming-folder-panel hidden" id="incoming-panel-whatsapp">
+          <header class="incoming-folder-header"><button type="button" class="incoming-back" data-incoming-back>Back</button></header>
+          <div class="incoming-whatsapp-layout">
+            <div class="incoming-list" id="incoming-list"></div>
+            <article class="incoming-whatsapp-reader" id="incoming-whatsapp-reader"></article>
+          </div>
+        </section>
+        <section class="incoming-folder-panel hidden" id="incoming-panel-gmail">
+          <div class="incoming-gmail-layout">
+            <div class="incoming-gmail-list" id="incoming-gmail-list"></div>
+            <article class="incoming-gmail-reader" id="incoming-gmail-reader"></article>
+          </div>
+        </section>
+        <section class="incoming-folder-panel hidden" id="incoming-panel-mailshot">
+          <div class="incoming-gmail-layout">
+            <div class="incoming-gmail-list" id="incoming-mailshot-list"></div>
+            <article class="incoming-gmail-reader" id="incoming-mailshot-reader"></article>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</section>
+</div>
+<form id="incoming-link-form" class="hidden"></form>
+<script type="module">
+class FakeWS {
+  constructor() { this.readyState = FakeWS.CONNECTING; }
+  send() {}
+  close() { this.readyState = FakeWS.CLOSED; }
+}
+FakeWS.CONNECTING = 0;
+FakeWS.OPEN = 1;
+FakeWS.CLOSING = 2;
+FakeWS.CLOSED = 3;
+window.WebSocket = FakeWS;
+
+const params = new URLSearchParams(location.search);
+const layoutCase = params.get('case') === 'one' ? 'one' : 'many';
+const thread = 'synthetic-layout-thread@g.us';
+const soloTitle = 'SYNTHETIC single proposal about a readable anchor between two ordinary messages';
+const longTitles = [
+  'SYNTHETIC Investigate incorrect delivery code and free-shipping qualification across the checkout invoice description',
+  'SYNTHETIC Investigate incorrect free-shipping qualification and delivery charge pushed to the account ledger',
+  'SYNTHETIC Fix delivery code and free-shipping qualification in the web-to-print product flow',
+  'SYNTHETIC Correct carrier bag size details shown in product-code search XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+];
+const otherTitle = 'SYNTHETIC must not appear in this WhatsApp thread';
+
+function proposal(id, title, messageIds, threadId) {
+  return {
+    id,
+    title,
+    description: `SYNTHETIC description for ${id}`,
+    source: 'whatsapp',
+    source_label: 'WhatsApp',
+    source_thread_id: threadId,
+    message_ids: messageIds,
+    status: 'pending',
+    stored_status: 'pending',
+    project_id: 4242,
+    project_name: 'SYNTHETIC Project',
+  };
+}
+
+const threadProposals = layoutCase === 'one'
+  ? [proposal('synthetic-proposal-1', longTitles[0], ['wa-m3'], thread)]
+  : [
+      proposal('synthetic-solo', soloTitle, ['wa-m1'], thread),
+      ...longTitles.map((title, index) => proposal(`synthetic-proposal-${index + 1}`, title, ['wa-m3'], thread)),
+    ];
+const proposals = threadProposals.concat([
+  proposal('synthetic-other-thread', otherTitle, ['wa-other'], 'other-synthetic-thread@g.us'),
+]);
+
+function msg(id, iso, text, extra = {}) {
+  return {
+    source: 'whatsapp',
+    source_thread_id: thread,
+    source_message_id: id,
+    database_id: extra.db || 1,
+    key: `whatsapp:${id}`,
+    sender: extra.from_me ? 'You' : 'Synthetic Sender',
+    from_me: !!extra.from_me,
+    text,
+    created_at: iso,
+    chat_type: 'group',
+    conversation_label: 'SYNTHETIC layout fixture',
+    processed: true,
+    media_type: extra.media_type || '',
+    media_mime_type: extra.mime || '',
+    media_filename: extra.file || '',
+  };
+}
+
+const items = [
+  msg('wa-m5', '2026-11-08T10:20:00Z', 'SYNTHETIC closing note after the media. This line stays a normal message.'),
+  msg('wa-m4', '2026-11-08T10:15:00Z', 'SYNTHETIC video caption about bag sizes.', { db: 44, media_type: 'video', mime: 'video/mp4', file: 'synthetic-bag.mp4' }),
+  msg('wa-m3', '2026-11-08T10:10:00Z', 'SYNTHETIC long incoming message above the proposal anchors. It must stay readable and uncovered.'),
+  msg('wa-m2', '2026-11-08T10:05:00Z', 'SYNTHETIC short outgoing reply.', { from_me: true, db: 22 }),
+  msg('wa-m1', '2026-11-08T10:00:00Z', 'SYNTHETIC earliest message before the anchors.'),
+];
+
+const { createIncoming } = await import('/distr/gui/web/static/development/incoming/index.js?v=20261106-source-chronology');
+const apiCalls = [];
+const incoming = createIncoming({
+  context: {
+    boards: [],
+    projects: [{ id: 4242, name: 'SYNTHETIC Project' }],
+    workspaceMode: 'incoming',
+    boardTickets: {},
+  },
+  el: (id) => document.getElementById(id),
+  actions: {
+    api: async (url) => {
+      apiCalls.push(String(url));
+      if (String(url).includes('/proposals')) return { proposals, auto_accept: false };
+      return { items, links: [], channels: {} };
+    },
+    escapeHtml: (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[ch])),
+    formatDateTime: (value) => String(value || ''),
+    renderSidebar() {},
+    refreshShell() {},
+    toast() {},
+    confirmAction: async () => false,
+  },
+});
+await incoming.refreshIncomingData({ force: true });
+
+window.__actionHits = [];
+function guardProposalActions() {
+  document.querySelectorAll('#incoming-proposals-list button').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      window.__actionHits.push({
+        type: 'click',
+        label: button.textContent.trim() || button.getAttribute('aria-label') || '',
+        proposalId: button.getAttribute('data-incoming-proposal-thread')
+          || button.getAttribute('data-incoming-proposal-dismiss')
+          || button.getAttribute('data-incoming-proposal-copy')
+          || '',
+      });
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
+    button.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      window.__actionHits.push({
+        type: 'keydown',
+        key: event.key,
+        label: button.textContent.trim() || button.getAttribute('aria-label') || '',
+      });
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
+  });
+}
+guardProposalActions();
+
+function showTimeline() {
+  document.getElementById('incoming-panel-proposals').classList.add('hidden');
+  document.getElementById('incoming-panel-whatsapp').classList.remove('hidden');
+  const workspace = document.getElementById('incoming-workspace');
+  if (window.innerWidth <= 980) workspace.classList.add('incoming-detail-open');
+  else workspace.classList.remove('incoming-detail-open');
+}
+
+function overlap(a, b) {
+  const ix = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+  const iy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+  return { ix, iy, hit: ix > 0.5 && iy > 0.5 };
+}
+
+function anchorWord(span, needle) {
+  const text = span.textContent || '';
+  const idx = text.lastIndexOf(needle);
+  if (idx < 0 || !span.firstChild || span.firstChild.nodeType !== Node.TEXT_NODE) {
+    return { found: false, needle };
+  }
+  const range = document.createRange();
+  range.setStart(span.firstChild, idx);
+  range.setEnd(span.firstChild, Math.min(text.length, idx + needle.length));
+  const rects = [...range.getClientRects()];
+  const pane = span.closest('.incoming-whatsapp-messages').getBoundingClientRect();
+  const box = span.getBoundingClientRect();
+  const visible = rects.length > 0 && rects.every((rect) => (
+    rect.width > 0
+    && rect.height > 0
+    && rect.top >= box.top - 1
+    && rect.bottom <= box.bottom + 1
+    && rect.left >= box.left - 1
+    && rect.right <= box.right + 1
+    && rect.left >= pane.left - 1
+    && rect.right <= pane.right + 1
+  ));
+  return { found: true, needle, visible, parts: rects.length };
+}
+
+function measureTimeline() {
+  showTimeline();
+  const box = document.querySelector('.incoming-whatsapp-messages');
+  const container = box.getBoundingClientRect();
+  const children = [...box.children];
+  const rects = children.map((el) => el.getBoundingClientRect());
+  const overlaps = [];
+  for (let i = 0; i < rects.length; i += 1) {
+    for (let j = i + 1; j < rects.length; j += 1) {
+      const hit = overlap(rects[i], rects[j]);
+      if (hit.hit) {
+        overlaps.push({
+          i, j,
+          ix: Math.round(hit.ix),
+          iy: Math.round(hit.iy),
+          a: children[i].dataset.proposalId || children[i].dataset.waMid || children[i].className,
+          b: children[j].dataset.proposalId || children[j].dataset.waMid || children[j].className,
+        });
+      }
+    }
+  }
+  const gaps = [];
+  for (let i = 0; i < rects.length - 1; i += 1) {
+    const markerGap = children[i].classList.contains('incoming-proposal-marker')
+      || children[i + 1].classList.contains('incoming-proposal-marker');
+    gaps.push({
+      gap: Math.round((rects[i + 1].top - rects[i].bottom) * 10) / 10,
+      markerGap,
+      a: children[i].dataset.proposalMarker || children[i].dataset.waMid,
+      b: children[i + 1].dataset.proposalMarker || children[i + 1].dataset.waMid,
+    });
+  }
+  const markers = children.filter((el) => el.classList.contains('incoming-proposal-marker')).map((el) => {
+    const span = el.querySelector(':scope > span');
+    const style = getComputedStyle(span);
+    const marker = el.getBoundingClientRect();
+    const spanRect = span.getBoundingClientRect();
+    const needle = el.dataset.proposalMarker === 'start' ? ' start' : ' end';
+    return {
+      id: el.dataset.proposalId,
+      kind: el.dataset.proposalMarker,
+      text: span.textContent,
+      markerW: marker.width,
+      spanW: spanRect.width,
+      spanH: spanRect.height,
+      whiteSpace: style.whiteSpace,
+      maxWidth: style.maxWidth,
+      overflow: style.overflow,
+      scrollW: span.scrollWidth,
+      clientW: span.clientWidth,
+      scrollH: span.scrollHeight,
+      clientH: span.clientHeight,
+      outside: marker.right > container.right + 1 || marker.left < container.left - 1,
+      anchor: anchorWord(span, needle),
+    };
+  });
+  const bubbles = children.filter((el) => el.classList.contains('incoming-message-bubble')).map((el) => {
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return {
+      id: el.dataset.waMid,
+      text: el.querySelector('p')?.textContent || '',
+      alignSelf: style.alignSelf,
+      maxWidth: style.maxWidth,
+      w: rect.width,
+      outside: rect.right > container.right + 1 || rect.left < container.left - 1,
+    };
+  });
+  const media = [...box.querySelectorAll('video, img, audio')].map((el) => {
+    const rect = el.getBoundingClientRect();
+    return { tag: el.tagName, className: el.className, w: rect.width, h: rect.height, top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right };
+  });
+  const mediaOverlaps = [];
+  box.querySelectorAll('video, img, audio').forEach((el) => {
+    const rect = el.getBoundingClientRect();
+    markers.forEach((marker, index) => {
+      const markerEl = children.filter((node) => node.classList.contains('incoming-proposal-marker'))[index];
+      const hit = overlap(rect, markerEl.getBoundingClientRect());
+      if (hit.hit) mediaOverlaps.push({ tag: el.tagName, id: marker.id, kind: marker.kind });
+    });
+  });
+  return {
+    case: layoutCase,
+    viewport: [window.innerWidth, window.innerHeight],
+    container: {
+      w: container.width,
+      h: container.height,
+      scrollW: box.scrollWidth,
+      clientW: box.clientWidth,
+    },
+    order: children.map((el) => (
+      el.classList.contains('incoming-proposal-marker')
+        ? `${el.dataset.proposalMarker}:${el.dataset.proposalId}`
+        : el.dataset.waMid
+    )),
+    overlaps,
+    gaps,
+    markers,
+    bubbles,
+    media,
+    mediaOverlaps,
+    proposalCount: document.getElementById('incoming-proposals-count').textContent,
+    cardIds: [...document.querySelectorAll('#incoming-proposals-list [data-incoming-proposal-open]')].map((el) => el.getAttribute('data-incoming-proposal-open')),
+    cardTitles: [...document.querySelectorAll('#incoming-proposals-list .proposal-title')].map((el) => el.textContent),
+    apiCalls,
+  };
+}
+
+window.__fixture = {
+  case: layoutCase,
+  proposals,
+  titles: { soloTitle, longTitles, otherTitle },
+  showTimeline,
+  measureTimeline,
+};
+window.__ready = true;
+</script>
+</body>
+</html>
