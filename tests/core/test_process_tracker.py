@@ -115,3 +115,17 @@ def test_rogue_sweep_catches_frozen_multiprocessing_helpers(monkeypatch):
     process_tracker.kill_rogue_decisions_processes(timeout=0.25)
 
     assert killed == [({8101, 8102}, 0.25)]
+
+
+@pytest.mark.parametrize("isolated_data", [False, True])
+def test_isolated_launch_skips_machine_wide_process_scan(monkeypatch, tmp_path, isolated_data):
+    if isolated_data:
+        monkeypatch.setenv("DECISIONS_DATA_DIR", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["bin/start.py"])
+    else:
+        monkeypatch.delenv("DECISIONS_DATA_DIR", raising=False)
+        monkeypatch.setattr(sys, "argv", ["bin/start.py", "--skip-kill-existing"])
+    fake_psutil = SimpleNamespace(process_iter=lambda _: pytest.fail("Unexpected process scan"))
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+
+    process_tracker.kill_rogue_decisions_processes()

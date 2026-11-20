@@ -188,7 +188,22 @@ def verification_sentence(verification: Mapping[str, Any] | None) -> str:
                 "so they need to run again in a form that reports a real result")
     if status == "incomplete" and missing:
         return f"the {' and '.join(missing[:2])} check hasn't run and passed yet"
+    if status in {"not_run", "skipped"}:
+        why = str(report.get("skipped_reason") or "").strip()
+        if why:
+            return why[0].lower() + why[1:].rstrip(".")
+        return (
+            "checks were skipped because none applied in this project "
+            "(no test or build tooling ran, and the browser check is off or unused)"
+        )
     return "none of the checks I can track have run and passed yet"
+
+
+def verification_can_be_skipped(verification: Mapping[str, Any] | None) -> bool:
+    """True when no applicable check ran, so the turn should not stay blocked."""
+    report = dict(verification or {})
+    status = str(report.get("status") or "").lower()
+    return status in {"not_run", "skipped"}
 
 
 def conversational_development_reply(
@@ -209,7 +224,14 @@ def conversational_development_reply(
     audit = _AUDIT_BANNER_RE.match(raw)
     if banner:
         report = banner.group("report").strip()
-        lead_sentence = f"The agent finished the work, but I can't call it done yet because {verification_sentence(verification)}."
+        status_now = str(status or "").lower()
+        if status_now == "completed" and verification_can_be_skipped(verification):
+            lead_sentence = (
+                "The work is done. "
+                f"Checks were skipped: {verification_sentence(verification)}."
+            )
+        else:
+            lead_sentence = f"The agent finished the work, but I can't call it done yet because {verification_sentence(verification)}."
     elif audit or audit_violation:
         report = (audit.group("report").strip() if audit else raw)
         lead_sentence = ("This was meant to be a read-only audit, but project files changed during the run, "
@@ -232,6 +254,8 @@ def conversational_development_reply(
         )
         if status == "waiting" and model_pct is not None:
             pct = min(model_pct, 99)
+    if complete and verification_can_be_skipped(verification) and not lead_sentence:
+        lead_sentence = f"Checks were skipped: {verification_sentence(verification)}."
     if status == "completed_noop" and not lead_sentence:
         lead_sentence = "The agent finished, but no project files changed even though this asked for a change, so I'm not counting it as done."
     if report and lead_sentence:

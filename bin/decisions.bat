@@ -17,6 +17,14 @@ if !errorlevel! equ 0 (
 set "SCRIPT_DIR=%~dp0.."
 pushd "%SCRIPT_DIR%"
 set "SCRIPT_DIR=%CD%"
+set "LEAN_SETUP=0"
+set "PROFILE_ARGS="
+if not exist "installer\.requirements_installed_external" set "LEAN_SETUP=1"
+if exist "installer\.requirements_installed_profile" set "LEAN_SETUP=1"
+for %%a in (%*) do if /I "%%~a"=="--setup-providers" (
+    set "LEAN_SETUP=1"
+    set "PROFILE_ARGS=--configure"
+)
 :: Stay in the project root — all relative paths (requirements.txt, bin\, etc.) depend on this
 
 echo.
@@ -213,6 +221,8 @@ if not exist "%SystemRoot%\System32\msvcp140.dll" (
     echo [32m√[0m Visual C++ Redistributable found
 )
 
+if "!LEAN_SETUP!"=="1" goto :virtual_environment
+
 set "HAS_CPP_TOOLS=0"
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if exist "%VSWHERE%" (
@@ -261,6 +271,7 @@ if !errorlevel! neq 0 (
     echo [32m√[0m CMake found
 )
 
+:virtual_environment
 :: Virtual environment — always use %USERPROFILE%\.virtualenvs\decisions
 set "VENV_DIR=%USERPROFILE%\.virtualenvs\decisions"
 
@@ -293,6 +304,12 @@ if exist "%VENV_DIR%\Scripts\activate.bat" (
 ) else (
     echo [31mError: Could not activate virtual environment at %VENV_DIR%[0m
     exit /b 1
+)
+
+if "!LEAN_SETUP!"=="1" (
+    "%VENV_DIR%\Scripts\python.exe" "%SCRIPT_DIR%\bin\first_run.py" !PROFILE_ARGS!
+    if errorlevel 1 exit /b 1
+    goto :qt_runtime_check
 )
 
 :: Check pip and upgrade to latest
@@ -382,6 +399,7 @@ if !DEPS_OK! equ 0 (
     echo [32m√[0m Dependencies already installed
 )
 
+:qt_runtime_check
 :: Fix PyQt6 bundled msvcp140.dll version conflict
 :: PyQt6 ships an old msvcp140.dll (14.26.x) that crashes on modern Windows.
 :: Replace it with the system copy if the system version is newer.
@@ -403,6 +421,8 @@ if exist "%PYQT6_DLL%" (
         )
     )
 )
+
+if "!LEAN_SETUP!"=="1" goto :launch_setup
 
 :: Check if models are installed
 set "MODELS_DIR=.\distr\core\agent\models"
@@ -470,6 +490,7 @@ if "!TORCH_CHECK:~0,2!"=="ok" (
     echo [33m   Tool retrieval will use TF-IDF fallback.[0m
 )
 
+:launch_setup
 :: Add project root to user PATH (so 'decisions.bat' works from anywhere)
 echo [33mChecking system PATH...[0m
 :: Use cmd /c to isolate PATH expansion (which contains parens like x86) from breaking the if-block

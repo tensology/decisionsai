@@ -17,11 +17,13 @@ def test_hint_text_per_state():
 import assert from 'node:assert/strict';
 const m = await import(SOURCE);
 assert.deepEqual(m.scanHint({state: 'scanning'}), {text: 'Scanning project…', kind: 'scanning'});
-assert.deepEqual(m.scanHint({state: 'error', error: 'folder gone'}), {text: 'Project scan failed: folder gone Plan still shows the last successful scan.', kind: 'error'});
+assert.deepEqual(m.scanHint({state: 'error', error: 'folder gone'}), {text: 'Project scan failed: folder gone You can generate a plan from what we have, or retry the scan.', kind: 'error', offerGenerate: true});
 assert.equal(m.scanHint({state: 'done'}), null);
-assert.match(m.scanHint({state: 'done', coverage: 'none'}).text, /could not map.*Review/);
+assert.match(m.scanHint({state: 'done', coverage: 'none'}).text, /could not map/);
+assert.equal(m.scanHint({state: 'done', coverage: 'none'}).offerGenerate, true);
 assert.match(m.scanHint({state: 'done', coverage: 'partial'}).text, /partial/);
-assert.match(m.scanHint({state: 'unconfirmed'}).text, /not confirmed/);
+assert.match(m.scanHint({state: 'unconfirmed'}).text, /did not finish in time/);
+assert.equal(m.scanHint({state: 'unconfirmed'}).offerGenerate, true);
 assert.equal(m.scanHint(undefined), null);
 ''')
 

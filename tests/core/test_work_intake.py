@@ -1241,3 +1241,22 @@ def test_intake_ignores_a_retired_board_default_and_still_routes():
     assert workflow is not None
     assert workflow.id == ids["standard"]
     assert workflow.id != ids["retired"]
+
+
+def test_design_first_large_request_is_workflow(service):
+    decision = service.classify(WorkIntake(
+        source="web",
+        user_text="Please design, implement and verify an end-to-end account area for this product.",
+        project_hint="Tensology",
+    ))
+    assert decision.action == WorkIntakeAction.RUN_WORKFLOW, decision.reason
+
+
+def test_labelled_heading_change_stays_lightweight(service):
+    decision = service.classify(WorkIntake(
+        source="web",
+        user_text="E2E UX test (safe to delete): Please rename the welcome heading on the home page to Hello.",
+        project_hint="Tensology",
+    ))
+    assert decision.action == WorkIntakeAction.CREATE_TICKET, decision.reason
+    assert (decision.diagnostics or {}).get("execute_lightweight") is True

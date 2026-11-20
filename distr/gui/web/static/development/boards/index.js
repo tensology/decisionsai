@@ -133,7 +133,11 @@ export function createBoards({ context, actions, el }) {
         const title = ticket.title || ticket.name || ticket.key || 'Untitled ticket';
         const description = ticket.description || ticket.desc || ticket.summary || '';
         const priority = ticket.priority || '';
-        const complexity = ticket.complexity || '';
+        const complexityRaw = String(ticket.complexity || '').trim().toLowerCase();
+        const complexity = complexityRaw === 'medium' ? 'moderate' : complexityRaw;
+        const complexityLabel = complexity && !(complexity === 'moderate' && String(priority).toLowerCase() === 'medium')
+            ? complexity
+            : '';
         const source = ticket.source_provider || ticket.external_source || (board.provider !== 'decisions' ? board.provider : '');
         const showSource = source && String(source).toLowerCase() !== String(board.provider || '').toLowerCase();
         const listDescription = layout === 'list' ? kanbanListDescriptionHtml(description) : '';
@@ -143,7 +147,7 @@ export function createBoards({ context, actions, el }) {
                 : '';
         const statusHtml = kanbanTicketStatusHtml(ticket);
         return `<article class="development-kanban-card${layout === 'list' ? ' list-row' : ''}" draggable="true" tabindex="0" role="button" data-kanban-ticket="${actions.escapeHtml(key)}" data-ticket-id="${actions.escapeHtml(id)}" aria-label="Open ${actions.escapeHtml(title)}">
-            <div class="development-kanban-card-head"><span class="development-kanban-card-badges">${statusHtml}${showSource ? `<span class="kanban-source">${actions.escapeHtml(actions.providerName(source))}</span>` : ''}${complexity ? `<span class="kanban-complexity">${actions.escapeHtml(String(complexity).replaceAll('_', ' '))}</span>` : ''}${priority ? `<span class="kanban-priority ${actions.escapeHtml(String(priority).toLowerCase())}">${actions.escapeHtml(priority)}</span>` : ''}${listTime}</span><button type="button" class="development-kanban-ticket-menu" data-kanban-menu aria-label="Ticket actions" title="Ticket actions">•••</button></div>
+            <div class="development-kanban-card-head"><span class="development-kanban-card-badges">${statusHtml}${showSource ? `<span class="kanban-source">${actions.escapeHtml(actions.providerName(source))}</span>` : ''}${complexityLabel ? `<span class="kanban-complexity">${actions.escapeHtml(String(complexityLabel).replaceAll('_', ' '))}</span>` : ''}${priority ? `<span class="kanban-priority ${actions.escapeHtml(String(priority).toLowerCase())}">${actions.escapeHtml(priority)}</span>` : ''}${listTime}</span><button type="button" class="development-kanban-ticket-menu" data-kanban-menu aria-label="Ticket actions" title="Ticket actions">•••</button></div>
             <div class="development-kanban-card-copy"><span class="development-kanban-card-title"><strong title="${actions.escapeHtml(title)}">${actions.escapeHtml(title)}</strong></span>${layout === 'list' ? listDescription : description ? `<p>${actions.escapeHtml(description)}</p>` : ''}${layout === 'list' ? '' : kanbanTicketMetaHtml(ticket)}</div>
             <footer>${ticket.source_chat_id ? '<span class="kanban-thread-link">Thread linked</span>' : '<span></span>'}<span>${Array.isArray(ticket.files) && ticket.files.length ? `${ticket.files.length} file${ticket.files.length === 1 ? '' : 's'}` : ''}</span></footer>
         </article>`;
@@ -798,7 +802,7 @@ export function createBoards({ context, actions, el }) {
         el('kanban-ticket-title').value = ticket?.ticket_title || '';
         el('kanban-ticket-description').value = ticket?.text || '';
         el('kanban-ticket-priority').value = ticket?.priority || 'medium';
-        el('kanban-ticket-complexity').value = ticket?.complexity || 'moderate';
+        el('kanban-ticket-complexity').value = String(ticket?.complexity || 'moderate').toLowerCase() === 'medium' ? 'moderate' : (ticket?.complexity || 'moderate');
         el('kanban-ticket-lane').innerHTML = lanes
             .map(
                 (lane) =>

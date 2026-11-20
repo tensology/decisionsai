@@ -39,6 +39,19 @@ def test_raw_harness_banner_is_rewritten_into_conversation():
     assert "Fresh 2026-11-11 dump set is on the server." in reply
 
 
+def test_completed_turn_with_no_applicable_checks_is_done():
+    raw = BANNER + "The home page heading now reads Hello."
+    reply = cp.conversational_development_reply(
+        raw, status="completed", success=True, change_expected=True, changed_files=1,
+        verification={"status": "skipped", "checks": [], "required": [], "missing": [],
+                       "skipped_reason": "Checks were skipped because none applied in this project."},
+    )
+    assert reply.startswith("100% done.")
+    assert "I can't call it done yet" not in reply
+    assert "Checks were skipped" in reply
+    assert "The home page heading now reads Hello." in reply
+
+
 def test_blocked_turn_cannot_claim_100_even_if_the_agent_did():
     raw = BANNER + "100% done. Everything passed."
     reply = cp.conversational_development_reply(

@@ -103,10 +103,20 @@ Connected services include Google Workspace, Telegram, WhatsApp, Discord, Jira, 
 curl -fsSL https://decisions.tensology.com/install.sh | bash
 ```
 
+On Windows, run this in PowerShell.
+
+```powershell
+Invoke-RestMethod https://decisions.tensology.com/install.ps1 | Invoke-Expression
+```
+
+On the first run, choose **Quick Setup** to use one OpenAI API key for chat, transcription, and speech, or choose **Manual Setup** to mix providers and pick models and audio devices. You can paste a key securely or open the provider's key page. System Default follows your operating system's current microphone and speakers.
+
+Cloud setup skips local speech models and does not install or pull Ollama models. Manual Setup shows the download sizes for local Whisper, Vosk, and Kokoro before you confirm. It downloads the selected models from the DecisionsAI server with a progress bar and keeps them in your user data folder for reuse. To revisit setup, run `./decisions --setup-providers` on macOS or Linux, or `decisions.bat --setup-providers` on Windows.
+
 ### From source
 
 ```bash
-git clone https://github.com/tensology/decisionsai.git
+git clone --depth 1 --no-tags https://github.com/tensology/decisionsai.git
 cd decisionsai
 ```
 
@@ -116,7 +126,7 @@ cd decisionsai
 | Windows | Run `bin/decisions.bat` or `bin/decisions.ps1` |
 | Linux | Run `./decisions` |
 
-The launcher checks dependencies, prepares Python, downloads the selected local models, and starts the app. Python 3.12, FFmpeg, and PortAudio are the main system requirements. Local models generally need at least 8 GB RAM; cloud-only use is lighter.
+The launcher prepares Python, installs the selected dependencies, and starts the app. Python 3.12, FFmpeg, and PortAudio are the main system requirements. Local models generally need at least 8 GB RAM.
 
 To prepare a source checkout manually inside an existing Python 3.12 environment:
 

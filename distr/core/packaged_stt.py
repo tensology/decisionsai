@@ -14,6 +14,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 MANIFEST = "https://decisions.tensology.com/downloads/models/manifest.json"
+WHISPER_FILE = "ggml-base.en.bin"
+VOSK_DIR = "vosk-model-small-en-us-0.15"
 
 
 def _root():
@@ -30,6 +32,18 @@ def selected_model():
         return {"engine": data["engine"], "path": str(path)}
     except (OSError, ValueError, KeyError, TypeError):
         return None
+
+
+def cached_model_path(engine):
+    if engine == "whisper":
+        model = _root() / WHISPER_FILE
+        if model.is_file():
+            return str(model)
+    if engine == "vosk":
+        model = _root() / VOSK_DIR
+        if (model / "am" / "final.mdl").is_file():
+            return str(model)
+    return None
 
 
 def download_model(engine, progress, cancelled):
@@ -86,14 +100,14 @@ def download_model(engine, progress, cancelled):
                 from distr.core.paths import user_data_root
                 shutil.copytree(extracted, user_data_root() / "assets", dirs_exist_ok=True)
                 return str(user_data_root() / "assets")
-            source = extracted / "vosk-model-small-en-us-0.15"
+            source = extracted / VOSK_DIR
             if not (source / "am" / "final.mdl").is_file():
                 raise ValueError("Incomplete Vosk model archive")
-            target = root / "vosk-model-small-en-us-0.15"
+            target = root / VOSK_DIR
             if not target.exists():
                 shutil.move(str(source), str(target))
         else:
-            target = root / "ggml-base.en.bin"
+            target = root / WHISPER_FILE
             os.replace(archive, target)
         selection = {"engine": engine, "relative_path": target.name}
         pending = root / "selection.pending"

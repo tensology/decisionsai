@@ -116,9 +116,6 @@ from distr.core.audio.utils import (
     detect_devices,
 )
 
-from distr.core.agent.session import AgentSession
-
-
 class DeviceCheckWorkerSignals(QObject):
     """Signals for DeviceCheckWorker"""
     result = pyqtSignal(str)

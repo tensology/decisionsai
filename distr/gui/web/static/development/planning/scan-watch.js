@@ -5,14 +5,14 @@ export const SCANNING_HINT = 'Scanning project…';
 
 export function scanHint(scan) {
     if (scan?.state === 'scanning') return { text: SCANNING_HINT, kind: 'scanning' };
-    if (scan?.state === 'error') return { text: `Project scan failed: ${scan.error || 'unknown error'} Plan still shows the last successful scan.`, kind: 'error' };
-    if (scan?.state === 'unconfirmed') return { text: 'Project scan status was not confirmed. Reopen Plan to check again.', kind: 'warning' };
-    if (scan?.state === 'done' && scan.coverage === 'none') return { text: 'Project scan could not map this application. Review the saved plan before building tickets.', kind: 'warning' };
+    if (scan?.state === 'error') return { text: `Project scan failed: ${scan.error || 'unknown error'} You can generate a plan from what we have, or retry the scan.`, kind: 'error', offerGenerate: true };
+    if (scan?.state === 'unconfirmed') return { text: 'Project scan did not finish in time. You can generate a plan from what we have, or reopen Plan to try the scan again.', kind: 'warning', offerGenerate: true };
+    if (scan?.state === 'done' && scan.coverage === 'none') return { text: 'Project scan could not map this application. You can still generate a plan, then review it before building tickets.', kind: 'warning', offerGenerate: true };
     if (scan?.state === 'done' && scan.coverage === 'partial') return { text: 'Project map is partial. Review it before building tickets.', kind: 'warning' };
     return null;
 }
 
-export async function watchPlanScan({ api, workspaceId, isCurrent, onSettled, interval = 1500, maxPolls = 240, sleep }) {
+export async function watchPlanScan({ api, workspaceId, isCurrent, onSettled, interval = 1500, maxPolls = 40, sleep }) {
     const wait = sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     const base = `/workflows/studio/plan-workspaces/${encodeURIComponent(workspaceId)}`;
     for (let poll = 0; poll < maxPolls; poll += 1) {

@@ -122,6 +122,10 @@ def _ticket_count(factory):
         "start the merrypak project",
         "deploy to production",
         "can you start working on the auctionnow pr",
+        "Please design, implement and verify an account area",
+        "Please design the sign-in and profile pages",
+        "E2E UX test (safe to delete): Please rename the welcome heading on the home page to Hello.",
+        "Merrypak: Please update the home page heading to Hello.",
     ],
 )
 def test_natural_work_phrasings_route(text):

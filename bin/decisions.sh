@@ -10,10 +10,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
 DECISIONS_FOREGROUND=0
+CONFIGURE_PROVIDERS=0
 for _arg in "$@"; do
     case "$_arg" in
         --foreground|--fg)
             DECISIONS_FOREGROUND=1
+            ;;
+        --setup-providers)
+            CONFIGURE_PROVIDERS=1
             ;;
         --run-app-only)
             exec "$SCRIPT_DIR/bin/decisions-run.sh"
@@ -405,6 +409,19 @@ fi
 # Install requirements if not already installed
 # Use a marker file in the installer folder to track installation
 REQUIREMENTS_MARKER="installer/.requirements_installed_external"
+PROFILE_MARKER="installer/.requirements_installed_profile"
+LEAN_SETUP=0
+if [ "$CONFIGURE_PROVIDERS" = 1 ] || [ -f "$PROFILE_MARKER" ] || [ ! -f "$REQUIREMENTS_MARKER" ]; then
+    LEAN_SETUP=1
+    PROFILE_ARGS=()
+    if [ "$CONFIGURE_PROVIDERS" = 1 ]; then
+        PROFILE_ARGS+=(--configure)
+    fi
+    "$VENV_DIR/bin/python" "$SCRIPT_DIR/bin/first_run.py" "${PROFILE_ARGS[@]}" || exit 1
+    if [[ "$OSTYPE" == darwin* ]]; then
+        repair_private_audio || exit 1
+    fi
+fi
 
 # Verify that all critical dependencies are actually installed.
 # Uses a single Python process (bin/check_deps.py) instead of 37+ subprocesses
@@ -434,6 +451,7 @@ check_dependencies_installed() {
     return 0
 }
 
+if [ "$LEAN_SETUP" = 0 ]; then
 if [ ! -f "$REQUIREMENTS_MARKER" ] || ! check_dependencies_installed; then
     if [ ! -f "$REQUIREMENTS_MARKER" ]; then
         echo -e "${YELLOW}Installing dependencies...${NC}"
@@ -602,6 +620,7 @@ prefetch_local_models_bootstrap() {
     fi
 }
 prefetch_local_models_bootstrap
+fi
 
 # macOS: keep login shells on arm64 so Django/psycopg2 venvs match pip wheels.
 if [[ "$OSTYPE" == darwin* ]]; then
@@ -649,17 +668,19 @@ fi
 
 # Required default TTS assets; optional fallback/voice models remain opt-in.
 MODELS_DIR="$SCRIPT_DIR/distr/core/agent/models"
-if [ ! -s "$MODELS_DIR/kokoro-v1.0.onnx" ] || [ ! -s "$MODELS_DIR/voices-v1.0.bin" ] || [ "${DECISIONS_PREFETCH_MODELS:-0}" = 1 ]; then
+if [ "$LEAN_SETUP" = 0 ] && { [ ! -s "$MODELS_DIR/kokoro-v1.0.onnx" ] || [ ! -s "$MODELS_DIR/voices-v1.0.bin" ] || [ "${DECISIONS_PREFETCH_MODELS:-0}" = 1 ]; }; then
     "$VENV_DIR/bin/python" bin/setup.py || exit 1
 fi
 
 # Playwright: ONE shared browser cache; never download per-venv copies
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/Library/Caches/ms-playwright}"
+if [ "$LEAN_SETUP" = 0 ]; then
 PW_MISSING=$("$VENV_DIR/bin/python" -m playwright install --dry-run chromium 2>/dev/null | awk '/Install location:/{print $3}' | while read -r d; do [ -d "$d" ] || echo "$d"; done)
 if [ -n "$PW_MISSING" ]; then
     echo -e "${YELLOW}⚠ Shared Playwright Chromium missing ($(basename $PW_MISSING | tr '\n' ' ')). Install once: python -m playwright install chromium${NC}"
 else
     echo -e "${GREEN}✓${NC} Using shared Playwright Chromium in $PLAYWRIGHT_BROWSERS_PATH"
+fi
 fi
 
 # Check for Ollama availability (no automatic model pulls)
@@ -680,7 +701,9 @@ check_ollama() {
     fi
 }
 
-check_ollama
+if [ "$LEAN_SETUP" = 0 ]; then
+    check_ollama
+fi
 
 # Check for NumPy/PyTorch compatibility issues
 check_numpy_torch_compatibility() {
@@ -707,6 +730,7 @@ check_numpy_torch_compatibility() {
     fi
 }
 
+if [ "$LEAN_SETUP" = 0 ]; then
 check_numpy_torch_compatibility
 
 # Verify PyTorch actually loads (catches _PyDict_GetItemRef symbol issue)
@@ -746,6 +770,7 @@ case "$TORCH_OK" in
         echo -e "${YELLOW}⚠${NC}  PyTorch verification failed"
         ;;
 esac
+fi
 
 # Clean up Python cache files to avoid stale bytecode issues
 echo -e "${YELLOW}Cleaning Python cache...${NC}"

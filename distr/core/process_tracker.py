@@ -10,6 +10,7 @@ import atexit
 import logging
 import os
 import signal
+import sys
 import time
 import subprocess
 from collections.abc import Callable
@@ -176,6 +177,10 @@ def kill_rogue_decisions_processes(protected_pids: set | None = None, timeout: f
     This catches detached launcher/worker leftovers that are not tracked in
     worker_pids.txt (for example, stale start.py/decisions.sh/sidecar processes).
     """
+    # A runtime with a separate data directory owns only its explicitly tracked workers.
+    if os.environ.get("DECISIONS_DATA_DIR", "").strip() or "--skip-kill-existing" in sys.argv:
+        return
+
     protected = set(protected_pids or set())
     try:
         protected.add(os.getpid())

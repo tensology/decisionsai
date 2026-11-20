@@ -103,7 +103,7 @@ def register_routes(router, templates):
     async def workflow_studio_routing_assessment(data: StudioRoutingAssessmentRequest):
         """Assess operational complexity and failure signals before an automatic route is chosen."""
         from distr.core.kanban.ticket_policy import resolve_ticket_cli_route
-        from distr.core.workflow.execution_mode import assess_development_request, choose_development_execution_mode
+        from distr.core.workflow.execution_mode import assess_development_request, allocate_development_request, choose_development_execution_mode
 
         instruction = str(data.instruction or "").strip()
         assessment = await asyncio.to_thread(
@@ -141,13 +141,17 @@ def register_routes(router, templates):
             route["model"] = "auto"
         execution_mode = choose_development_execution_mode(instruction, assessment=assessment)
         harness = str(route.get("backend") or "pi")
+        visible = str(execution_mode.get("visible_reason") or execution_mode.get("reason") or "").strip()
         return JSONResponse({
             **assessment,
             "route": route,
             "execution_mode": execution_mode["mode"],
-            "execution_mode_reason": execution_mode["reason"],
+            "execution_mode_reason": execution_mode.get("visible_reason") or execution_mode["reason"],
             "execution_mode_signals": execution_mode["signals"],
-            "reason": (
+            "workflow_slug": execution_mode.get("workflow_slug"),
+            "workflow_name": execution_mode.get("workflow_name"),
+            "visible_reason": visible,
+            "reason": visible or (
                 f"{complexity.title()} → {harness}"
                 + (f" · {execution_mode['mode']}" if execution_mode.get("mode") else "")
                 + (f" with {', '.join(signals)} signals" if signals else "")
@@ -189,6 +193,7 @@ def register_routes(router, templates):
             from distr.core.db.kanban import KanbanTicket
             from distr.core.db.projects import Project
             from distr.core.settings import load_settings_from_db
+            from distr.core.workflow.execution_mode import allocate_development_request
 
             with get_session() as db:
                 if data.project_id is not None:
@@ -223,6 +228,27 @@ def register_routes(router, templates):
             title = str(data.title or data.board_ticket_title or "").strip() or None
             ticket_id = data.ticket_id
             skill_ids = filter_known_skill_ids(list(data.skill_ids or []))[:12]
+            project_folder = None
+            project_hint = ""
+            if data.project_id is not None:
+                with get_session() as db:
+                    selected_project = db.get(Project, int(data.project_id))
+                    if selected_project is not None:
+                        project_folder = getattr(selected_project, "folder_location", None)
+                        project_hint = str(getattr(selected_project, "name", "") or "")
+            allocation = await asyncio.to_thread(
+                allocate_development_request,
+                prompt,
+                assessment=dict(data.routing_assessment or {}),
+                project_hint=project_hint,
+                project_id=data.project_id,
+                project_folder=project_folder,
+                resolve_workflow=data.workflow_id is None,
+            )
+            selected_workflow_id = data.workflow_id
+            if selected_workflow_id is None and allocation.get("mode") == "workflow" and allocation.get("workflow_id"):
+                selected_workflow_id = int(allocation["workflow_id"])
+            visible_reason = str(allocation.get("visible_reason") or "").strip()
             chat_id, _ = await asyncio.to_thread(
                 ChatService.create_new_chat,
                 llm_provider=provider,
@@ -255,7 +281,7 @@ def register_routes(router, templates):
             await asyncio.to_thread(
                 mark_development_thread,
                 int(chat_id),
-                workflow_id=data.workflow_id,
+                workflow_id=selected_workflow_id,
                 ticket_id=ticket_id,
                 board_key=data.board_key,
                 board_provider=data.board_provider,
@@ -318,7 +344,7 @@ def register_routes(router, templates):
             execution = None
             should_start = autonomy_level != "approval"
             if should_start:
-                if data.workflow_id is not None:
+                if selected_workflow_id is not None:
                     from distr.core.workflow.work_dispatch import dispatch_work_item
 
                     run_metadata = {
@@ -354,7 +380,7 @@ def register_routes(router, templates):
                         }
                     execution = await asyncio.to_thread(
                         dispatch_work_item,
-                        workflow_id=int(data.workflow_id),
+                        workflow_id=int(selected_workflow_id),
                         chat_id=int(chat_id),
                         context=prompt,
                         project_id=data.project_id,
@@ -421,10 +447,32 @@ def register_routes(router, templates):
             from distr.gui.web.workflow_events import increment_workflow_updated
 
             increment_workflow_updated()
+            if visible_reason:
+                try:
+                    notice_id = await asyncio.to_thread(
+                        ChatService.append_assistant_notice, int(chat_id), visible_reason, hidden=False,
+                    )
+                    try:
+                        from distr.core.signals import signal_manager
+
+                        signal_manager.chat_message_added.emit(int(chat_id), "assistant", visible_reason, notice_id)
+                        signal_manager.chat_updated.emit(int(chat_id))
+                    except Exception:
+                        logger.debug("Could not emit allocation notice", exc_info=True)
+                except Exception:
+                    logger.warning("Could not post allocation reason on thread %s", chat_id, exc_info=True)
             return JSONResponse(
                 {
                     "task": chat_payload,
-                    "workflow": {"id": int(data.workflow_id)} if data.workflow_id is not None else None,
+                    "workflow": {"id": int(selected_workflow_id)} if selected_workflow_id is not None else None,
+                    "allocation": {
+                        "mode": allocation.get("mode"),
+                        "reason": visible_reason,
+                        "workflow_slug": allocation.get("workflow_slug"),
+                        "workflow_name": allocation.get("workflow_name"),
+                        "workflow_id": int(selected_workflow_id) if selected_workflow_id is not None else None,
+                    },
+                    "message": visible_reason or ("Workflow started." if selected_workflow_id is not None else "Task created."),
                     "turn": execution,
                     "execution": execution,
                     "artifacts": [],

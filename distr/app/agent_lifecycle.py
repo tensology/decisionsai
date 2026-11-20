@@ -523,6 +523,9 @@ class AgentLifecycleMixin:
 
             logger.info("Reloading settings from database before starting agent session")
             self.settings = load_settings_from_db()
+            if self.settings.get("transcription_model") == "Disabled":
+                logger.info("Voice is disabled. Select a transcription provider to enable it.")
+                return
 
             effective_chat_id = chat_id
             if not effective_chat_id:
