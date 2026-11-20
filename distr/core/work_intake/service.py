@@ -53,7 +53,7 @@ _DEVELOPMENT_THREAD_RE = re.compile(
 )
 _WORK_VERB = (
     r"(?:make|change|fix|repair|patch|update|add|remove|rename|replace|run|execute|"
-    r"build|implement|perform|assess|analyse|analyze|refactor|test|validate|verify|"
+    r"build|implement|design|perform|assess|analyse|analyze|refactor|test|validate|verify|"
     r"audit|review|inspect|investigate|redesign|copy|migrate|integrate|deploy|"
     r"launch|ship|release|start|troubleshoot|debug)"
 )
@@ -75,7 +75,8 @@ _WORK_INTENT_ANY_RE = re.compile(
     re.I,
 )
 _COLON_WORK_RE = re.compile(
-    r"^[^\n:]{1,60}:\s*(?:" + _WORK_VERB + r"|sort\s+out|look\s+into|deal\s+with)\b",
+    r"^[^\n:]{1,60}:\s*(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?"
+    r"(?:" + _WORK_VERB + r"|sort\s+out|look\s+into|deal\s+with)\b",
     re.I,
 )
 # A short "run/execute the <desktop action>" names a saved desktop action, not
@@ -157,9 +158,20 @@ def _has_unresolved_reference(intake: WorkIntake) -> bool:
     return bool(_UNRESOLVED_REFERENCE_RE.search(intake.text))
 
 
+def _work_clause(value: str) -> str:
+    """Return the work-bearing clause, ignoring a short 'Label:' prefix.
+
+    Incoming and thread titles often put a project or test label before the
+    request. Routing must still see 'Please rename…' after that colon.
+    """
+    clean = re.sub(r"\s+", " ", str(value or "")).strip()
+    match = re.match(r"^[^\n:]{1,60}:\s+(.+)$", clean)
+    return match.group(1).strip() if match else clean
+
+
 def _is_lightweight_project_change(value: str) -> bool:
     """Conservatively identify an atomic change that does not need a full loop."""
-    clean = re.sub(r"\s+", " ", str(value or "")).strip()
+    clean = _work_clause(value)
     # Atomic requests often include the target, desired value, and acceptance
     # hint in one sentence. A 14-word ceiling routed ordinary one-line edits
     # into the full seven-step Development workflow. Multi-step/risky intent is
@@ -534,7 +546,8 @@ class OrchestratorIntakeService:
         ).start()
         decision.status = "execution_started"
         decision.response_text = (
-            f"Created ticket #{decision.ticket_id} and started the project change. "
+            f"Created ticket #{decision.ticket_id} and started the project change directly, "
+            "without a full workflow, because this looks like a small, single change. "
             "I’ll move it to QA when the checks pass."
         )
 
@@ -1104,7 +1117,14 @@ class OrchestratorIntakeService:
             raise RuntimeError(str(result["error"]))
         decision.workflow_run_id = int(result.get("run_id")) if result.get("run_id") else None
         decision.status = "workflow_started"
-        decision.response_text = f"Created ticket #{decision.ticket_id} and started workflow run #{decision.workflow_run_id}."
+        reason = str(decision.reason or "").strip().rstrip(".")
+        decision.response_text = (
+            f"Created ticket #{decision.ticket_id} and started workflow run #{decision.workflow_run_id}."
+        )
+        if reason:
+            decision.response_text += (
+                f" I used a workflow because this is a larger piece of work: {reason[0].lower()}{reason[1:]}."
+            )
 
     @staticmethod
     def _workflow_intake_metadata(
