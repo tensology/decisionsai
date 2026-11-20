@@ -607,6 +607,14 @@ export function createThreadsComposer({ context, actions, el, token }) {
         }
         const prompt = el('task-prompt').value.trim();
         if (!prompt) return;
+        // Ask for a board before routing, workflow confirmation, or starting a thread.
+        if (!context.currentChat) {
+            const board = actions.boardByKey(context.selectedBoardKey);
+            if (!board && !context.draft.project_id) {
+                showBoardNeededBanner();
+                return;
+            }
+        }
         if (context.busy || !context.ready || context.routeLoading || el('send-button').disabled) {
             showComposerBlockedFeedback(prompt);
             return;
