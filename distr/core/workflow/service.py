@@ -2228,6 +2228,8 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 .limit(max(100, len(run_ids) * 30))
                 .all()
             )
+            from distr.core.kanban.project_execution import execution_activity_message
+
             for event_row, session_row in activity_rows:
                 rid = int(session_row.run_id or 0)
                 if not rid:
@@ -2235,13 +2237,19 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 activity = {
                     "event_type": event_row.event_type or "event",
                     "status": event_row.status or "",
-                    "message": event_row.message or "",
+                    "message": execution_activity_message(
+                        event_row.message or "", event_row.status or "", session_row.error or "",
+                        provider=session_row.route_backend or "",
+                        model=session_row.selected_model or "",
+                    ),
+                    "error": session_row.error or "",
                     "at": event_row.created_at.isoformat() if event_row.created_at else None,
                     "backend": session_row.route_backend or "",
                     "model": session_row.selected_model or "",
                     "complexity": session_row.complexity or "",
                     "selection_reason": session_row.selection_reason or "",
                     "step_id": session_row.step_id,
+                    "run_id": session_row.run_id,
                 }
                 latest_activity_by_run.setdefault(rid, activity)
                 activity_bucket = recent_activity_by_run.setdefault(rid, [])

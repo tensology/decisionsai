@@ -1130,15 +1130,26 @@ const ROUTINE_SHELL_TOOLS = new Set(['bash', 'sh', 'zsh', 'shell', 'run_shell', 
         const activityFor = (step) => {
             if (String(step.id) !== String(activeStepId)) return {};
             const recent = Array.isArray(run?.recent_activity) ? run.recent_activity : [];
-            return recent.find((item) => !item.step_id || String(item.step_id) === String(step.id)) || run?.last_activity || {};
+            const sameStep = (item) => item && item.step_id != null && String(item.step_id) === String(step.id);
+            const matched = recent.find(sameStep);
+            if (matched) return matched;
+            const unscoped = recent.find((item) => item && (item.step_id == null || item.step_id === ''));
+            const last = run?.last_activity || {};
+            const candidate = unscoped || last;
+            if (candidate?.step_id != null && String(candidate.step_id) !== String(step.id)) return {};
+            return candidate || {};
         };
         const activityText = (activity) => {
             const type = String(activity?.event_type || '').replaceAll('_', ' ');
             const message = String(activity?.message || '').trim();
+            const error = String(activity?.error || '').trim();
             if (message === 'thinking_delta') return 'The model is reasoning and streaming its response.';
             if (message === 'turn_start') return 'The worker started a new reasoning turn.';
             if (message === 'turn_end') return 'The worker completed a reasoning turn.';
             if (message === 'tool_execution_update') return 'A tool execution update was received.';
+            if ((/^Project execution session failed\.?$/i.test(message) || !message) && error) {
+                return error;
+            }
             return message || (type ? `${type.charAt(0).toUpperCase()}${type.slice(1)}.` : 'No feedback has been recorded for this step yet.');
         };
         const outputFor = (step) => {

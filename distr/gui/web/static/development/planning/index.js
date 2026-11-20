@@ -88,6 +88,35 @@ export function createPlanning(host, root = document.getElementById('plan-root')
         return `<div class="plan-empty error" role="alert"><strong>${escapeHtml(message)}</strong><button type="button" class="plan-retry" data-plan-retry="${action}">${label}</button></div>`;
     }
 
+    function isPlanProjectConflict(error) {
+        return Boolean(
+            error?.status === 409 && (
+                error?.data?.code === 'plan_project_conflict'
+                || /belongs to a different project/i.test(String(error?.message || ''))
+            )
+        );
+    }
+
+    function renderProjectConflict(board, error) {
+        const detail = error?.data || {};
+        const boundName = String(detail.bound_project_name || 'another project').trim() || 'another project';
+        const currentName = String(detail.project_name || 'this project').trim() || 'this project';
+        const message = error?.message || `This saved plan belongs to a different project (${boundName}), not ${currentName}. Start a new plan for this project, or go back to Plans.`;
+        state.workspace = null;
+        state.item = null;
+        host.setPlanCrumbs?.();
+        root.innerHTML = `<div class="plan-empty error" role="alert" data-plan-project-conflict="${escapeHtml(board?.key || '')}">
+            <strong>${escapeHtml(message)}</strong>
+            <p class="plan-empty-hint">Starting a new plan unlinks the saved plan from ${escapeHtml(boundName)} and creates a fresh plan for ${escapeHtml(currentName)}. The previous project's files are left in place.</p>
+            <div class="plan-empty-actions">
+                <button type="button" class="plan-retry primary" data-plan-start-new>Start a new plan for this project</button>
+                <button type="button" class="plan-retry" data-plan-retry="home">Back to Plans</button>
+            </div>
+        </div>`;
+        root.querySelector('[data-plan-start-new]')?.addEventListener('click', () => openBoard(board, state.projects, { startNewPlan: true }));
+        root.querySelector('[data-plan-retry="home"]')?.addEventListener('click', () => openHome(state.boards, state.projects));
+    }
+
     async function openHome(boards, projects) {
         state.boards = Array.isArray(boards) ? boards : state.boards;
         state.projects = Array.isArray(projects) ? projects : state.projects;
@@ -112,7 +141,7 @@ export function createPlanning(host, root = document.getElementById('plan-root')
     }
 
 
-    async function openBoard(board, projects) {
+    async function openBoard(board, projects, options = {}) {
         conversation.leave();
         const navigation = ++state.navigation;
         state.view = 'board';
@@ -122,11 +151,12 @@ export function createPlanning(host, root = document.getElementById('plan-root')
             renderUnlinked(board);
             return false;
         }
+        const startNewPlan = Boolean(options.startNewPlan);
         // Reopening a board plan shows the cached plan at once and refreshes it in the
         // background; only the first open waits on the (project-scanning) POST.
         const load = loads.begin();
         const previous = state.details.get(board.key);
-        const cached = Number(previous?.project_id) === Number(project.id) ? previous : null;
+        const cached = !startNewPlan && Number(previous?.project_id) === Number(project.id) ? previous : null;
         if (cached) conversation.open(cached);
         else root.innerHTML = '<div class="plan-loading" role="status" aria-label="Loading plan"><span></span><span></span><span></span></div>';
         try {
@@ -137,7 +167,8 @@ export function createPlanning(host, root = document.getElementById('plan-root')
                     board_key: board.key,
                     board_provider: board.provider,
                     board_name: board.name || 'Untitled board',
-                    project_id: project.id
+                    project_id: project.id,
+                    start_new_plan: startNewPlan
                 }
             });
             if (navigation !== state.navigation || !load.isCurrent()) return false;
@@ -165,6 +196,10 @@ export function createPlanning(host, root = document.getElementById('plan-root')
             if (error.status === 409 && navigation === state.navigation) {
                 conversation.leave();
                 state.details.delete(board.key);
+                if (isPlanProjectConflict(error)) {
+                    renderProjectConflict(board, error);
+                    return false;
+                }
                 root.innerHTML = retryHtml(error.message, 'home', 'Back to Plans');
                 root.querySelector('[data-plan-retry="home"]')?.addEventListener('click', () => openHome(state.boards, state.projects));
                 return false;

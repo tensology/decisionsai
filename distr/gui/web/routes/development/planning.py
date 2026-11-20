@@ -338,9 +338,18 @@ def register_routes(router, templates):
                 board_name=data.board_name,
                 project_id=data.project_id,
                 defer_scan=True,
+                start_new_plan=bool(data.start_new_plan),
             ))
         except PlanWorkspaceProjectConflict as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=409)
+            return JSONResponse({
+                "detail": str(exc),
+                "code": getattr(exc, "code", "plan_project_conflict"),
+                "bound_project_id": getattr(exc, "bound_project_id", None),
+                "bound_project_name": getattr(exc, "bound_project_name", ""),
+                "project_id": getattr(exc, "project_id", None),
+                "project_name": getattr(exc, "project_name", ""),
+                "can_start_new": True,
+            }, status_code=409)
         except ValueError as e:
             return JSONResponse({"detail": str(e)}, status_code=400)
 

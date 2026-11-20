@@ -241,14 +241,58 @@ def test_open_plan_does_not_move_saved_artifacts_to_another_project(plan_workspa
     plan = planning_workspace.ensure_workspace(**fields, project_id=original)
     item = planning_workspace.create_item(workspace_id=plan["id"], item_type="document", content="Original plan")
 
-    with pytest.raises(ValueError, match="belongs to a different project"):
+    with pytest.raises(ValueError, match="belongs to a different project") as conflict:
         planning_workspace.open_project_plan(**fields, project_id=replacement_id, defer_scan=True)
+    assert conflict.value.code == "plan_project_conflict"
+    assert conflict.value.bound_project_id == original
+    assert conflict.value.project_id == replacement_id
 
     saved = planning_workspace.get_workspace(plan["id"])
     assert saved["project_id"] == original
     assert saved["root_path"] == plan["root_path"]
     assert [row["id"] for row in saved["items"]] == [item["id"]]
     assert Path(item["file_path"]).read_text() == "Original plan"
+
+
+def test_open_plan_can_start_a_new_plan_for_the_current_project(plan_workspace_db):
+    original = plan_workspace_db["project_id"]
+    with plan_workspace_db["session"]() as db:
+        replacement = Project(name="Replacement", folder_location=str(plan_workspace_db["folder"] / "other"))
+        db.add(replacement)
+        db.commit()
+        replacement_id = replacement.id
+    fields = {"board_key": "decisions:11", "board_provider": "decisions", "board_name": "Original"}
+    plan = planning_workspace.ensure_workspace(**fields, project_id=original)
+    item = planning_workspace.create_item(workspace_id=plan["id"], item_type="document", content="Original plan")
+    original_path = Path(item["file_path"])
+    assert original_path.read_text() == "Original plan"
+
+    opened = planning_workspace.open_project_plan(
+        **fields, project_id=replacement_id, defer_scan=True, start_new_plan=True,
+    )
+    assert opened["id"] == plan["id"]
+    assert opened["project_id"] == replacement_id
+    assert opened["root_path"] == str(plan_workspace_db["folder"] / "other" / "planning")
+    assert all("Original plan" not in str(row.get("content") or "") for row in opened["items"])
+    assert original_path.read_text() == "Original plan"
+
+
+def test_open_plan_rebinds_when_the_bound_project_is_gone(plan_workspace_db):
+    original = plan_workspace_db["project_id"]
+    with plan_workspace_db["session"]() as db:
+        replacement = Project(name="After delete", folder_location=str(plan_workspace_db["folder"] / "after"))
+        db.add(replacement)
+        db.commit()
+        replacement_id = replacement.id
+        gone = db.get(Project, original)
+        from distr.core.db.time import utc_now_naive
+        gone.deleted_at = utc_now_naive()
+        db.commit()
+    fields = {"board_key": "decisions:12", "board_provider": "decisions", "board_name": "Orphaned"}
+    plan = planning_workspace.ensure_workspace(**fields, project_id=original)
+    opened = planning_workspace.open_project_plan(**fields, project_id=replacement_id, defer_scan=True)
+    assert opened["id"] == plan["id"]
+    assert opened["project_id"] == replacement_id
 
 
 def test_board_plan_language_flow_persists_versions_and_project_file(plan_workspace_db):

@@ -202,6 +202,70 @@ def append_execution_event(
     return True
 
 
+
+def format_execution_session_outcome(status: str, error: str = "", *, provider: str = "", model: str = "") -> str:
+    """Plain status line for the live feed: what happened, and what to do next."""
+    clean = str(status or "").strip().lower()
+    if clean == "canceled":
+        clean = "cancelled"
+    safe = str(error or "").strip()
+    if clean == "cancelled":
+        return safe or "The project worker was stopped. You can start this step again when you are ready."
+    if clean == "completed":
+        return "Project execution session completed."
+    if clean == "blocked":
+        return "The project worker is waiting for input. Answer the prompt in this thread to continue."
+
+    lowered = safe.lower()
+    folder_markers = ("folder is unavailable", "project folder is unavailable", "folder_location")
+    if any(marker in lowered for marker in folder_markers):
+        return "The linked project folder is unavailable. Relink the project folder in Settings, then retry this step."
+    scope_markers = ("scope changed", "project, board or ticket changed", "project, board, or ticket changed")
+    if any(marker in lowered for marker in scope_markers):
+        return "The project, board, or ticket changed before the worker finished. Review the scope and retry this step."
+
+    from distr.core.llm_errors import (
+        classify_model_error,
+        format_model_error,
+        is_formatted_model_error_message,
+    )
+
+    if is_formatted_model_error_message(safe):
+        return safe
+    kind = classify_model_error(safe)
+    modelish = kind != "model_error" or any(
+        token in lowered for token in ("error code", "status code", "provider", "openai", "ollama", "anthropic")
+    )
+    if safe and modelish:
+        return format_model_error(safe, provider=provider, model=model, operation="run this project step")
+    if safe:
+        detail = safe
+        if len(detail) > 240:
+            detail = detail[:237].rstrip() + "..."
+        return (
+            f"The project worker could not finish: {detail} "
+            "Retry this step, or pick another model in Settings if the same error repeats."
+        )
+    return (
+        "The project worker stopped before it could finish. "
+        "Check this step, then retry it or pick another model in Settings."
+    )
+
+
+def execution_activity_message(event_message: str, status: str, error: str = "", *, provider: str = "", model: str = "") -> str:
+    """Prefer a plain outcome when a stored event still has a generic session line."""
+    message = str(event_message or "").strip()
+    generic = {
+        "",
+        "Project execution session failed.",
+        "Project execution session cancelled.",
+        "Project execution session blocked; input is required.",
+    }
+    if message in generic or message.lower() == "project execution session failed.":
+        return format_execution_session_outcome(status, error, provider=provider, model=model)
+    return message
+
+
 def complete_execution_session(
     session_id: int | None,
     *,
@@ -235,15 +299,19 @@ def complete_execution_session(
         row.error = safe_error
         row.completed_at = now
         row.updated_at = now
-        event_type = "session_cancelled" if clean_status == "cancelled" else "session_blocked" if clean_status == "blocked" else "session_completed"
         if clean_status == "cancelled":
-            message = safe_error or "Project execution session cancelled."
-        elif clean_status == "completed":
-            message = "Project execution session completed."
+            event_type = "session_cancelled"
         elif clean_status == "blocked":
-            message = "Project execution session blocked; input is required."
+            event_type = "session_blocked"
+        elif clean_status == "failed":
+            event_type = "session_failed"
         else:
-            message = "Project execution session failed."
+            event_type = "session_completed"
+        message = format_execution_session_outcome(
+            clean_status, safe_error,
+            provider=row.route_backend or "",
+            model=row.selected_model or "",
+        )
         session.add(ProjectExecutionEvent(
             session_id=row.id,
             event_type=event_type,

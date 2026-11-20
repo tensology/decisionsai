@@ -41,7 +41,7 @@ def classify_model_error(exc: BaseException | str) -> str:
     status = getattr(exc, "status_code", None)
     if status == 401 or "401" in text or "unauthorized" in text or "invalid api key" in text:
         return "authentication"
-    if status == 402 or "insufficient_quota" in text or "exceeded your current quota" in text or "billing" in text:
+    if status == 402 or "402" in text or "insufficient_quota" in text or "exceeded your current quota" in text or "billing" in text or "payment required" in text or "insufficient credit" in text or "out of credit" in text or "no credits" in text:
         return "quota"
     if status == 404 or "not found" in text or "no endpoints found" in text or "no longer available" in text:
         return "model_unavailable"

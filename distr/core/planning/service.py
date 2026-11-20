@@ -17,7 +17,7 @@ from sqlalchemy import case, func, text
 
 from distr.core.db import get_session
 from distr.core.db.projects import Project
-from distr.core.db.workflow import PlanItem, PlanItemRevision, PlanWorkspace
+from distr.core.db.workflow import PlanFileWrite, PlanItem, PlanItemRevision, PlanWorkspace
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
 
 
@@ -246,8 +246,64 @@ def list_workspaces() -> list[dict[str, Any]]:
 class PlanWorkspaceProjectConflict(ValueError):
     """The saved plan is already bound to another project."""
 
+    def __init__(
+        self,
+        message: str = "This saved plan belongs to a different project. Start a new plan for this project, or go back to Plans.",
+        *,
+        bound_project_id: int | None = None,
+        bound_project_name: str = "",
+        project_id: int | None = None,
+        project_name: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.code = "plan_project_conflict"
+        self.bound_project_id = bound_project_id
+        self.bound_project_name = bound_project_name
+        self.project_id = project_id
+        self.project_name = project_name
 
-def ensure_workspace(*, board_key: str, board_provider: str, board_name: str, project_id: int | None = None) -> dict[str, Any]:
+
+def _bound_project_missing(db, project_id: int | None) -> bool:
+    if not project_id:
+        return True
+    bound = db.get(Project, int(project_id))
+    return bound is None or getattr(bound, "deleted_at", None) is not None
+
+
+def _project_display_name(db, project_id: int | None, fallback: str = "a different project") -> str:
+    if not project_id:
+        return fallback
+    row = db.get(Project, int(project_id))
+    name = str(getattr(row, "name", "") or "").strip() if row is not None else ""
+    return name or fallback
+
+
+def _clear_workspace_items(db, workspace_id: int) -> None:
+    item_ids = [item_id for (item_id,) in db.query(PlanItem.id).filter(PlanItem.workspace_id == int(workspace_id)).all()]
+    if not item_ids:
+        return
+    db.query(PlanFileWrite).filter(PlanFileWrite.item_id.in_(item_ids)).delete(synchronize_session=False)
+    db.query(PlanItemRevision).filter(PlanItemRevision.item_id.in_(item_ids)).delete(synchronize_session=False)
+    db.query(PlanItem).filter(PlanItem.id.in_(item_ids)).delete(synchronize_session=False)
+
+
+def _archive_workspace_chats(db, workspace_id: int) -> None:
+    from distr.core.planning.conversation import _workspace_roots
+
+    for root in _workspace_roots(db, workspace_id, include_archived=False):
+        root.is_archived = True
+
+
+def _rebind_workspace(db, row: PlanWorkspace, *, project_id: int, root_path: str, board_name: str) -> None:
+    _clear_workspace_items(db, row.id)
+    _archive_workspace_chats(db, row.id)
+    row.board_name = str(board_name or row.board_name).strip()
+    row.project_id = int(project_id)
+    row.root_path = root_path or ""
+    row.status = "draft"
+
+
+def ensure_workspace(*, board_key: str, board_provider: str, board_name: str, project_id: int | None = None, start_new_plan: bool = False) -> dict[str, Any]:
     clean_key = str(board_key or "").strip()
     if ":" not in clean_key:
         raise ValueError("A valid board key is required.")
@@ -266,12 +322,26 @@ def ensure_workspace(*, board_key: str, board_provider: str, board_name: str, pr
             db.add(row)
         else:
             if project_id and row.project_id is not None and row.project_id != int(project_id):
-                raise PlanWorkspaceProjectConflict(
-                    "This saved plan belongs to a different project. Review the board's project link before reopening it."
+                bound_missing = _bound_project_missing(db, row.project_id)
+                if not start_new_plan and not bound_missing:
+                    bound_name = _project_display_name(db, row.project_id)
+                    current_name = _project_display_name(db, project_id, fallback="this project")
+                    raise PlanWorkspaceProjectConflict(
+                        f"This saved plan belongs to a different project ({bound_name}), not {current_name}. "
+                        "Start a new plan for this project, or go back to Plans.",
+                        bound_project_id=int(row.project_id),
+                        bound_project_name=bound_name,
+                        project_id=int(project_id),
+                        project_name=current_name,
+                    )
+                _rebind_workspace(
+                    db, row, project_id=int(project_id), root_path=root_path,
+                    board_name=str(board_name or row.board_name),
                 )
-            row.board_name = str(board_name or row.board_name).strip()
-            row.project_id = int(project_id) if project_id else row.project_id
-            row.root_path = root_path or row.root_path
+            else:
+                row.board_name = str(board_name or row.board_name).strip()
+                row.project_id = int(project_id) if project_id else row.project_id
+                row.root_path = root_path or row.root_path
         db.commit()
         db.refresh(row)
         count = db.query(func.count(PlanItem.id)).filter(PlanItem.workspace_id == row.id).scalar() or 0
@@ -280,7 +350,8 @@ def ensure_workspace(*, board_key: str, board_provider: str, board_name: str, pr
 
 
 def open_project_plan(
-    *, board_key: str, board_provider: str, board_name: str, project_id: int | None = None, defer_scan: bool = False
+    *, board_key: str, board_provider: str, board_name: str, project_id: int | None = None, defer_scan: bool = False,
+    start_new_plan: bool = False,
 ) -> dict[str, Any]:
     """Ensure the board plan workspace, scaffold sections, and fill them from the project.
 
@@ -293,6 +364,7 @@ def open_project_plan(
         board_provider=board_provider,
         board_name=board_name,
         project_id=project_id,
+        start_new_plan=start_new_plan,
     )
     if payload.get("project_id") and payload.get("root_path"):
         workspace_id = int(payload["id"])

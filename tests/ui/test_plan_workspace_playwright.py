@@ -317,7 +317,7 @@ def test_desktop_reopen_rejects_plan_from_previous_project(page: Page, plan_serv
                 headers: {'Content-Type': 'application/json'},
                 body: options.body ? JSON.stringify(options.body) : undefined});
             const data = await response.json();
-            if (!response.ok) throw Object.assign(Error(data.detail), {status: response.status});
+            if (!response.ok) throw Object.assign(Error(typeof data.detail === 'string' ? data.detail : 'Request failed'), {status: response.status, data});
             return data;
         };
         const host = {api, escapeHtml: String, toast: () => {}, openHome: () => {}};
@@ -336,6 +336,7 @@ def test_desktop_reopen_rejects_plan_from_previous_project(page: Page, plan_serv
     expect(page.locator(".iface-canvas")).to_be_visible()
     assert page.evaluate("window.openMovedPlan()") == {"opened": False, "showedOldCanvas": False}
     expect(page.get_by_role("alert")).to_contain_text("This saved plan belongs to a different project.")
+    expect(page.get_by_role("button", name="Start a new plan for this project")).to_be_visible()
     expect(page.locator(".iface-canvas")).to_have_count(0)
     page.screenshot(path=f"/tmp/decisions-desktop-plan-project-conflict-{width}.png")
     page.get_by_role("button", name="Back to Plans").click()

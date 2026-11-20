@@ -1,5 +1,6 @@
 from distr.core.llm_errors import (
     LLMModelError,
+    classify_model_error,
     extract_provider_error_message,
     format_model_error,
     format_model_error_for_tts,
@@ -62,3 +63,9 @@ def test_formatted_model_error_detector():
     assert is_formatted_model_error_message(chat)
     assert not is_formatted_model_error_message("Try again in a minute.")
 
+
+
+def test_classify_treats_402_text_and_credit_errors_as_quota():
+    err = "Error code: 402 - {'error': {'message': 'Insufficient credits. Add credits or subscribe.', 'code': 402}}"
+    assert classify_model_error(err) == "quota"
+    assert "quota or billing" in format_model_error(err).lower()

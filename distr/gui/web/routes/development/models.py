@@ -305,6 +305,7 @@ class PlanWorkspaceEnsureRequest(BaseModel):
     board_provider: str = "decisions"
     board_name: str
     project_id: Optional[int] = None
+    start_new_plan: bool = False
 
 
 class PlanItemCreateRequest(BaseModel):
