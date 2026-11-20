@@ -1,6 +1,6 @@
 from PyQt6.QtCore import QTimer, QParallelAnimationGroup, QPropertyAnimation, QEasingCurve, Qt, QPoint, pyqtProperty
 from distr.core.utils import load_settings_from_db, save_settings_to_db, get_screens_hash
-from distr.core.paths import AVATARS_DIR
+from distr.core.paths import AVATARS_DIR, IMAGES_DIR
 from distr.core.db import get_session, ScreenPosition, Chat
 from distr.core.signals import signal_manager
 from distr.core.skin_config import EventResponse
@@ -778,7 +778,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         """
         anim_path = os.path.join(AVATARS_DIR, self._skin_folder, response.animation)
         if not os.path.exists(anim_path):
-            return
+            still = os.path.splitext(anim_path)[0] + ".webp"
+            anim_path = still if os.path.isfile(still) else os.path.join(IMAGES_DIR, "avatar.webp")
 
         # Stop any WebMView if it was previously used
         if self._webm_view is not None:

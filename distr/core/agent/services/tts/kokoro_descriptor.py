@@ -157,7 +157,12 @@ class KokoroDescriptor(TTSProviderDescriptor):
 
         kokoro_model = os.path.join(models_dir, KOKORO_MODEL_FILE)
         kokoro_voices = os.path.join(models_dir, KOKORO_VOICES_FILE)
-        if not os.path.exists(kokoro_model):
+        if not os.path.exists(kokoro_model) or not os.path.exists(kokoro_voices):
+            from distr.core.paths import user_data_root
+            installed_models = user_data_root() / "models"
+            kokoro_model = str(installed_models / KOKORO_MODEL_FILE)
+            kokoro_voices = str(installed_models / KOKORO_VOICES_FILE)
+        if not os.path.exists(kokoro_model) or not os.path.exists(kokoro_voices):
             raise FileNotFoundError(f"Kokoro model not found at {kokoro_model}")
 
         lo, hi = self.speed_bounds
@@ -227,6 +232,11 @@ class KokoroDescriptor(TTSProviderDescriptor):
         kokoro_model = os.path.join(models_dir, "kokoro-v1.0.onnx")
         kokoro_voices = os.path.join(models_dir, "voices-v1.0.bin")
 
+        if not os.path.exists(kokoro_model) or not os.path.exists(kokoro_voices):
+            from distr.core.paths import user_data_root
+            installed_models = user_data_root() / "models"
+            kokoro_model = str(installed_models / "kokoro-v1.0.onnx")
+            kokoro_voices = str(installed_models / "voices-v1.0.bin")
         if not os.path.exists(kokoro_model) or not os.path.exists(kokoro_voices):
             raise FileNotFoundError(f"Kokoro model files not found at {models_dir}")
 

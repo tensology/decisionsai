@@ -4,6 +4,9 @@
 $ErrorActionPreference = "Continue"
 $ScriptDir = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Push-Location $ScriptDir
+$configureProviders = $args -contains "--setup-providers"
+$reqMarker = "installer\.requirements_installed_external"
+$leanSetup = $configureProviders -or (Test-Path "installer\.requirements_installed_profile") -or -not (Test-Path $reqMarker)
 
 function Write-Status($msg) { Write-Host "√ $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host $msg -ForegroundColor Yellow }
@@ -99,6 +102,7 @@ if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
 } else { Write-Status "ffmpeg found" }
 
 # --- C++ Build Tools (needed for pywhispercpp / whisper.cpp) ---
+if (-not $leanSetup) {
 $hasCppTools = $false
 # Check for cl.exe (MSVC compiler) in common VS Build Tools locations
 $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -147,6 +151,7 @@ if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
         Write-Warn "CMake not found. Install from https://cmake.org/download/"
     }
 } else { Write-Status "CMake found" }
+}
 
 # --- Virtual environment ---
 $VenvDir = "$env:USERPROFILE\.virtualenvs\decisions"
@@ -174,7 +179,12 @@ if (Test-Path "$VenvDir\Scripts\python.exe") {
 Write-Status "Virtual environment activated"
 
 # --- Install requirements ---
-$reqMarker = "installer\.requirements_installed_external"
+if ($leanSetup) {
+    $profileArgs = @()
+    if ($configureProviders) { $profileArgs += "--configure" }
+    & "$VenvDir\Scripts\python.exe" "$ScriptDir\bin\first_run.py" @profileArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} else {
 $depsOk = $false
 
 if (Test-Path $reqMarker) {
@@ -258,6 +268,7 @@ if (Get-Command ollama -ErrorAction SilentlyContinue) {
 } else {
     Write-Warn "Ollama not found. Install from https://ollama.com/download"
     Write-Host "  Then run: ollama pull llama3.1:8b"
+}
 }
 
 # --- Clean cache ---
