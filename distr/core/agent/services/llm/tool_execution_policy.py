@@ -17,6 +17,29 @@ _NO_ACTION_PATTERNS = (
     r"\bcancel\s+that\b[^.?!]{0,80}\b(?:don't|do not|dont)\b",
 )
 
+# "Do not touch any other board" / "Do not delete anything on another board"
+# are scope limits, not a global freeze.
+_SCOPED_RESTRICTION_RE = re.compile(
+    r"\b(?:do not|don't|dont)\s+"
+    r"(?:try\s+to\s+)?"
+    r"(?:do|change|create|make|send|write|delete|move|touch|run|execute|modify|update)\s+"
+    r"(?:any(?:thing)?(?:\s+on)?\s+)?"
+    r"(?:any\s+)?(?:other|another)\b",
+    re.IGNORECASE,
+)
+
+
+def _latest_user_instruction(user_text: str) -> str:
+    """Use the current user request, not injected memory/RAG around it."""
+    try:
+        from distr.core.agent.services.llm.oracle_context import strip_rag_block
+
+        text = strip_rag_block(user_text)
+    except Exception:
+        text = user_text
+    return str(text or "").strip()
+
+
 _READ_ACTION_PREFIXES = (
     "get", "list", "read", "search", "find", "query", "check", "inspect",
     "analyze", "analyse", "show", "status", "preview", "describe", "fetch",
@@ -73,8 +96,11 @@ _PRIVATE_TEXT_KEYS = {
 
 def no_action_requested(user_text: str) -> bool:
     """Return True only for explicit instructions not to perform side effects."""
-    text = str(user_text or "").strip()
-    return bool(text) and any(re.search(pattern, text, re.IGNORECASE) for pattern in _NO_ACTION_PATTERNS)
+    text = _latest_user_instruction(user_text)
+    if not text:
+        return False
+    residual = _SCOPED_RESTRICTION_RE.sub(" ", text)
+    return any(re.search(pattern, residual, re.IGNORECASE) for pattern in _NO_ACTION_PATTERNS)
 
 
 def _action_name(arguments: dict[str, Any]) -> str:
@@ -250,6 +276,7 @@ def tool_execution_block_reason(
     # Hard guard (2026-10-22): instructions never spawn chats, whatever the wording.
     if is_new_chat_tool_call(tool_name, args):
         return NEW_CHAT_BLOCK_REASON
+    user_text = _latest_user_instruction(user_text)
     ide_reason = ide_thread_misroute_reason(tool_name, args, user_text)
     if ide_reason:
         return ide_reason

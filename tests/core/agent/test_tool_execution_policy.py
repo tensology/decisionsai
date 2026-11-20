@@ -168,3 +168,57 @@ def test_audit_arguments_redact_secrets_and_free_text() -> None:
     assert clean["api_key"] == "<redacted>"
     assert clean["params"]["body"] == "<redacted 5 chars>"
     assert clean["last_user_message"] == "<redacted 7 chars>"
+
+
+def test_scoped_board_restriction_is_not_treated_as_no_action() -> None:
+    text = (
+        "List the tickets on board 40. Move ticket #345 to QA. "
+        "Do not touch any other board, project, or ticket. "
+        "Do not delete anything on another board."
+    )
+    assert not no_action_requested(text)
+    assert tool_execution_block_reason(
+        _owner(text),
+        "create_ticket",
+        {"action": "move_ticket", "ticket_id": 345, "lane_name": "QA"},
+        text,
+    ) == ""
+    assert tool_execution_block_reason(
+        _owner(text),
+        "create_ticket",
+        {"action": "merge_ticket", "keep_id": 346, "duplicate_id": 347},
+        text,
+    ) == ""
+
+
+def test_plain_dont_touch_anything_still_blocks() -> None:
+    text = "Don't touch anything."
+    assert no_action_requested(text)
+    assert tool_execution_block_reason(
+        _owner(text),
+        "create_ticket",
+        {"action": "move_ticket", "ticket_id": 345, "lane_name": "QA"},
+        text,
+    ).startswith("Blocked mutation")
+
+
+def test_rag_memory_no_action_phrase_does_not_block_current_request() -> None:
+    from distr.core.agent.services.llm.oracle_context import RAG_HEADER, USER_REQUEST_MARKER
+
+    request = "Move ticket #343 to QA and merge ticket #345 into ticket #344."
+    text = (
+        f"{RAG_HEADER}\n"
+        "Remembered note: Don't try to do anything until this is confirmed.\n"
+        f"{USER_REQUEST_MARKER}"
+        f"{request}"
+    )
+    assert no_action_requested(
+        "Don't try to do anything until this is confirmed."
+    )
+    assert not no_action_requested(text)
+    assert tool_execution_block_reason(
+        _owner(text),
+        "create_ticket",
+        {"action": "move_ticket", "ticket_id": 343, "lane_name": "QA"},
+        text,
+    ) == ""
