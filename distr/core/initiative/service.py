@@ -1927,7 +1927,7 @@ class InitiativeService:
             logger.info("InitiativeService: triggered workflow %s: %s",
                         workflow_id, action.description)
             if tier != PermissionTier.SILENT:
-                self._log_to_chat(f"Started workflow #{workflow_id}: {action.description}", settings)
+                self._log_to_chat(f"Started workflow: {action.description}", settings)
                 self._send_telegram_if_allowed(
                     action.telegram_message or f"Started workflow: {action.description}",
                     settings,
@@ -2151,7 +2151,10 @@ class InitiativeService:
         description = str(getattr(action, "description", "") or "").strip()
         tier_name = str(getattr(tier, "name", "") or "").strip()
         lead = f"Waiting on your approval ({tier_name})" if tier_name else "Waiting on your approval"
-        return f"{lead}: {description}" if description else lead
+        raw = f"{lead}: {description}" if description else lead
+        from distr.core.orchestrator_user_text import humanize_orchestrator_update
+
+        return humanize_orchestrator_update(raw)
 
     def _log_to_chat(self, message: str, settings: dict) -> None:
         if not self.chat_manager:
@@ -2165,7 +2168,15 @@ class InitiativeService:
                 # add_assistant_message could target the live/last user turn
                 # and replace its answer (see chat_manager notice-row guard).
                 text = _initiative_update_text(message)
-                if text:
+                from distr.core.orchestrator_user_text import (
+                    humanize_orchestrator_update,
+                    should_emit_orchestrator_update,
+                )
+
+                # Don't read live-test / throwaway project chatter into the
+                # operator's current (usually main) conversation.
+                text = humanize_orchestrator_update(text, drop_throwaway=True)
+                if text and should_emit_orchestrator_update(text):
                     # Hidden: proactive updates are delivered by voice and Telegram,
                     # and must not appear as a second assistant answer.
                     self._append_chat_notice(int(current_chat), text, hidden=True)

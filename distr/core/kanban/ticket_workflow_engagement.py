@@ -215,7 +215,14 @@ def prepare_workflow_voice_text(value: str, *, max_chars: int = 320) -> str:
     is intentionally a compact human interruption layer, so run/ticket/step IDs,
     timestamps, elapsed-time bookkeeping, URLs, paths and Markdown are removed.
     """
-    text = re.sub(r"[`*_#]+", "", str(value or ""))
+    from distr.core.orchestrator_user_text import humanize_orchestrator_update
+
+    # Template rewrite only here; ID/telemetry stripping below is the
+    # speech-compaction pass and must see the original ticket/run numbers.
+    text = humanize_orchestrator_update(value or "", drop_throwaway=True)
+    if not text:
+        return ""
+    text = re.sub(r"[`*_#]+", "", text)
     text = re.sub(r"https?://\S+", "the link in Mission Control", text, flags=re.I)
     text = re.sub(r"\b(?:workflow\s+)?run\s*#?\d+\b", "this workflow", text, flags=re.I)
     text = re.sub(r"\bticket\s*#?\d+\b", "the ticket", text, flags=re.I)

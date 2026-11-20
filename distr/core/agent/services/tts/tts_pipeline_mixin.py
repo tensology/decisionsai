@@ -236,7 +236,9 @@ class TTSPipelineMixin:
                     queue.task_done()
 
     async def _enqueue_sentence(self, sentence: str, direction: Any) -> None:
-        clean = (sentence or "").strip()
+        from distr.core.orchestrator_user_text import should_speak_sentence
+
+        clean = should_speak_sentence(sentence or "")
         if not clean:
             return
         # Hold here (not in _play_queued_sentence): providers such as Kokoro override

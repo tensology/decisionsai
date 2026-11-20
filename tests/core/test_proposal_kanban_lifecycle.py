@@ -335,14 +335,14 @@ def test_ensure_local_ticket_uses_in_progress_only_when_thread_is_running(monkey
         _id, _key, lane = _ensure_local_ticket_for_thread(
             db, root, board_key=board_key, ticket_id=None, title="Running thread",
         )
-        assert not db.query(Chat).filter_by(parent_id=running, response="Ticket created in In Progress.").count()
+        assert not db.query(Chat).filter_by(parent_id=running, response="I've added a ticket in In Progress.").count()
         db.commit()
     assert lane == "In Progress"
     with get_session() as db:
         created = db.query(KanbanTicket).filter(KanbanTicket.source_chat_id == int(running)).one()
         created_lane = db.get(KanbanLane, created.lane_id)
         assert created_lane.name == "In Progress"
-        assert db.query(Chat).filter_by(parent_id=running, response="Ticket created in In Progress.").count() == 1
+        assert db.query(Chat).filter_by(parent_id=running, response="I've added a ticket in In Progress.").count() == 1
 
 
 def test_lane_update_posts_one_notice_to_the_proposal_thread(monkeypatch, tmp_path):
@@ -358,7 +358,7 @@ def test_lane_update_posts_one_notice_to_the_proposal_thread(monkeypatch, tmp_pa
         assert client.put(endpoint, json={"lane_id": lanes["In Progress"]}).status_code == 200
     assert current_ticket_lane(ticket_id) == "In Progress"
     with get_session() as db:
-        assert db.query(Chat).filter_by(parent_id=chat_id, response="Ticket moved: Backlog to In Progress.").count() == 1
+        assert db.query(Chat).filter_by(parent_id=chat_id, response="I moved the ticket from Backlog to In Progress.").count() == 1
 
 
 def test_complete_is_human_board_only(monkeypatch, tmp_path):

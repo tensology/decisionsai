@@ -103,7 +103,11 @@ def notify_source_chat_ticket_moved(
 
     try:
         from distr.core.chat import ChatService
+        from distr.core.orchestrator_user_text import humanize_orchestrator_update
 
+        body = humanize_orchestrator_update(body)
+        if not body:
+            return
         chat_row_id = ChatService.append_assistant_notice(chat_id, body, hidden=False)
     except Exception:
         logger.debug("notify_source_chat_ticket_moved: persist notice failed", exc_info=True)

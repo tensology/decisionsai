@@ -159,7 +159,9 @@ class WorkflowAgentBridge:
                     step_lines.append(f"{title} didn't clear.")
 
         if not step_lines:
-            return f"{status_line}\nNo steps were recorded."
+            from distr.core.orchestrator_user_text import humanize_orchestrator_update
+
+            return humanize_orchestrator_update(f"{status_line}\nNo steps were recorded.")
 
         # Lead with the blocker in plain words when there is one. A list of step
         # statuses alone tells the user nothing about what to do next.

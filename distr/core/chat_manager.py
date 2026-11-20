@@ -976,7 +976,7 @@ class ChatManagerCore:
                 session.commit()
                 if is_final and not is_hidden and active_turn_id is not None:
                     try:
-                        from distr.core.agent.services.llm.text_utils import clean_text_for_tts
+                        from distr.core.orchestrator_user_text import prepare_spoken_user_text
                         from distr.core.chat_turns import begin_synthesis, complete_turn
 
                         begin_synthesis(int(root.id if root else chat_id), active_turn_id)
@@ -984,7 +984,7 @@ class ChatManagerCore:
                             int(root.id if root else chat_id),
                             turn_id=active_turn_id,
                             display_text=text_content,
-                            speech_text=clean_text_for_tts(text_content),
+                            speech_text=prepare_spoken_user_text(text_content),
                         )
                     except Exception:
                         logger.debug("Could not finalize durable chat turn", exc_info=True)

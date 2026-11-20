@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from distr.core.orchestrator_user_text import humanize_orchestrator_update
+
 logger = logging.getLogger(__name__)
 
 _BUILTIN_NAMES = {
@@ -102,16 +104,19 @@ def _instruction_from_assessment(instruction: str, assessment: dict[str, Any]) -
 
 def _visible_direct_reason(intake_reason: str, *, lightweight: bool, conversational: bool) -> str:
     if lightweight:
-        return "Handled directly because this is a short, one-step change."
-    if conversational:
-        return (
+        text = "Handled directly because this is a short, one-step change."
+    elif conversational:
+        text = (
             "Handled directly because this reads as a question or a small request, "
             "not a multi-step piece of work."
         )
-    reason = str(intake_reason or "").strip().rstrip(".")
-    if reason:
-        return f"Handled directly because {reason[0].lower()}{reason[1:]}."
-    return "Handled directly because this can be done in one development-agent turn."
+    else:
+        reason = str(intake_reason or "").strip().rstrip(".")
+        if reason:
+            text = f"Handled directly because {reason[0].lower()}{reason[1:]}."
+        else:
+            text = "Handled directly because this can be done in one development-agent turn."
+    return humanize_orchestrator_update(text)
 
 
 def _visible_workflow_reason(workflow_name: str, slug_reason: str, intake_reason: str) -> str:
@@ -119,11 +124,13 @@ def _visible_workflow_reason(workflow_name: str, slug_reason: str, intake_reason
     detail = str(slug_reason or intake_reason or "").strip().rstrip(".")
     if detail:
         detail = detail[0].lower() + detail[1:]
-        return f"Started workflow {name} because {detail}."
-    return (
-        f"Started workflow {name} because this is a larger piece of work that should "
-        "be planned, built, reviewed and checked."
-    )
+        text = f"Started workflow {name} because {detail}."
+    else:
+        text = (
+            f"Started workflow {name} because this is a larger piece of work that should "
+            "be planned, built, reviewed and checked."
+        )
+    return humanize_orchestrator_update(text)
 
 
 def _is_short_copy_edit(value: str) -> bool:
@@ -195,7 +202,9 @@ def allocate_development_request(
         return payload
 
     if override == "direct":
-        reason = "Handled directly because you chose to send this as one agent turn."
+        reason = humanize_orchestrator_update(
+            "Handled directly because you chose to send this as one agent turn."
+        )
         return result(
             signals=["direct_override"],
             reason=reason,
@@ -247,7 +256,7 @@ def allocate_development_request(
     builtin = discern_builtin(text, project_folder=project_folder)
     slug = builtin.get("slug")
     if not slug:
-        visible = (
+        visible = humanize_orchestrator_update(
             "Handled directly because none of the built-in workflows fits this request; "
             "it will run as one development-agent turn."
         )
@@ -270,7 +279,7 @@ def allocate_development_request(
             logger.warning("Could not resolve built-in workflow %s", slug, exc_info=True)
             workflow_id = None
         if not workflow_id:
-            visible = (
+            visible = humanize_orchestrator_update(
                 f"Handled directly because the {workflow_name} workflow was selected but "
                 "could not be started, so this will run as one development-agent turn."
             )
@@ -342,6 +351,8 @@ def choose_proposal_execution_mode(proposal: dict[str, Any]) -> dict[str, Any]:
         "scope_hash": hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest(),
         "signals": ["direct_by_default", "direct_proposal_handoff"],
         "reason": "Requested work is handed to Development as one agent turn unless that thread's composer starts a workflow.",
-        "visible_reason": "Handled directly as a Development hand-off. If the work is large, Development will start a workflow when the thread is opened.",
+        "visible_reason": humanize_orchestrator_update(
+            "Handled directly as a Development hand-off. If the work is large, Development will start a workflow when the thread is opened."
+        ),
         "scope_text": "\n".join([scope["title"], scope["description"], *scope["tasks"]]),
     }

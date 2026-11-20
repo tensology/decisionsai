@@ -139,7 +139,7 @@ def test_studio_auto_routing_assessment_escalates_failures_and_vision_work():
     assert payload["route"]["model"] == "auto"
     assert payload["sentiment"] == "blocked"
     assert payload["execution_mode"] == "workflow"
-    assert str(payload.get("visible_reason") or "").startswith("Started workflow")
+    assert str(payload.get("visible_reason") or "").startswith("I started the")
 
 
 def test_studio_auto_routing_assessment_keeps_small_copy_edit_low():

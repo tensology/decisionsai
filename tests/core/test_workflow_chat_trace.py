@@ -244,5 +244,5 @@ def test_workflow_completion_notice_is_hidden_from_ordinary_chat(monkeypatch):
     record_chat_workflow_event(chat_id, "run_completed", status="completed")
 
     assert notices == [
-        (chat_id, "The workflow completed. The ticket now contains the recorded result and audit evidence.", True)
+        (chat_id, "The workflow finished, and I saved the result on the ticket.", True)
     ]

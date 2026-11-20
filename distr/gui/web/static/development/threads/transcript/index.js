@@ -493,9 +493,15 @@ export function createThreadsTranscript({ context, actions, el, token }) {
         const content = String(message?.content || '').trim();
         let match = content.match(/^Ticket created in\s+(.+?)\.$/i);
         if (match) return { from: '', to: match[1], created: true };
+        match = content.match(/^I've added a ticket in\s+(.+?)\.$/i);
+        if (match) return { from: '', to: match[1], created: true };
         match = content.match(/^Ticket moved:\s*(.+?)\s+to\s+(.+?)\.$/i);
         if (match) return { from: match[1], to: match[2] };
+        match = content.match(/^I moved the ticket from\s+(.+?)\s+to\s+(.+?)\.$/i);
+        if (match) return { from: match[1], to: match[2] };
         match = content.match(/^Ticket moved to\s+(.+?)(?:\s+after workflow completion)?\.$/i);
+        if (match) return { from: '', to: match[1] };
+        match = content.match(/^I moved the ticket to\s+(.+?)\.$/i);
         if (match) return { from: '', to: match[1] };
         match = content.match(/^Ticket #\d+\s+"[\s\S]+?"(?:\s+on board\s+"[^"]+")?\s+was moved(?:\s+from\s+"([^"]+)")?\s+to lane\s+"([^"]+)"\.$/i);
         if (match) return { from: match[1] || '', to: match[2] };

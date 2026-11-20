@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from distr.core.db.time import utc_now_naive
+from distr.core.orchestrator_user_text import humanize_orchestrator_update
 
 logger = logging.getLogger(__name__)
 _ACTIVE_TURN = object()
@@ -183,7 +184,7 @@ def record_chat_workflow_event(
 
                 ChatService.append_assistant_notice(
                     resolved_chat_id,
-                    visible_milestones[event_type],
+                    humanize_orchestrator_update(visible_milestones[event_type]),
                     hidden=True,
                 )
             except Exception:

@@ -58,7 +58,7 @@ def test_automated_lane_move_publishes_source_notices_after_commit(tmp_path, mon
         db.commit()
 
     expected = end == "commit" and savepoint != "rollback"
-    assert notices() == (["Ticket moved: Backlog to In Progress.", "Ticket moved: In Progress to QA."] if expected else [])
+    assert notices() == (["I moved the ticket from Backlog to In Progress.", "I moved the ticket from In Progress to QA."] if expected else [])
 
 
 def _memory_ctx(monkeypatch, *patch_targets: str):
@@ -154,7 +154,7 @@ def test_notify_source_chat_ticket_moved_calls_persist_and_signals(monkeypatch):
 
     assert len(persisted) == 1
     assert persisted[0][0] == chat_root.id
-    assert persisted[0][1] == "Ticket moved to Done."
+    assert persisted[0][1] == "I moved the ticket to Done."
     emit_mock.assert_called()
     upd_mock.assert_called()
 
@@ -194,4 +194,4 @@ def test_manual_ticket_move_notice_is_short(monkeypatch):
         reason="manual",
     )
 
-    assert persisted == [(chat_root.id, "Ticket moved: Backlog to QA.")]
+    assert persisted == [(chat_root.id, "I moved the ticket from Backlog to QA.")]

@@ -13,7 +13,7 @@ def test_large_multi_part_request_starts_a_workflow():
 
     assert decision["mode"] == "workflow"
     assert decision["workflow_slug"] == "development-implement-verify"
-    assert "Started workflow Development because" in decision["visible_reason"]
+    assert "I started the Development workflow because" in decision["visible_reason"]
     assert "direct_by_default" not in decision["signals"]
 
 
@@ -23,7 +23,7 @@ def test_short_typo_fix_is_handled_directly():
     decision = choose_development_execution_mode("Fix a typo in the button text.")
 
     assert decision["mode"] == "direct"
-    assert "Handled directly because" in decision["visible_reason"]
+    assert "I'll handle this directly" in decision["visible_reason"]
 
 
 def test_short_heading_change_is_handled_directly():
@@ -34,7 +34,7 @@ def test_short_heading_change_is_handled_directly():
     )
 
     assert decision["mode"] == "direct"
-    assert "Handled directly because" in decision["visible_reason"]
+    assert "I'll handle this directly" in decision["visible_reason"]
     assert "one-step" in decision["visible_reason"]
 
 
@@ -46,7 +46,7 @@ def test_labelled_heading_change_is_still_direct():
     )
 
     assert decision["mode"] == "direct"
-    assert "Handled directly because" in decision["visible_reason"]
+    assert "I'll handle this directly" in decision["visible_reason"]
 
 
 def test_project_word_in_a_question_does_not_start_a_workflow():
@@ -59,7 +59,7 @@ def test_project_word_in_a_question_does_not_start_a_workflow():
     )
 
     assert decision["mode"] == "direct"
-    assert "Handled directly because" in decision["visible_reason"]
+    assert "I'll handle this directly" in decision["visible_reason"]
     assert decision["workflow_slug"] is None
 
 
@@ -75,7 +75,7 @@ def test_design_first_large_request_is_workflow():
         "development-implement-verify",
         "new-work-design-to-plan",
     }
-    assert "Started workflow" in decision["visible_reason"]
+    assert "I started the" in decision["visible_reason"] and "workflow because" in decision["visible_reason"]
 
 
 def test_operator_can_override_a_workflow_to_go_direct():
@@ -87,7 +87,7 @@ def test_operator_can_override_a_workflow_to_go_direct():
     )
 
     assert decision["mode"] == "direct"
-    assert "you chose to send this as one agent turn" in decision["visible_reason"]
+    assert "you asked me to do it in one go" in decision["visible_reason"]
 
 
 def test_incoming_proposal_handoff_stays_direct_until_the_development_thread():

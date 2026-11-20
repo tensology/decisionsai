@@ -63,8 +63,8 @@ class TestGenerateReport:
             "cancelled": False,
             "steps_summary": [],
         })
-        assert "I couldn't finish this one." in report
-        assert "No steps were recorded." in report
+        assert "I couldn't finish this one" in report
+        assert "no steps were logged" in report
 
     def test_cancelled_run(self):
         report = WorkflowAgentBridge._generate_report({
@@ -74,12 +74,12 @@ class TestGenerateReport:
             "cancelled": True,
             "steps_summary": [{"title": "Step A", "id": 1}],
         })
-        assert "I stopped that run." in report
+        assert "I stopped that run" in report
 
     def test_missing_fields_defaults(self):
         report = WorkflowAgentBridge._generate_report({})
-        assert "I couldn't finish this one." in report
-        assert "No steps were recorded." in report
+        assert "I couldn't finish this one" in report
+        assert "no steps were logged" in report
 
     def test_voice_note_step_is_summarized_naturally_without_raw_payload(self):
         report = WorkflowAgentBridge._generate_report({
@@ -278,7 +278,7 @@ class TestFinishOrchestrationBridgeIntegration:
 
         reports = WorkflowAgentBridge.get_pending_reports()
         assert len(reports) == 1
-        assert "I stopped that run." in reports[0]["report"]
+        assert "I stopped that run" in reports[0]["report"]
 
     @patch("distr.core.signals.signal_manager")
     @patch("distr.app.workflow.WorkflowOrchestrationMixin._cancel_workflow_timeout")
