@@ -50,7 +50,7 @@ _READ_ONLY_TOOLS = {
 _MUTATION_ACTION_PREFIXES = (
     "add", "append", "apply", "archive", "cancel", "clear", "click", "convert",
     "create", "delete", "disable", "draft", "edit", "enable", "execute", "install",
-    "launch", "move", "open", "pause", "play", "post", "publish", "pull", "push",
+    "launch", "merge", "move", "open", "pause", "play", "post", "publish", "pull", "push",
     "record", "remove", "rename", "reply", "reset", "restart", "resume", "run", "save",
     "send", "set", "spawn", "start", "stop", "switch", "type", "unarchive", "update",
     "upload", "write",

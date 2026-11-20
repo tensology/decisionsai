@@ -150,6 +150,9 @@ def test_mutation_classification_covers_multiplexed_and_named_tools() -> None:
     assert is_mutating_tool_call("google_workspace", {"action": "send_email"})
     assert not is_mutating_tool_call("list_projects", {})
     assert is_mutating_tool_call("create_ticket", {})
+    assert is_mutating_tool_call("create_ticket", {"action": "merge_ticket"})
+    assert is_mutating_tool_call("create_ticket", {"action": "merge_ticket", "keep_id": 1, "duplicate_id": 2})
+    assert not is_mutating_tool_call("create_ticket", {"action": "list_tickets"})
 
 
 def test_audit_arguments_redact_secrets_and_free_text() -> None:

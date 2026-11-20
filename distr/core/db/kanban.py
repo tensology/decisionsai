@@ -132,6 +132,9 @@ class KanbanTicket(Base):
     # Subagent hierarchy — parent ticket that spawned this one (if any)
     parent_ticket_id = Column(Integer, ForeignKey('kanban_tickets.id'), nullable=True)
 
+    # Soft-archive after a merge; the duplicate row is kept, not deleted.
+    merged_into_ticket_id = Column(Integer, ForeignKey('kanban_tickets.id'), nullable=True)
+
     created_date = Column(DateTime, default=utc_now_naive)
     modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
@@ -145,6 +148,7 @@ class KanbanTicket(Base):
 # Indexes for high-frequency query patterns on the kanban board agent
 Index('ix_kanban_tickets_lane_id', KanbanTicket.lane_id)
 Index('ix_kanban_tickets_position', KanbanTicket.position)
+Index('ix_kanban_tickets_merged_into_ticket_id', KanbanTicket.merged_into_ticket_id)
 Index('ix_kanban_lanes_board_id', KanbanLane.board_id)
 Index(
     'ux_kanban_tickets_source_chat',

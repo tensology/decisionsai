@@ -2300,6 +2300,7 @@ def run_migrations():
         ("source_contact", "VARCHAR", "NULL"),
         ("source_url", "VARCHAR", "NULL"),
         ("source_label", "VARCHAR", "NULL"),
+        ("merged_into_ticket_id", "INTEGER", "NULL"),
     ]:
         try:
             with Session() as s:
@@ -2332,6 +2333,7 @@ def run_migrations():
     _index_ddl = [
         "CREATE INDEX IF NOT EXISTS ix_kanban_tickets_lane_id ON kanban_tickets (lane_id)",
         "CREATE INDEX IF NOT EXISTS ix_kanban_tickets_position ON kanban_tickets (position)",
+        "CREATE INDEX IF NOT EXISTS ix_kanban_tickets_merged_into_ticket_id ON kanban_tickets (merged_into_ticket_id)",
         "CREATE INDEX IF NOT EXISTS ix_kanban_lanes_board_id ON kanban_lanes (board_id)",
         "CREATE INDEX IF NOT EXISTS ix_autoworkflowrun_workflow_id ON auto_workflow_runs (workflow_id)",
         "CREATE INDEX IF NOT EXISTS ix_autoworkflowrun_ticket_id ON auto_workflow_runs (ticket_id)",

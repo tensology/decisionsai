@@ -3629,9 +3629,12 @@ def create_routes():
             } if project_ids else {}
             default_project = projects.get(board.default_project_id)
             lanes = []
+            from distr.core.kanban.ticket_merge import is_merged_duplicate
             for lane in board.lanes:
                 tickets = []
                 for t in lane.tickets:
+                    if is_merged_duplicate(t):
+                        continue
                     linked_project = projects.get(t.linked_project_id)
                     tickets.append({
                         "id": t.id, "title": t.title, "description": t.description or "",
@@ -3701,12 +3704,14 @@ def create_routes():
                 default_project = projects.get(board.default_project_id)
                 lanes = []
                 for lane in board.lanes:
+                    from distr.core.kanban.ticket_merge import is_merged_duplicate
                     tickets = [
                         _workflow_board_ticket_payload(
                             ticket,
                             linked_project=projects.get(ticket.linked_project_id),
                         )
                         for ticket in lane.tickets
+                        if not is_merged_duplicate(ticket)
                     ]
                     lanes.append({
                         "id": lane.id,

@@ -184,7 +184,7 @@ class TicketDraftInput(BaseModel):
 class KanbanTicketInput(BaseModel):
     """Input schema for KanbanTicketTool."""
     text: str = Field(default="", description="Free-form instruction text (the tool parses board/lane/title from it)")
-    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, open_board, create_board, update_board, delete_board, create_ticket, create_ticket_batch, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, discuss_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, update_external_ticket, move_external_ticket, comment_external_ticket, activate_board, workflow_overview, whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, whatsapp_list_chats, whatsapp_list_messages, whatsapp_mark_processed, whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message, whatsapp_set_draft, whatsapp_get_draft, whatsapp_list_drafts")
+    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, open_board, create_board, update_board, delete_board, create_ticket, create_ticket_batch, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, discuss_ticket, update_ticket, move_ticket, delete_ticket, merge_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, update_external_ticket, move_external_ticket, comment_external_ticket, activate_board, workflow_overview, whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, whatsapp_list_chats, whatsapp_list_messages, whatsapp_mark_processed, whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message, whatsapp_set_draft, whatsapp_get_draft, whatsapp_list_drafts")
     board_name: str = Field(default="", description="Board name (fuzzy matched)")
     board_id: int = Field(default=0, description="Board ID (exact)")
     target_board_name: str = Field(default="", description="Destination board name for move_ticket when moving a ticket across boards")
@@ -197,6 +197,9 @@ class KanbanTicketInput(BaseModel):
     priority: str = Field(default="medium", description="Priority: low, medium, high, critical")
     complexity: str = Field(default="auto", description="Ticket complexity: auto, low, medium, high. Auto lets the orchestrator assess complexity; low/medium/high are manual overrides.")
     ticket_id: int = Field(default=0, description="Ticket ID for get/update/move/delete/discuss actions")
+    keep_id: int = Field(default=0, description="Ticket ID to keep for merge_ticket (surviving ticket)")
+    duplicate_id: int = Field(default=0, description="Ticket ID to archive for merge_ticket (merged into keep_id)")
+    allow_cross_project: bool = Field(default=False, description="For merge_ticket: allow merging tickets that belong to different projects")
     external_issue_key: str = Field(
         default="",
         description=(
@@ -250,6 +253,7 @@ class KanbanTicketTool(BaseTool):
       move_external_ticket    — move a remote Trello/Jira item (requires external_item_id or external_issue_key and lane_name/status)
       comment_external_ticket — add a comment to a remote Trello/Jira item
       delete_ticket      — delete a ticket (requires ticket_id)
+      merge_ticket      — merge a duplicate into a kept ticket (requires keep_id, duplicate_id); archives the duplicate, does not delete it
       attach_file        — attach a local file to a ticket (requires ticket_id, file_path)
       delete_file        — remove an attached file (requires ticket_id, file_path as filename)
       add_todo           — add a checklist item (requires ticket_id, text)
@@ -288,6 +292,9 @@ class KanbanTicketTool(BaseTool):
       description  — ticket description
       priority     — low / medium / high / critical
       ticket_id    — ticket ID for get/update/attach/todo/link/discuss actions
+      keep_id      — surviving ticket ID for merge_ticket
+      duplicate_id — ticket ID to archive for merge_ticket
+      allow_cross_project — allow merge_ticket across different projects (default false)
       external_issue_key — Jira key for discuss_ticket when the local numeric id is unknown
       external_item_id — Trello card ID or Jira issue key for remote update/move/comment actions
       comment_text — comment body for remote comments
@@ -335,6 +342,9 @@ class KanbanTicketTool(BaseTool):
         "Use action='create_board' with board_name to create a new board. "
         "Use action='activate_board' with board_name to set a board as the active/default board. "
         "Use action='delete_ticket' with ticket_id to delete a ticket. "
+        "Use action='merge_ticket' with keep_id and duplicate_id to copy the duplicate's notes, links, "
+        "attachments and comments into the kept ticket, re-point references, and archive the duplicate "
+        "(not hard-delete). Different projects require allow_cross_project=true. "
         "Use action='move_ticket' with ticket_id and lane_name to move a ticket within the current board. "
         "For a ticket that belongs on another board, use action='move_ticket' with ticket_id plus target_board_name "
         "or target_board_id; include lane_name only when the user named a specific destination lane. "
@@ -1283,6 +1293,9 @@ class KanbanTicketTool(BaseTool):
         source_contact: str = "",
         source_url: str = "",
         source_label: str = "",
+        keep_id: int = 0,
+        duplicate_id: int = 0,
+        allow_cross_project: bool = False,
         **kwargs,
     ) -> str:
         try:
@@ -1467,6 +1480,13 @@ class KanbanTicketTool(BaseTool):
                 )
             elif action == "delete_ticket":
                 return self._action_delete_ticket(ticket_id or self._last_ticket_id)
+            elif action in ("merge_ticket", "merge_tickets", "merge"):
+                return self._action_merge_ticket(
+                    keep_id=keep_id or kwargs.get("keep_ticket_id") or 0,
+                    duplicate_id=duplicate_id or kwargs.get("duplicate_ticket_id") or 0,
+                    allow_cross_project=allow_cross_project or bool(kwargs.get("allow_cross_project")),
+                    text=text,
+                )
             elif action == "attach_file":
                 return self._action_attach_file(ticket_id or self._last_ticket_id, file_path)
             elif action == "delete_file":
@@ -1575,7 +1595,7 @@ class KanbanTicketTool(BaseTool):
                 ref = (
                     f"Unknown action '{action}'. Valid actions: list_boards, get_active_board, open_board, create_board, update_board, delete_board, "
                     "activate_board, list_lanes, create_ticket, list_tickets, get_ticket, discuss_ticket, update_ticket, "
-                    "move_ticket, update_external_ticket, move_external_ticket, comment_external_ticket, "
+                    "move_ticket, merge_ticket, update_external_ticket, move_external_ticket, comment_external_ticket, "
                     "delete_ticket, attach_file, delete_file, add_todo, toggle_todo, "
                     "delete_todo, add_link, delete_link, send_to_project, send_to_cli, workflow_overview, "
                     "whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, "
@@ -2227,6 +2247,7 @@ class KanbanTicketTool(BaseTool):
         from distr.core.db.kanban import KanbanTicket, KanbanLane
         with self._get_session() as s:
             query = s.query(KanbanTicket).join(KanbanLane).filter(KanbanLane.board_id == board["id"])
+            query = query.filter(KanbanTicket.merged_into_ticket_id.is_(None))
             if lane_name:
                 query = query.filter(KanbanLane.name.ilike(f"%{lane_name}%"))
             tickets = query.order_by(KanbanLane.position, KanbanTicket.position).all()
@@ -2259,8 +2280,18 @@ class KanbanTicketTool(BaseTool):
                     "I could not find that ticket.",
                     f"Ticket #{ticket_id} not found.",
                 )
-            ref = "\n".join(self._ticket_detail_parts(t))
+            parts = self._ticket_detail_parts(t)
+            merged_into = getattr(t, "merged_into_ticket_id", None)
+            if merged_into:
+                parts.insert(0, f"Merged into #{int(merged_into)} (archived, not deleted).")
+            ref = "\n".join(parts)
             spoken_title = t.title
+            merged_into_id = int(merged_into) if merged_into else 0
+        if merged_into_id:
+            return voice_then_reference(
+                f"Ticket {spoken_title} was merged into ticket {merged_into_id}.",
+                ref,
+            )
         return voice_then_reference(f"Opened ticket {spoken_title}.", ref)
 
     def _action_discuss_ticket(
@@ -2553,6 +2584,70 @@ class KanbanTicketTool(BaseTool):
             title = t.title
             s.delete(t)
         return voice_then_reference(f"I deleted that ticket: {title}.", f"Deleted ticket #{ticket_id} ('{title}')")
+
+    def _action_merge_ticket(
+        self,
+        keep_id=0,
+        duplicate_id=0,
+        allow_cross_project: bool = False,
+        text: str = "",
+    ) -> str:
+        """Copy a duplicate ticket into a kept ticket and archive the duplicate."""
+        import re
+        from distr.core.kanban.ticket_merge import TicketMergeError, merge_ticket
+
+        keep = int(keep_id or 0)
+        duplicate = int(duplicate_id or 0)
+        if (not keep or not duplicate) and text:
+            match = re.search(
+                r"merge\s+(?:ticket\s+)?#?(?P<dup>\d+)\s+into\s+(?:ticket\s+)?#?(?P<keep>\d+)",
+                text,
+                re.IGNORECASE,
+            )
+            if match:
+                duplicate = duplicate or int(match.group("dup"))
+                keep = keep or int(match.group("keep"))
+        try:
+            with self._get_session() as s:
+                result = merge_ticket(
+                    s,
+                    keep,
+                    duplicate,
+                    allow_cross_project=bool(allow_cross_project),
+                    actor="tool",
+                )
+        except TicketMergeError as exc:
+            return voice_then_reference(exc.message, f"{exc.code}: {exc.message}")
+        except Exception as exc:
+            return voice_then_reference(
+                "I could not merge those tickets.",
+                f"merge_ticket failed: {exc}",
+            )
+        keep_id = result["keep_id"]
+        duplicate_id = result["duplicate_id"]
+        if result.get("already_merged"):
+            spoken = f"Those tickets are already merged: #{duplicate_id} is archived into #{keep_id}."
+            return voice_then_reference(
+                spoken,
+                f"Already merged ticket #{duplicate_id} into #{keep_id}.",
+            )
+        copied = result.get("copied") or {}
+        parts = []
+        if copied.get("description") or copied.get("notes"):
+            parts.append("notes")
+        if copied.get("links"):
+            parts.append(f"{copied['links']} link(s)")
+        if copied.get("files"):
+            parts.append(f"{copied['files']} attachment(s)")
+        if copied.get("todos"):
+            parts.append(f"{copied['todos']} checklist item(s)")
+        detail = (" including " + ", ".join(parts)) if parts else ""
+        spoken = f"I merged ticket {duplicate_id} into {keep_id} and archived the duplicate."
+        return voice_then_reference(
+            spoken,
+            f"Merged ticket #{duplicate_id} into #{keep_id}{detail}. "
+            f"The duplicate is archived with a 'Merged into #{keep_id}' note.",
+        )
 
     def _action_move_ticket(
         self,

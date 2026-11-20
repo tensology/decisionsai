@@ -698,7 +698,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     msg = (
                         f"Use the '{tn}' tool directly — it is already in your active set. "
                         "For board work use action='list_tickets', 'move_ticket', "
-                        "'update_ticket', or 'delete_ticket'."
+                        "'update_ticket', 'delete_ticket', or 'merge_ticket' "
+                        "with keep_id and duplicate_id."
                     )
                     log_request_tool_event(
                         query=qnorm,
@@ -719,7 +720,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     msg = (
                         f"Tool '{tn}' is now available for ticket board operations. "
                         "Call it with action='list_tickets', 'move_ticket', "
-                        "'update_ticket', or 'delete_ticket'."
+                        "'update_ticket', 'delete_ticket', or 'merge_ticket' "
+                        "with keep_id and duplicate_id."
                     )
                     log_request_tool_event(
                         query=qnorm,
