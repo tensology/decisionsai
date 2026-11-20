@@ -71,7 +71,7 @@ def test_explicit_audit_and_fix_remains_authorized_implementation():
     assert harness._prompt_expects_project_change('Audit and fix the implementation', autonomy_level='full')
 
 
-@pytest.mark.parametrize('codes,expected', [([], 'blocked'), ([1], 'blocked'), ([1, 0], 'completed'), ([0], 'completed')])
+@pytest.mark.parametrize('codes,expected', [([], 'completed'), ([1], 'blocked'), ([1, 0], 'completed'), ([0], 'completed')])
 def test_completion_requires_actual_passing_check_receipts(tmp_path, monkeypatch, codes, expected):
     from distr.core.turn_runtime import TurnResult, TurnEvent, TurnEventKind, TurnStatus
     get_session, chat_id, _ = _database(tmp_path, monkeypatch)
@@ -99,10 +99,14 @@ def test_completion_requires_actual_passing_check_receipts(tmp_path, monkeypatch
     monkeypatch.setattr('distr.core.project_cli_backends.catalog_probe.probe_cli_backend', lambda *a, **k: {'status': {'ready': True}})
     result = harness.dispatch_development_prompt(chat_id, 'Fix the implementation and verify it', dispatch_async=False)
     assert result['status'] == expected, result.get('error')
-    assert result['outcome']['verification']['status'] == ('passed' if expected == 'completed' else 'failed' if codes else 'not_run')
+    assert result['outcome']['verification']['status'] == ('passed' if expected == 'completed' and codes else 'skipped' if expected == 'completed' else 'failed' if codes else 'not_run')
+    if expected == 'completed' and not codes:
+        assert result['summary'].startswith('100% done.')
+        assert 'Checks were skipped' in result['summary']
+        assert "I can't call it done yet" not in result['summary']
     if expected == 'blocked':
         assert result['summary'].startswith('75% done.')
-        assert ("failed when it ran" if codes else "none of the checks I can track have run") in result['summary']
+        assert "failed when it ran" in result['summary']
         assert "which I haven't confirmed myself yet" in result['summary']
     with get_session() as db:
         row = db.get(ProjectExecutionSession, session_id)

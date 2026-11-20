@@ -52,12 +52,20 @@ export function createWorkflows({ context, actions, el }) {
         if (context.workspaceMode === 'workflows') actions.setLocation?.(currentPath(), options);
     }
 
-    function lastRunText(run) {
-        if (!run) return '';
-        const when = run.completed_at || run.finished_at || run.started_at || run.created_at;
+    function lastRunText(run, workflow) {
+        // Prefer a live/recent run object; fall back to the workflow card's last_run_at/project.
+        const source = run || (workflow?.last_run_at ? {
+            status: workflow.last_run_status || 'completed',
+            started_at: workflow.last_run_at,
+            completed_at: workflow.last_run_at
+        } : null);
+        if (!source) return '';
+        const when = source.completed_at || source.finished_at || source.started_at || source.created_at;
         const date = when ? new Date(String(when).endsWith('Z') || /[+-]\d\d:?\d\d$/.test(String(when)) ? when : `${when}Z`) : null;
         const day = date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '';
-        return `Last run ${actions.statusLabel(String(run.status || '').toLowerCase()).toLowerCase()}${day ? ` ${day}` : ''}`;
+        const status = actions.statusLabel(String(source.status || '').toLowerCase()).toLowerCase();
+        const project = run?.project_name || workflow?.last_run_project || '';
+        return `Last run${status && status !== 'ready' ? ` ${status}` : ''}${day ? ` ${day}` : ''}${project ? ` · ${project}` : ''}`;
     }
 
     function workflowStepList(workflow) {
@@ -192,7 +200,7 @@ export function createWorkflows({ context, actions, el }) {
               ? `<p class="workflow-card-pending">${state.workflowPreviewUnavailable.has(workflow) ? 'Step preview unavailable' : 'Loading steps'}</p>`
               : '<p class="workflow-card-pending">No steps yet</p>';
         const classLabel = WORKFLOW_CLASS_LABEL[workflowClassKey(workflow)] || '';
-        const readiness = run ? (active ? actions.statusLabel(status) : lastRunText(run)) : issue || (steps.length ? 'Ready' : '');
+        const readiness = run ? (active ? actions.statusLabel(status) : lastRunText(run, workflow)) : lastRunText(null, workflow) || issue || (steps.length ? 'Ready' : '');
         const projectName = workflowProjectName(workflow);
         const summary = [projectName || classLabel, `${stepCount} step${stepCount === 1 ? '' : 's'}`, readiness].filter(Boolean).join(' · ');
         // Managed policies explain themselves: what they are for, not just their name.

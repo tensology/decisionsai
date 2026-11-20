@@ -3093,7 +3093,7 @@ export function createPlanConversation(host, root) {
         const bar = planBar().querySelector('.plan-detail-header') || planBar();
         let node = bar.querySelector?.('.plan-scan-hint');
         if (active) active.scanHint = hint;
-        if (hint?.kind !== 'scanning') {
+        if (!hint) {
             node?.remove();
             if (active) controls(active);
             return;
@@ -3110,8 +3110,28 @@ export function createPlanConversation(host, root) {
                 if (chrome && chrome.parentElement === end) end.insertBefore(node, chrome);
             }
         }
-        node.dataset.kind = hint.kind;
-        node.textContent = hint.text;
+        node.dataset.kind = hint.kind || '';
+        node.textContent = hint.text || '';
+        node.querySelector('.plan-scan-generate')?.remove();
+        if (hint.offerGenerate) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'plan-scan-generate';
+            button.textContent = 'Generate plan';
+            button.addEventListener('click', () => {
+                const composer = document.getElementById('plan-composer-input')
+                    || document.querySelector('.plan-composer textarea, .plan-composer input, #plan-prompt, [data-plan-composer-input]');
+                if (composer) {
+                    composer.focus();
+                    if ('value' in composer && !String(composer.value || '').trim()) {
+                        composer.value = 'Generate a plan from this project.';
+                        composer.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                }
+                document.querySelector('[data-plan-generate], #plan-generate, [data-plan-build]')?.click();
+            });
+            node.append(' ', button);
+        }
     }
     function refreshWorkspace(workspace) {
         const session = sessions.get(workspaceScope(workspace));

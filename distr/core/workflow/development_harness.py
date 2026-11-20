@@ -2728,7 +2728,18 @@ async def _run_execution(
         if noop:
             status = "completed_noop"
         verification = verification_receipts.report()
-        if success and not waiting and change_expected and verification['status'] != 'passed':
+        from distr.core.conversational_progress import verification_can_be_skipped
+
+        if verification_can_be_skipped(verification):
+            verification = {
+                **verification,
+                "status": "skipped",
+                "skipped_reason": (
+                    "Checks were skipped because none applied in this project "
+                    "(no test or build tooling ran, and the browser check is off or unused)."
+                ),
+            }
+        if success and not waiting and change_expected and verification['status'] not in {'passed', 'skipped'}:
             status = 'blocked'
             success = False
             error = 'Required verification has not passed. Inspect the recorded checks and rerun them.'

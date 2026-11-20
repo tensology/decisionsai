@@ -607,6 +607,102 @@ def workflow_backing_automation(workflow_id: int) -> Optional[Dict[str, Any]]:
         return _automation_workflow_refs(db).get(int(workflow_id))
 
 
+def _latest_workflow_run_summaries(db, workflow_ids: list[int]) -> dict[int, dict]:
+    """Most recent run per workflow, including the project it ran against."""
+    if not workflow_ids:
+        return {}
+    try:
+        from distr.core.db.workflow import AutoWorkflowRun
+    except Exception:
+        try:
+            from distr.core.db.workflow import WorkflowRun as AutoWorkflowRun
+        except Exception:
+            return {}
+    try:
+        from distr.core.db.projects import Project
+    except Exception:
+        Project = None  # type: ignore
+    rows = (
+        db.query(AutoWorkflowRun)
+        .filter(AutoWorkflowRun.workflow_id.in_(workflow_ids))
+        .order_by(AutoWorkflowRun.id.desc())
+        .all()
+    )
+    summaries: dict[int, dict] = {}
+    project_ids = set()
+    ticket_ids = set()
+    chat_ids = set()
+    for row in rows:
+        wid = int(getattr(row, "workflow_id", 0) or 0)
+        if not wid or wid in summaries:
+            continue
+        started = getattr(row, "started_at", None) or getattr(row, "created_date", None) or getattr(row, "modified_date", None)
+        project_id = getattr(row, "project_id", None)
+        if not project_id:
+            raw = getattr(row, "run_data", None) or ""
+            if raw:
+                try:
+                    import json
+                    payload = json.loads(raw) if isinstance(raw, str) else dict(raw)
+                    project_id = (payload or {}).get("project_id")
+                except Exception:
+                    project_id = None
+        if project_id:
+            project_ids.add(int(project_id))
+        if getattr(row, "ticket_id", None):
+            ticket_ids.add(int(row.ticket_id))
+        if getattr(row, "chat_id", None):
+            chat_ids.add(int(row.chat_id))
+        summaries[wid] = {
+            "last_run_at": started.isoformat() if started else None,
+            "status": getattr(row, "status", None),
+            "project_id": int(project_id) if project_id else None,
+            "project_name": None,
+            "ticket_id": int(row.ticket_id) if getattr(row, "ticket_id", None) else None,
+            "chat_id": int(row.chat_id) if getattr(row, "chat_id", None) else None,
+        }
+    if ticket_ids:
+        try:
+            from distr.core.db.kanban import KanbanTicket
+            tickets = {
+                int(t.id): getattr(t, "linked_project_id", None)
+                for t in db.query(KanbanTicket).filter(KanbanTicket.id.in_(list(ticket_ids))).all()
+            }
+            for item in summaries.values():
+                if not item.get("project_id") and item.get("ticket_id"):
+                    linked = tickets.get(int(item["ticket_id"]))
+                    if linked:
+                        item["project_id"] = int(linked)
+                        project_ids.add(int(linked))
+        except Exception:
+            pass
+    if chat_ids:
+        try:
+            from distr.core.db import Chat
+            chats = {
+                int(c.id): getattr(c, "project_id", None)
+                for c in db.query(Chat).filter(Chat.id.in_(list(chat_ids))).all()
+            }
+            for item in summaries.values():
+                if not item.get("project_id") and item.get("chat_id"):
+                    linked = chats.get(int(item["chat_id"]))
+                    if linked:
+                        item["project_id"] = int(linked)
+                        project_ids.add(int(linked))
+        except Exception:
+            pass
+    if Project is not None and project_ids:
+        names = {
+            int(p.id): p.name
+            for p in db.query(Project).filter(Project.id.in_(list(project_ids))).all()
+            if p and p.name
+        }
+        for item in summaries.values():
+            if item.get("project_id"):
+                item["project_name"] = names.get(int(item["project_id"]))
+    return summaries
+
+
 def list_workflows(limit: int = 50, search: Optional[str] = None, workflow_type: Optional[str] = None) -> List[Dict[str, Any]]:
     from distr.core.automation_orchestrator import is_automation_workflow
 
@@ -638,6 +734,8 @@ def list_workflows(limit: int = 50, search: Optional[str] = None, workflow_type:
         visible = visible[: int(limit or 50)]
         from distr.core.workflow.phases import workflow_weight_class
 
+        last_run_map = _latest_workflow_run_summaries(db, [int(w.id) for w in visible if w.id])
+
         return [
             {
                 "id": w.id, "name": w.name,
@@ -645,7 +743,11 @@ def list_workflows(limit: int = 50, search: Optional[str] = None, workflow_type:
                 "workflow_type": w.workflow_type or "manual",
                 "weight_class": workflow_weight_class(w.run_settings),
                 "managed": workflow_weight_class(w.run_settings) is not None,
-                "last_run_at": w.last_run_at.isoformat() if w.last_run_at else None,
+                "last_run_at": (last_run_map.get(int(w.id), {}).get("last_run_at")
+                                or (w.last_run_at.isoformat() if w.last_run_at else None)),
+                "last_run_project": last_run_map.get(int(w.id), {}).get("project_name"),
+                "last_run_project_id": last_run_map.get(int(w.id), {}).get("project_id"),
+                "last_run_status": last_run_map.get(int(w.id), {}).get("status"),
                 "description": (w.description or "")[:200],
                 "status": w.status or "draft",
                 "workflow_input": w.workflow_input or "",
@@ -2824,16 +2926,22 @@ def start_workflow_run(
         first_step_recording = first_step.recording_filename or ""
         first_step_code = first_step.code or ""
 
+        initial_run_data = {}
+        if isinstance(run_metadata, dict) and run_metadata.get("project_id"):
+            initial_run_data["project_id"] = run_metadata.get("project_id")
         run = AutoWorkflowRun(
             workflow_id=workflow_id,
             status="running",
             current_step_id=first_step_id,
-            run_data=json.dumps({}),
+            run_data=json.dumps(initial_run_data),
         )
         db.add(run)
         db.flush()
         run_id = run.id
         first_step.status = "running"
+        workflow_row = db.get(AutoWorkflow, int(workflow_id))
+        if workflow_row is not None:
+            workflow_row.last_run_at = utc_now_naive()
         db.commit()
 
     import asyncio

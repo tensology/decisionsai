@@ -163,11 +163,16 @@
 
 .task-breadcrumb span, .task-breadcrumb strong { overflow: hidden; white-space: nowrap; }
 
-.task-breadcrumb > #header-project {
+.task-breadcrumb > #header-project,
+.task-breadcrumb > #header-task {
     max-width: none;
     flex: 0 1 auto;
     min-width: 0;
-    text-overflow: clip;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    direction: ltr;
+    text-align: left;
+    unicode-bidi: plaintext;
 }
 
 .task-breadcrumb strong { text-overflow: ellipsis; }
