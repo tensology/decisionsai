@@ -11,7 +11,8 @@
       255,
       0
     ],
-    "chroma_threshold": 47
+    "chroma_threshold": 47,
+    "default_size_px": 280
   },
   "events": {
     "idle": {
@@ -26,8 +27,7 @@
       "playback": "pingpong"
     },
     "dictation": {
-      "animation": "dictation.webm",
-      "playback": "pingpong"
+      "animation": "dictation.webm"
     },
     "ticket_dictation": {
       "animation": "ticket-dictation.webm",

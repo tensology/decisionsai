@@ -6,6 +6,7 @@ with no errors, and contains the expected field values."""
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from distr.core.skin_config import EVENT_HOOKS, parse, validate
 
@@ -205,9 +206,14 @@ def test_headphone_llama_ships_a_distinct_asset_for_every_behavior() -> None:
     assert not config.rendering.shadow
     assert not config.rendering.glow_on_hold
     assert config.rendering.chroma_key == (0, 255, 0)
+    assert config.rendering.default_size_px == 280
     assert config.events["idle"].playback == "loop"
     assert set(config.events) == set(EVENT_HOOKS)
     animations = {response.animation for response in config.events.values()}
     assert len(animations) == len(EVENT_HOOKS)
     assert all((folder / name).is_file() for name in animations)
-    assert (folder / "idle.webp").is_file()
+    with Image.open(folder / "idle.webp") as preview:
+        assert preview.size == (1080, 1080)
+        assert preview.is_animated
+        assert preview.info["loop"] == 0
+        assert preview.convert("RGBA").getpixel((0, 0))[3] == 0

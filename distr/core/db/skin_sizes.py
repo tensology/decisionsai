@@ -2,21 +2,19 @@
 import logging
 from . import get_session
 from . import SkinSize
+from distr.core.skin_config import DEFAULT_SKIN_SIZE_PX
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_SIZE = 180
-
-
-def get_skin_size(skin_slug: str) -> int:
+def get_skin_size(skin_slug: str, default: int = DEFAULT_SKIN_SIZE_PX) -> int:
     """Return the saved size in pixels for *skin_slug*, or the default."""
     try:
         with get_session() as db:
             row = db.query(SkinSize).filter(SkinSize.skin_slug == skin_slug).first()
-            return row.size_px if row else _DEFAULT_SIZE
+            return row.size_px if row else default
     except Exception as e:
         logger.debug("get_skin_size(%s) failed: %s", skin_slug, e)
-        return _DEFAULT_SIZE
+        return default
 
 
 def set_skin_size(skin_slug: str, size_px: int) -> None:

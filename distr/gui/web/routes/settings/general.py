@@ -6,6 +6,7 @@ import asyncio
 from fastapi.responses import JSONResponse
 
 from distr.core.hotkeys import DEFAULTS as HOTKEY_DEFAULTS
+from distr.core.skin_config import MAX_SKIN_SIZE_SCALE, MIN_SKIN_SIZE_SCALE
 
 from ._shared import (
     logger,
@@ -26,7 +27,7 @@ from pydantic import BaseModel, Field
 
 # Local model for oracle size — endpoint stays in general.py
 class OracleSizeUpdate(BaseModel):
-    sphere_size: int = Field(ge=4, le=10)
+    sphere_size: int = Field(ge=MIN_SKIN_SIZE_SCALE, le=MAX_SKIN_SIZE_SCALE)
 
 
 def register_routes(router, templates):

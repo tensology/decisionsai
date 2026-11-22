@@ -194,6 +194,31 @@ class TestListSkins:
 
 
 # ---------------------------------------------------------------------------
+# GET and POST /api/skins/{name}/size
+# ---------------------------------------------------------------------------
+
+def test_skin_size_route_uses_skin_default_and_accepts_a_larger_size(skin_dir):
+    config_file = skin_dir / "test-skin" / "skin.json"
+    config = json.loads(config_file.read_text())
+    config["rendering"]["default_size_px"] = 280
+    config_file.write_text(json.dumps(config))
+    app = FastAPI()
+    router = APIRouter()
+    register_routes(router, None)
+    app.include_router(router)
+
+    with patch("distr.core.paths.AVATARS_DIR", str(skin_dir)), patch(
+        "distr.core.db.skin_sizes.get_skin_size", side_effect=lambda _, default: default
+    ), patch("distr.core.db.skin_sizes.set_skin_size") as save_size:
+        client = TestClient(app)
+        assert client.get("/skins/test-skin/size").json() == {
+            "skin_name": "test-skin", "sphere_size": 14, "pixels": 280,
+        }
+        assert client.post("/skins/test-skin/size", json={"sphere_size": 16}).json()["pixels"] == 320
+        save_size.assert_called_once_with("test-skin", 320)
+
+
+# ---------------------------------------------------------------------------
 # POST /api/skins/select
 # ---------------------------------------------------------------------------
 

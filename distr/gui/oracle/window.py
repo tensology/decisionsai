@@ -3,7 +3,7 @@ from distr.core.utils import load_settings_from_db, save_settings_to_db, get_scr
 from distr.core.paths import AVATARS_DIR, IMAGES_DIR
 from distr.core.db import get_session, ScreenPosition, Chat
 from distr.core.signals import signal_manager
-from distr.core.skin_config import EventResponse
+from distr.core.skin_config import EventResponse, MIN_SKIN_SIZE_SCALE, MAX_SKIN_SIZE_SCALE
 from distr.core.skin_discovery import get_skin_by_name
 from distr.core.skin_migration import migrate_selected_oracle
 from distr.core.hotkeys import (
@@ -434,7 +434,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # the last size the user chose for each skin independently).
         try:
             from distr.core.db.skin_sizes import get_skin_size
-            saved_size = get_skin_size(migrated)
+            saved_size = get_skin_size(self._skin_folder, self._skin_config.rendering.default_size_px)
             if saved_size != self.content_size:
                 self.content_size = saved_size
                 settings = load_settings_from_db()
@@ -555,7 +555,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 pass
             try:
                 from distr.core.db.skin_sizes import get_skin_size
-                saved_size = get_skin_size(migrated)
+                saved_size = get_skin_size(migrated, config.rendering.default_size_px)
                 if saved_size != self.content_size:
                     self.content_size = saved_size
                     settings = load_settings_from_db()
@@ -1653,20 +1653,20 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         return (modifier, key)
 
     def _normalize_oracle_scale(self, raw_size):
-        """Normalize persisted size to slider-like scale (4..10)."""
+        """Normalize persisted pixels or a legacy slider value."""
         try:
             value = int(raw_size)
         except Exception:
             value = 9
-        if value > 10:
+        if value > MAX_SKIN_SIZE_SCALE:
             value = int(round(value / 20.0))
-        return max(4, min(10, value))
+        return max(MIN_SKIN_SIZE_SCALE, min(MAX_SKIN_SIZE_SCALE, value))
 
     def _adjust_oracle_size_from_hotkey(self, delta: int):
         """Adjust oracle size by one scale step and emit the existing size signal."""
         settings = load_settings_from_db()
         current_scale = self._normalize_oracle_scale(settings.get("sphere_size", 9))
-        new_scale = max(4, min(10, current_scale + delta))
+        new_scale = max(MIN_SKIN_SIZE_SCALE, min(MAX_SKIN_SIZE_SCALE, current_scale + delta))
         if new_scale == current_scale:
             return
         # Persist immediately so size survives restart even if downstream signal handling

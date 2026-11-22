@@ -37,6 +37,9 @@ EVENT_HOOKS: List[str] = [
 GLOW_STYLES: List[str] = ["breathing", "pulse", "fade", "flash"]
 
 PLAYBACK_MODES: List[str] = ["loop", "pingpong"]
+MIN_SKIN_SIZE_SCALE = 4
+MAX_SKIN_SIZE_SCALE = 16
+DEFAULT_SKIN_SIZE_PX = 180
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -71,6 +74,7 @@ class RenderingConfig:
     image_offset_y: int = 0
     chroma_key: Tuple[int, int, int] | None = None  # RGB color to make transparent, e.g. (137, 218, 239)
     chroma_threshold: int = 30  # Color distance threshold for chroma-key removal
+    default_size_px: int = DEFAULT_SKIN_SIZE_PX
     unfocused_opacity_enabled: bool = False  # Whether to reduce opacity when window loses focus
     unfocused_opacity: float = 0.5  # Opacity value (0.0-1.0) when window is not focused
 
@@ -147,6 +151,7 @@ def parse(json_str: str) -> SkinConfig:
         chroma_threshold=rdata.get("chroma_threshold", 30),
         unfocused_opacity_enabled=rdata.get("unfocused_opacity_enabled", False),
         unfocused_opacity=rdata.get("unfocused_opacity", 0.5),
+        default_size_px=rdata.get("default_size_px", DEFAULT_SKIN_SIZE_PX),
     )
 
     # --- events ---
@@ -238,6 +243,7 @@ def to_json(config: SkinConfig) -> str:
             "chroma_threshold": config.rendering.chroma_threshold,
             "unfocused_opacity_enabled": config.rendering.unfocused_opacity_enabled,
             "unfocused_opacity": config.rendering.unfocused_opacity,
+            "default_size_px": config.rendering.default_size_px,
         },
         "events": {
             hook: _event_response_dict(resp)
@@ -315,6 +321,10 @@ def validate(config: SkinConfig) -> List[str]:
                 f"events.{hook}.playback must be one of {PLAYBACK_MODES}, "
                 f"got '{resp.playback}'"
             )
+
+    size = config.rendering.default_size_px
+    if type(size) is not int or size % 20 or not MIN_SKIN_SIZE_SCALE <= size // 20 <= MAX_SKIN_SIZE_SCALE:
+        errors.append("rendering.default_size_px must be a multiple of 20 from 80 to 320")
 
     # rendering constraints based on type
     if config.type == "oracle":

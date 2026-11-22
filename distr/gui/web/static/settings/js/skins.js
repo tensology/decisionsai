@@ -304,7 +304,7 @@ async function loadSkinsSettings() {
         _selectedSkin = data.selected_skin || 'oracle';
         _loadedSkin = data.selected_skin || 'oracle';
         var rawSize = data.sphere_size !== undefined ? data.sphere_size : 180;
-        var scale = rawSize > 10 ? Math.max(4, Math.min(10, Math.round(rawSize / 20))) : Math.max(4, Math.min(10, parseInt(rawSize, 10) || 9));
+        var scale = rawSize > 16 ? Math.max(4, Math.min(16, Math.round(rawSize / 20))) : Math.max(4, Math.min(16, parseInt(rawSize, 10) || 9));
         _loadedSkinScale = scale;
         _selectedSkinScale = scale;
         var slider = document.getElementById('skins_oracle_size');
@@ -424,8 +424,7 @@ async function _loadSkinByName(folderName, skinScale, showToast) {
             var sizeRespForSkin = await fetch('/api/skins/' + encodeURIComponent(folderName) + '/size');
             if (!sizeRespForSkin.ok) throw new Error('Failed to load skin size');
             var sizeData = await sizeRespForSkin.json();
-            var rawSize = sizeData.sphere_size !== undefined ? sizeData.sphere_size : _loadedSkinScale;
-            resolvedScale = rawSize > 10 ? Math.max(4, Math.min(10, Math.round(rawSize / 20))) : Math.max(4, Math.min(10, parseInt(rawSize, 10) || _loadedSkinScale || 9));
+            resolvedScale = parseInt(sizeData.sphere_size, 10) || _loadedSkinScale;
         }
 
         var selectResp = await fetch('/api/skins/select', {

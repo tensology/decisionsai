@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
+from distr.core.skin_config import MAX_SKIN_SIZE_SCALE, MIN_SKIN_SIZE_SCALE
 
 from ._shared import route_handler, SkinSelectRequest
 
@@ -23,7 +24,7 @@ from ._shared import route_handler, SkinSelectRequest
 
 
 class SkinSizeUpdateRequest(BaseModel):
-    sphere_size: int = Field(ge=4, le=10)
+    sphere_size: int = Field(ge=MIN_SKIN_SIZE_SCALE, le=MAX_SKIN_SIZE_SCALE)
 
 
 class OracleBackgroundRequest(BaseModel):
@@ -202,8 +203,8 @@ def register_routes(router, templates):
                 detail=f"Skin '{name}' not found or has invalid config",
             )
 
-        size_px = int(get_skin_size(name) or 180)
-        scale = max(4, min(10, round(size_px / 20)))
+        size_px = get_skin_size(name, result[1].rendering.default_size_px)
+        scale = max(MIN_SKIN_SIZE_SCALE, min(MAX_SKIN_SIZE_SCALE, round(size_px / 20)))
         return JSONResponse({"skin_name": name, "sphere_size": scale, "pixels": size_px})
 
     @router.post("/skins/{name}/size")
