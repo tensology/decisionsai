@@ -187,6 +187,11 @@ def test_hayley_runtime_states_use_their_matching_animations() -> None:
         "ticket_dictation": "ticket-dictation.webm",
         "recording_action": "recording-action.webm",
         "file_drop_success": "file-drop-success.webm",
+        "tts_response": "tts-response.webm",
+        "running_action": "running-action.webm",
+        "running_step_runner": "running-step-runner.webm",
+        "snippet_copied": "snippet-copied.webm",
+        "needs_attention": "needs-attention.webm",
         "thinking": "thinking.webm",
         "talking": "talking.webm",
     }
@@ -195,8 +200,8 @@ def test_hayley_runtime_states_use_their_matching_animations() -> None:
         hook: hayley.events[hook].animation
         for hook in expected
     } == expected
-    assert (AVATARS_DIR / "hayley" / expected["hands_free_listening"]).is_file()
-    assert (AVATARS_DIR / "hayley" / expected["ptt_active"]).is_file()
+    assert set(hayley.events) == set(expected) == set(EVENT_HOOKS)
+    assert all((AVATARS_DIR / "hayley" / name).is_file() for name in expected.values())
 
 
 def test_headphone_llama_ships_a_distinct_asset_for_every_behavior() -> None:
