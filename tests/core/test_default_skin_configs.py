@@ -199,10 +199,13 @@ def test_hayley_runtime_states_use_their_matching_animations() -> None:
 def test_headphone_llama_ships_a_distinct_asset_for_every_behavior() -> None:
     config = _load_skin("headphone-llama")
     folder = AVATARS_DIR / "headphone-llama"
-    assert config.type == "oracle"
-    assert config.rendering.glow_on_hold
-    assert config.events["ptt_active"].glow
-    assert config.events["dictation"].glow
+    assert config.type == "avatar"
+    assert config.rendering.shape == "square"
+    assert not config.rendering.border
+    assert not config.rendering.shadow
+    assert not config.rendering.glow_on_hold
+    assert config.rendering.chroma_key == (0, 255, 0)
+    assert config.events["idle"].playback == "loop"
     assert set(config.events) == set(EVENT_HOOKS)
     animations = {response.animation for response in config.events.values()}
     assert len(animations) == len(EVENT_HOOKS)

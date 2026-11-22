@@ -1,165 +1,75 @@
 {
-  "type": "oracle",
+  "type": "avatar",
   "name": "Headphone Llama",
   "rendering": {
-    "shape": "round",
-    "border": true,
-    "shadow": true,
-    "glow_on_hold": true
+    "shape": "square",
+    "border": false,
+    "shadow": false,
+    "glow_on_hold": false,
+    "chroma_key": [
+      0,
+      255,
+      0
+    ],
+    "chroma_threshold": 47
   },
   "events": {
     "idle": {
-      "animation": "idle.webm",
-      "show_player": false,
-      "show_chat_bubble": false,
-      "playback": "pingpong"
+      "animation": "idle.webm"
     },
     "hands_free_listening": {
       "animation": "hands-free-listening.webm",
-      "show_player": false,
-      "show_chat_bubble": false,
-      "playback": "pingpong",
-      "glow": true,
-      "glow_color": [
-        0,
-        170,
-        255
-      ],
-      "glow_speed": 875
+      "playback": "pingpong"
     },
     "ptt_active": {
       "animation": "ptt-active.webm",
-      "show_player": false,
-      "show_chat_bubble": false,
-      "playback": "pingpong",
-      "glow": true,
-      "glow_color": [
-        0,
-        170,
-        255
-      ],
-      "glow_speed": 875,
-      "glow_style": "pulse"
+      "playback": "pingpong"
     },
     "dictation": {
       "animation": "dictation.webm",
-      "show_player": false,
-      "show_chat_bubble": false,
-      "playback": "pingpong",
-      "glow": true,
-      "glow_color": [
-        76,
-        175,
-        80
-      ],
-      "glow_style": "fade"
+      "playback": "pingpong"
     },
     "ticket_dictation": {
       "animation": "ticket-dictation.webm",
-      "show_player": false,
-      "show_chat_bubble": false,
-      "playback": "pingpong",
-      "glow": true,
-      "glow_color": [
-        168,
-        85,
-        247
-      ],
-      "glow_speed": 900,
-      "glow_style": "pulse"
+      "playback": "pingpong"
     },
     "recording_action": {
       "animation": "recording-action.webm",
-      "show_player": false,
-      "show_chat_bubble": false,
       "playback": "pingpong",
-      "glow": true,
-      "glow_color": [
-        245,
-        80,
-        79
-      ],
-      "glow_speed": 1050,
       "tray_icon": "recording"
     },
     "file_drop_success": {
       "animation": "file-drop-success.webm",
-      "show_player": false,
-      "show_chat_bubble": false,
-      "playback": "pingpong",
-      "glow": true,
-      "glow_color": [
-        105,
-        223,
-        127
-      ],
-      "glow_speed": 650,
-      "glow_style": "flash"
+      "playback": "pingpong"
     },
     "tts_response": {
       "animation": "tts-response.webm",
-      "show_player": true,
-      "show_chat_bubble": false,
-      "playback": "pingpong"
+      "playback": "pingpong",
+      "show_player": true
     },
     "talking": {
       "animation": "talking.webm",
-      "show_player": false,
-      "show_chat_bubble": false,
       "playback": "pingpong"
     },
     "running_action": {
       "animation": "running-action.webm",
-      "show_player": false,
-      "show_chat_bubble": false,
-      "playback": "pingpong",
-      "glow": true,
-      "glow_color": [
-        255,
-        158,
-        63
-      ],
-      "glow_speed": 1150
+      "playback": "pingpong"
     },
     "running_step_runner": {
       "animation": "running-step-runner.webm",
-      "show_player": false,
-      "show_chat_bubble": false,
-      "playback": "pingpong",
-      "glow": true,
-      "glow_color": [
-        78,
-        201,
-        219
-      ],
-      "glow_speed": 900,
-      "glow_style": "pulse"
+      "playback": "pingpong"
     },
     "snippet_copied": {
       "animation": "snippet-copied.webm",
-      "show_player": false,
-      "show_chat_bubble": false,
       "playback": "pingpong"
     },
     "thinking": {
       "animation": "thinking.webm",
-      "show_player": false,
-      "show_chat_bubble": false,
       "playback": "pingpong"
     },
     "needs_attention": {
       "animation": "needs-attention.webm",
-      "show_player": false,
-      "show_chat_bubble": false,
-      "playback": "pingpong",
-      "glow": true,
-      "glow_color": [
-        255,
-        195,
-        70
-      ],
-      "glow_speed": 800,
-      "glow_style": "pulse"
+      "playback": "pingpong"
     }
   }
 }
