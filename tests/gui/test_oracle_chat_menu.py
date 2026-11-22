@@ -406,12 +406,18 @@ def test_format_skin_folder_label() -> None:
 
 
 def test_get_available_skins_for_menu_oracle_first(tmp_path) -> None:
-    (tmp_path / "oracle").mkdir()
-    (tmp_path / "zebra").mkdir()
-    (tmp_path / "adam").mkdir()
+    for folder, name in (("oracle", "Oracle"), ("zebra", "Zebra"), ("adam", "Custom Skin")):
+        directory = tmp_path / folder
+        directory.mkdir()
+        (directory / "skin.json").write_text(json.dumps({
+            "type": "avatar",
+            "name": name,
+            "rendering": {"shape": "square", "border": False, "shadow": False, "glow_on_hold": False},
+            "events": {"idle": {"animation": "idle.webp"}},
+        }))
+    (tmp_path / "missing-config").mkdir()
     skins = get_available_skins_for_menu(str(tmp_path))
-    assert skins[0] == ("oracle", "Oracle")
-    assert [name for name, _ in skins] == ["oracle", "adam", "zebra"]
+    assert skins == [("oracle", "Oracle"), ("adam", "Custom Skin"), ("zebra", "Zebra")]
 
 
 def test_automation_menu_uses_web_store_and_preserves_public_ids(monkeypatch) -> None:

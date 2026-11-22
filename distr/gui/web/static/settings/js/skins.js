@@ -9,6 +9,7 @@ var _editingSkinConfig = null;
 var _skinFiles = [];
 var _selectedHook = null;
 var _skinsBusyDepth = 0;
+var _skinArchiveImporting = false;
 
 var EVENT_HOOKS = [
     "idle", "hands_free_listening", "ptt_active", "dictation",
@@ -462,6 +463,71 @@ async function _loadSkinByName(folderName, skinScale, showToast) {
     }
 }
 
+function showSkinArchiveStatus(message, error) {
+    var status = document.getElementById('skin_archive_status');
+    if (!status) return;
+    status.textContent = message;
+    status.hidden = !message;
+    status.dataset.error = Boolean(error);
+}
+
+async function requireSkinArchiveResponse(response, fallback) {
+    if (response.ok) return response;
+    var body = await response.json().catch(function() { return {}; });
+    throw new Error(typeof body.detail === 'string' ? body.detail : fallback);
+}
+
+async function importSkinArchive(files) {
+    if (_skinArchiveImporting) return;
+    if (files.length !== 1 || !/\.zip$/i.test(files[0].name)) {
+        showSkinArchiveStatus('Choose one skin ZIP file.', true);
+        return;
+    }
+    _skinArchiveImporting = true;
+    showSkinArchiveStatus('Importing skin ZIP…');
+    try {
+        var response = await fetch('/api/skins/import', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/zip'},
+            body: files[0]
+        });
+        await requireSkinArchiveResponse(response, 'Could not import the skin ZIP.');
+        var skin = await response.json();
+        await loadSkinsSettings();
+        showSkinArchiveStatus(skin.name + ' imported and loaded.');
+    } catch (error) {
+        showSkinArchiveStatus(error.message || 'Could not import the skin ZIP.', true);
+    } finally {
+        _skinArchiveImporting = false;
+    }
+}
+
+async function exportCurrentSkin() {
+    var name = _editingSkin;
+    if (!name) return;
+    var button = document.getElementById('skin_detail_export');
+    button.disabled = true;
+    showSkinArchiveStatus('Preparing skin ZIP…');
+    try {
+        var response = await fetch('/api/skins/' + encodeURIComponent(name) + '/export');
+        await requireSkinArchiveResponse(response, 'Could not export the skin ZIP.');
+        var blob = await response.blob();
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        link.href = url;
+        link.download = name + '.zip';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+        showSkinArchiveStatus('Skin ZIP downloaded.');
+    } catch (error) {
+        showSkinArchiveStatus(error.message || 'Could not export the skin ZIP.', true);
+    } finally {
+        button.disabled = false;
+    }
+}
+
 function renderSkinsGrid() {
     var grid = document.getElementById('skins_grid');
     if (!grid) return;
@@ -484,10 +550,12 @@ function renderSkinsGrid() {
 
         if (skin.type === 'oracle') {
             // Oracle: round preview with cover
+            var scale = (Number(skin.image_scale) || 1) * 100 + '%';
+            var previewStyle = 'width:' + scale + '; height:' + scale + '; object-fit:cover; border-radius:50%';
             if (isVideo) {
                 previewEl = _createSkinVideoPreview(
                     previewUrl, skin.chroma_key, skin.chroma_threshold,
-                    'width:155%; height:155%; object-fit:cover; border-radius:50%'
+                    previewStyle
                 );
                 _applyPingPongToVideo(previewEl._skinPreviewVideo || previewEl, skin.idle_playback === 'pingpong');
             } else {
@@ -495,7 +563,7 @@ function renderSkinsGrid() {
                 previewEl.src = previewUrl;
                 previewEl.onerror = function() { this.style.display = 'none'; };
             }
-            if (!isVideo) previewEl.style.cssText = 'width:155%; height:155%; object-fit:cover; border-radius:50%;';
+            if (!isVideo) previewEl.style.cssText = previewStyle;
         } else if (isVideo) {
             previewEl = _createSkinVideoPreview(
                 previewUrl, skin.chroma_key, skin.chroma_threshold,
@@ -581,15 +649,61 @@ function renderSkinsGrid() {
     createCard.id = 'create_skin_card';
     createCard.className = 'flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-[#565869] cursor-pointer transition-all hover:border-[#10a37f] hover:bg-[#10a37f]/5 min-h-0';
 
+    var createButton = document.createElement('button');
+    createButton.type = 'button';
+    createButton.className = 'flex w-full flex-col items-center gap-2 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#10a37f]';
     var plusIcon = document.createElement('div');
-    plusIcon.className = 'w-full aspect-square rounded-lg bg-[#0d1117] flex items-center justify-center text-3xl text-[#565869]';
+    plusIcon.className = 'w-full aspect-square rounded-lg bg-[#0d1117] flex items-center justify-center text-3xl text-[#ececf1]';
     plusIcon.textContent = '+';
-    createCard.appendChild(plusIcon);
+    plusIcon.setAttribute('aria-hidden', 'true');
+    createButton.appendChild(plusIcon);
 
     var createName = document.createElement('span');
-    createName.className = 'text-sm font-medium text-[#565869] text-center';
+    createName.className = 'text-sm font-medium text-[#ececf1] text-center';
     createName.textContent = 'Create Skin';
-    createCard.appendChild(createName);
+    createButton.appendChild(createName);
+    createCard.appendChild(createButton);
+
+    var picker = document.createElement('input');
+    picker.type = 'file';
+    picker.accept = '.zip,application/zip';
+    picker.hidden = true;
+    picker.addEventListener('change', function() {
+        importSkinArchive(picker.files);
+        picker.value = '';
+    });
+    createCard.appendChild(picker);
+    var importButton = document.createElement('button');
+    importButton.type = 'button';
+    importButton.className = 'rounded-md border border-[#565869] px-2 py-1 text-xs font-medium text-[#ececf1] hover:border-[#10a37f] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#10a37f]';
+    importButton.textContent = 'Import ZIP';
+    importButton.title = 'Choose a skin ZIP or drop it on this card';
+    importButton.addEventListener('click', function(event) {
+        event.stopPropagation();
+        picker.click();
+    });
+    picker.addEventListener('click', function(event) { event.stopPropagation(); });
+    createCard.appendChild(importButton);
+    var dropHint = document.createElement('span');
+    dropHint.className = 'text-center text-xs text-[#ececf1]';
+    dropHint.textContent = 'Or drop a skin ZIP here';
+    createCard.appendChild(dropHint);
+
+    createCard.addEventListener('dragover', function(event) {
+        if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+        createCard.style.outline = '2px solid #10a37f';
+    });
+    createCard.addEventListener('dragleave', function(event) {
+        if (!createCard.contains(event.relatedTarget)) createCard.style.outline = '';
+    });
+    createCard.addEventListener('drop', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        createCard.style.outline = '';
+        importSkinArchive(event.dataTransfer.files);
+    });
 
     createCard.addEventListener('click', function() {
         if (_maskoConfigured) {
@@ -678,7 +792,7 @@ async function showEditorForSkin(folderName) {
     _replaceSkinsUrl(folderName);
     _syncSkinsSectionHeader(true, skin.type);
 
-    if (skin.type === 'oracle') {
+    if (folderName === 'oracle') {
         avatarDetail.classList.add('hidden');
         oracleDetail.classList.remove('hidden');
         document.getElementById('oracle_detail_name').textContent = skin.name;
@@ -1095,6 +1209,8 @@ function _initSkins() {
     if (saveBtn) saveBtn.addEventListener('click', function() { _saveSkinEditorState(true); });
     var loadBtn = document.getElementById('skin_detail_load');
     if (loadBtn) loadBtn.addEventListener('click', saveSkinsSettings);
+    var exportBtn = document.getElementById('skin_detail_export');
+    if (exportBtn) exportBtn.addEventListener('click', exportCurrentSkin);
     var backBtn = document.getElementById('skin_detail_back');
     if (backBtn) backBtn.addEventListener('click', closeSkinEditor);
     var sectionBackBtn = document.getElementById('skins_section_back');

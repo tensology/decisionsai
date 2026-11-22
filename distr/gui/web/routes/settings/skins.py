@@ -4,11 +4,15 @@ Skins routes — /skins, /skins/select, /skins/{name}/config,
 
 Requirements: 11.1-11.10
 """
+import tempfile
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from ._shared import route_handler, SkinSelectRequest
 
@@ -104,6 +108,64 @@ def register_routes(router, templates):
         from distr.core.services.settings_service import update_oracle_skin
         update_oracle_skin(data.skin_name)
         return JSONResponse({"success": True, "selected_skin": data.skin_name})
+
+    @router.post("/skins/import", status_code=201)
+    async def import_skin_archive(request: Request):
+        from distr.core.paths import AVATARS_DIR
+        from distr.core.services.settings_service import update_oracle_skin
+        from distr.core.skin_archive import MAX_UPLOAD, import_skin
+
+        if request.headers.get("content-type", "").split(";", 1)[0].lower() != "application/zip":
+            raise HTTPException(415, "Upload a skin ZIP file.")
+        with tempfile.TemporaryFile() as upload:
+            received = 0
+            async for chunk in request.stream():
+                received += len(chunk)
+                if received > MAX_UPLOAD:
+                    raise HTTPException(413, "The skin ZIP must be 128 MB or smaller.")
+                if chunk:
+                    await run_in_threadpool(upload.write, chunk)
+            upload.seek(0)
+            try:
+                folder, name = await run_in_threadpool(import_skin, upload, AVATARS_DIR)
+            except FileExistsError as exc:
+                raise HTTPException(409, "A skin with this name is already imported.") from exc
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+        update_oracle_skin(folder)
+        return {"folder_name": folder, "name": name}
+
+    @router.get("/skins/{name}/export")
+    async def export_skin_archive(name: str):
+        from distr.core.paths import AVATARS_DIR
+        from distr.core.skin_archive import export_skin
+        from distr.core.skin_discovery import get_skin_by_name
+
+        if name in (".", "..") or "\\" in name or "/" in name:
+            raise HTTPException(404, "Skin not found.")
+        skin = get_skin_by_name(AVATARS_DIR, name)
+        if skin is None:
+            raise HTTPException(404, "Skin not found.")
+        source = Path(AVATARS_DIR) / name
+        if source.is_symlink():
+            raise HTTPException(422, "Export requires a skin folder stored in DecisionsAI.")
+        output = tempfile.TemporaryFile()
+        try:
+            await run_in_threadpool(export_skin, source, skin[1], output)
+            size = output.tell()
+            output.seek(0)
+        except ValueError as exc:
+            output.close()
+            raise HTTPException(422, str(exc)) from exc
+        except BaseException:
+            output.close()
+            raise
+        filename = quote(f"{name}.zip", safe="")
+        return StreamingResponse(
+            iter(lambda: output.read(64 * 1024), b""), media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}", "Content-Length": str(size)},
+            background=BackgroundTask(output.close),
+        )
 
     @router.get("/skins/{name}/config")
     @route_handler("get skin config")

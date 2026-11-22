@@ -18,7 +18,7 @@ from distr.gui.oracle.file_drop import FileDropMixin
 from distr.gui.oracle.global_ptt_hotkey import GlobalPttHotkeyListener
 from distr.gui.oracle.glow_engine import GlowEngine
 from distr.gui.oracle.hidden_voice_indicator import HiddenVoiceIndicator
-from distr.gui.oracle.menu import MenuTrayMixin
+from distr.gui.oracle.menu import MenuTrayMixin, get_available_skins_for_menu
 from distr.gui.oracle.lifecycle import LifecycleMixin
 from distr.gui.oracle.render_strategy import create_renderer
 from PyQt6 import QtWidgets, QtGui, QtCore
@@ -2004,15 +2004,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         return (modifier, key_aliases.get(str(key or "").strip().lower(), str(key or "").strip().lower()))
 
     def _get_skin_shortcut_order(self) -> list[str]:
-        try:
-            all_dirs = [
-                d for d in os.listdir(AVATARS_DIR)
-                if os.path.isdir(os.path.join(AVATARS_DIR, d))
-            ]
-        except Exception:
-            all_dirs = []
-        avatars = sorted([d for d in all_dirs if d != "oracle"])
-        return ["oracle"] + avatars
+        return [folder for folder, _ in get_available_skins_for_menu(AVATARS_DIR)]
 
     def _cycle_avatar_skin(self, delta: int):
         order = self._get_skin_shortcut_order()
@@ -2038,13 +2030,13 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
     def _on_global_hotkey_action(self, action_name: str):
         if action_name == "skin_prev":
-            if self._skin_config is not None and self._skin_config.type == "oracle":
+            if self._skin_folder == "oracle":
                 self.cycle_oracle_previous()
             else:
                 self._cycle_avatar_skin(-1)
             return
         if action_name == "skin_next":
-            if self._skin_config is not None and self._skin_config.type == "oracle":
+            if self._skin_folder == "oracle":
                 self.cycle_oracle()
             else:
                 self._cycle_avatar_skin(1)

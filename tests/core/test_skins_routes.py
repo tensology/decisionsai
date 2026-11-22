@@ -6,14 +6,17 @@ using FastAPI TestClient with mocked dependencies.
 Requirements: 11.1-11.10
 """
 import json
+import io
 import os
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+from zipfile import ZipFile
 
 import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from distr.core.skin_config import SkinConfig, RenderingConfig, EventResponse
 from distr.gui.web.routes.settings.skins import register_routes
@@ -67,12 +70,87 @@ def client(skin_dir):
     register_routes(router, None)
     app.include_router(router)
 
-    with patch("distr.gui.web.routes.settings.skins.discover_skins") as mock_discover, \
-         patch("distr.gui.web.routes.settings.skins.get_skin_by_name") as mock_get_skin:
-        # We won't use these patches by default — individual tests patch as needed
-        pass
-
     return TestClient(app), skin_dir
+
+
+class TestSkinArchives:
+    def _files(self, config_name="Travel Compass"):
+        config = json.loads(MINIMAL_SKIN_JSON)
+        config["name"] = config_name
+        config["events"]["idle"]["animation"] = "idle.png"
+        image = io.BytesIO()
+        Image.new("RGB", (16, 16), "navy").save(image, format="PNG")
+        return {"skin.json": json.dumps(config).encode(), "idle.png": image.getvalue()}
+
+    def _zip(self, files, prefix=""):
+        buffer = io.BytesIO()
+        with ZipFile(buffer, "w") as archive:
+            for name, data in files.items():
+                archive.writestr(prefix + name, data)
+        return buffer.getvalue()
+
+    def test_export_and_import_round_trip(self, client):
+        app, root = client
+        files = self._files()
+        source = root / "test-skin"
+        for path in source.iterdir():
+            path.unlink()
+        for name, data in files.items():
+            (source / name).write_bytes(data)
+        with patch("distr.core.paths.AVATARS_DIR", str(root)), patch(
+            "distr.core.services.settings_service.update_oracle_skin",
+        ) as activate:
+            exported = app.get("/skins/test-skin/export")
+            assert exported.status_code == 200
+            assert "test-skin.zip" in exported.headers["content-disposition"]
+            assert exported.headers["content-type"] == "application/zip"
+            response = app.post("/skins/import", content=exported.content, headers={"Content-Type": "application/zip"})
+            assert response.status_code == 201
+            assert response.json() == {"folder_name": "imported-travel-compass", "name": "Travel Compass"}
+            activate.assert_called_once_with("imported-travel-compass")
+            installed = root / "imported-travel-compass"
+            assert (installed / "idle.png").read_bytes() == files["idle.png"]
+            assert app.get("/skins/imported-travel-compass/config").json()["name"] == "Travel Compass"
+            collision = app.post("/skins/import", content=exported.content, headers={"Content-Type": "application/zip"})
+            assert collision.status_code == 409
+            activate.assert_called_once()
+
+    def test_single_wrapped_skin_folder_supported(self, client):
+        app, root = client
+        upload = self._zip(self._files(), "Portable skin/")
+        with patch("distr.core.paths.AVATARS_DIR", str(root)), patch(
+            "distr.core.services.settings_service.update_oracle_skin",
+        ):
+            result = app.post("/skins/import", content=upload, headers={"Content-Type": "application/zip"})
+        assert result.status_code == 201
+
+    @pytest.mark.parametrize("change,detail", [
+        ("missing", "missing 'idle.png'"),
+        ("unsupported", "Unsupported file"),
+        ("wrong-media", "does not match its media format"),
+        ("nested", "nested, duplicate, or invalid filenames"),
+        ("not-zip", "Could not read"),
+    ])
+    def test_invalid_import_never_installs_or_loads(self, client, change, detail):
+        app, root = client
+        files = self._files()
+        if change == "missing":
+            del files["idle.png"]
+        elif change == "unsupported":
+            files["notes.txt"] = b"unsupported"
+        elif change == "wrong-media":
+            files["idle.png"] = b"not image data"
+        elif change == "nested":
+            files["folder/another.png"] = files["idle.png"]
+        content = self._zip(files) if change != "not-zip" else b"not a zip"
+        with patch("distr.core.paths.AVATARS_DIR", str(root)), patch(
+            "distr.core.services.settings_service.update_oracle_skin",
+        ) as activate:
+            result = app.post("/skins/import", content=content, headers={"Content-Type": "application/zip"})
+        assert result.status_code == 422
+        assert detail in result.json()["detail"]
+        assert [path.name for path in root.iterdir()] == ["test-skin"]
+        activate.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

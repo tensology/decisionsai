@@ -2666,6 +2666,17 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             await self.push_frame(frame, direction)
             return
 
+        # STT can finish a released dictation with an empty result or an error.
+        # Close that dictation so it cannot claim the next agent transcript.
+        if getattr(self, '_dictation_release_pending', False) and (
+            isinstance(frame, ErrorFrame)
+            or (isinstance(frame, TranscriptionFrame) and not frame.text.strip())
+        ):
+            self._stop_dictation()
+            if isinstance(frame, ErrorFrame):
+                await self.push_frame(frame, direction)
+            return
+
         if isinstance(frame, ErrorFrame) and getattr(self, '_voice_capture_pending', False):
             self._voice_capture_pending = False
             cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None

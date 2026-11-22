@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from distr.core.agent.services.llm.core_mixin import LLMSharedMixin
 
 
@@ -89,6 +91,35 @@ def test_released_hold_dictation_transcript_still_routes_to_typing(monkeypatch):
     assert harness.typed == ["late flushed dictation"]
     assert harness._dictation_release_pending is False
     assert not hasattr(harness, "_last_ptt_transcription_text")
+
+
+@pytest.mark.parametrize("failed_capture", [
+    _FakeTranscriptionFrame(""),
+    _FakeErrorFrame("transcription failed"),
+])
+def test_failed_dictation_flush_does_not_type_next_agent_capture(monkeypatch, failed_capture):
+    import distr.core.agent.libs as libs
+
+    monkeypatch.setattr(libs, "TranscriptionFrame", _FakeTranscriptionFrame)
+    monkeypatch.setattr(libs, "ErrorFrame", _FakeErrorFrame)
+
+    harness = _Harness()
+    harness._hands_free_before_dictation = False
+    harness._finish_dictation_after_pending_transcript()
+
+    async def capture():
+        harness.set_ptt_active(True)
+        await harness.process_frame(failed_capture, None)
+        harness.set_ptt_active(False, expect_transcript=True)
+        await harness.process_frame(_FakeTranscriptionFrame("agent request"), None)
+
+    asyncio.run(capture())
+
+    assert harness.typed == []
+    assert harness.work_intakes == [("agent request", "web")]
+    assert harness._dictation_release_pending is False
+    assert harness._is_dictating is False
+    assert harness._voice_capture_pending is False
 
 
 def test_transcript_without_active_voice_capture_is_rejected(monkeypatch):

@@ -1841,7 +1841,18 @@ textarea:focus-visible {
 .laya-mode-card:has(.laya-mode-card__input:focus-visible) { outline: 2px solid #10a37f; outline-offset: 2px; }
 .laya-mode-card:has(.laya-mode-card__input:disabled) { opacity: 0.5; cursor: not-allowed; }
 
+#skin_archive_status[data-error="true"] {
+    border-color: #f87171;
+    color: #fecaca;
+}
+
+.skin-hooks-editor { grid-template-columns: minmax(0, 1fr) 224px; }
+.skin-hooks-editor td:first-child { overflow-wrap: anywhere; }
+
 @media (max-width: 639px) {
+    .skin-editor-toolbar > :first-child { flex-basis: 100%; }
+    .skin-hooks-editor { grid-template-columns: minmax(0, 1fr); }
+    .skin-oracle-editor { flex-direction: column; }
     .audio-device-layout { flex-direction: column; }
     .audio-device-actions {
         display: grid;

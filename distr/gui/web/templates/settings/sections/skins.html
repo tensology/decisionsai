@@ -46,6 +46,8 @@
         </div>
 
         <!-- Skin Grid — 4 per row, big preview cards. Create Skin card is appended as last item via JS -->
+        <p id="skin_archive_status" role="status" aria-live="polite" hidden
+           class="rounded-md border border-[#565869] bg-[#0d1117] px-3 py-2 text-sm text-[#ececf1] break-words"></p>
         <div id="skins_grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
             <!-- Dynamically populated -->
         </div>
@@ -179,14 +181,18 @@
 
         <!-- Skin Detail Panel (shown when a skin is clicked) -->
         <div id="skin_detail_panel" class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a] hidden min-h-[340px]">
-            <div class="mb-4 flex flex-nowrap items-center gap-4">
+            <div class="skin-editor-toolbar mb-4 flex flex-wrap items-center gap-4 sm:flex-nowrap">
                 <div class="flex min-w-0 flex-1 items-center justify-center gap-3">
                     <label for="skins_oracle_size" class="text-sm font-medium text-[#ececf1] whitespace-nowrap">Size</label>
                     <input type="range" id="skins_oracle_size" min="4" max="10" value="9" step="1"
                            class="h-1 min-w-0 flex-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
                     <span id="skins_oracle_size_value" class="text-sm text-[#ececf1] w-12 text-right">180px</span>
                 </div>
-                <div class="flex w-[76px] flex-shrink-0 justify-end">
+                <div class="flex flex-shrink-0 items-center justify-end gap-2">
+                    <button type="button" id="skin_detail_export"
+                            class="rounded-md border border-[#565869] px-3 py-1.5 text-sm font-medium text-white hover:border-[#7a7c8c]">
+                        Export ZIP
+                    </button>
                     <button type="button" id="skin_detail_load"
                             class="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium bg-[#f97316] text-white hover:bg-[#ea580c] transition-colors">
                         <span id="skin_detail_load_label">Load</span>
@@ -204,7 +210,7 @@
                 <div class="flex items-center gap-4 mb-4">
                     <h3 class="text-lg font-semibold text-white" id="oracle_detail_name">Oracle</h3>
                 </div>
-                <div class="flex gap-8 items-start">
+                <div class="skin-oracle-editor flex gap-8 items-start">
                     <div class="flex-1 space-y-5">
                         <div class="grid grid-cols-2 gap-6">
                             <div class="flex items-center">
@@ -249,7 +255,7 @@
                 <div class="flex items-center gap-4 mb-4">
                     <h3 class="text-lg font-semibold text-white"><span id="avatar_editor_name"></span></h3>
                 </div>
-                <div class="grid items-start gap-6" style="grid-template-columns: minmax(0, 1fr) 224px;">
+                <div class="skin-hooks-editor grid items-start gap-6">
                     <div class="min-w-0">
                         <div class="overflow-hidden rounded-lg border border-[#565869] bg-[#0d1117]" style="height: 18rem;">
                             <table class="w-full table-fixed text-sm text-left">

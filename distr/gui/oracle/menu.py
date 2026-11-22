@@ -425,18 +425,11 @@ def format_skin_folder_label(folder_name: str) -> str:
 
 def get_available_skins_for_menu(avatars_dir: Optional[str] = None) -> list[tuple[str, str]]:
     """Return installed skins as ``(folder_name, label)`` with Oracle first."""
-    base = avatars_dir or AVATARS_DIR
-    try:
-        all_dirs = [
-            d
-            for d in os.listdir(base)
-            if os.path.isdir(os.path.join(base, d))
-        ]
-    except Exception:
-        all_dirs = []
-    avatars = sorted([d for d in all_dirs if d.lower() != "oracle"])
-    order = ["oracle"] + avatars
-    return [(name, format_skin_folder_label(name)) for name in order]
+    from distr.core.skin_discovery import discover_skins
+
+    skins = discover_skins(avatars_dir or AVATARS_DIR)
+    skins.sort(key=lambda item: (item[0] != "oracle", item[0]))
+    return [(folder, config.name) for folder, config in skins]
 
 
 def format_board_menu_label(name: str, source: Optional[str] = None) -> str:
