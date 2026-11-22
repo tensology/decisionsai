@@ -136,6 +136,12 @@ python bin/setup.py
 python bin/start.py
 ```
 
+### Update an existing installation
+
+In the local Web UI, open **Settings → General & Audio → On Startup**. For a Git installation, **Update and restart** appears when a new commit is available on `origin/main`. DecisionsAI closes, updates the checkout, prepares Python dependencies, and reopens. The settings page reconnects and displays the result.
+
+If the checkout has local changes or commits ahead of upstream, resolve those before starting the update. If an update fails, check `~/.decisions/run/software-update.log` for details. DMG installations can use **Open downloads** to get the latest release.
+
 ## Development
 
 Run the Python checks with the project's Python 3.12 environment:
