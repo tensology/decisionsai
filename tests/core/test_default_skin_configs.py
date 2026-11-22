@@ -181,7 +181,7 @@ def test_hayley_runtime_states_use_their_matching_animations() -> None:
     hayley = _load_skin("hayley")
     expected = {
         "idle": "idle.webm",
-        "hands_free_listening": "headphones-listening.webm",
+        "hands_free_listening": "hands-free-listening.webm",
         "ptt_active": "ptt-active.webm",
         "dictation": "dictation.webm",
         "ticket_dictation": "ticket-dictation.webm",
@@ -195,6 +195,7 @@ def test_hayley_runtime_states_use_their_matching_animations() -> None:
         hook: hayley.events[hook].animation
         for hook in expected
     } == expected
+    assert (AVATARS_DIR / "hayley" / expected["hands_free_listening"]).is_file()
 
 
 def test_headphone_llama_ships_a_distinct_asset_for_every_behavior() -> None:

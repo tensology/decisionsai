@@ -35,7 +35,7 @@
       "playback": "loop"
     },
     "hands_free_listening": {
-      "animation": "headphones-listening.webm",
+      "animation": "hands-free-listening.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,

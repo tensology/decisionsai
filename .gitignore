@@ -214,6 +214,7 @@ installer/build-audit/
 **/voices*.bin
 assets/**/*.webm
 !/assets/avatars/headphone-llama/*.webm
+!/assets/avatars/hayley/hands-free-listening.webm
 /assets/avatars/imported-*/
 assets/**/*.mp4
 assets/**/*.wav
