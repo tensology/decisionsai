@@ -196,6 +196,7 @@ def test_hayley_runtime_states_use_their_matching_animations() -> None:
         for hook in expected
     } == expected
     assert (AVATARS_DIR / "hayley" / expected["hands_free_listening"]).is_file()
+    assert (AVATARS_DIR / "hayley" / expected["ptt_active"]).is_file()
 
 
 def test_headphone_llama_ships_a_distinct_asset_for_every_behavior() -> None:
