@@ -127,24 +127,32 @@ def _wait_for_exit(pid):
     raise TimeoutError("DecisionsAI did not close in time.")
 
 
-def _prepare(root, changed_requirements):
+def _requirement_lines(contents):
+    return [line for raw in contents.splitlines()
+            if (line := raw.partition(" #")[0].strip()) and not line.startswith("#")]
+
+
+def _prepare(root, previous_requirements):
     python = _console_python()
     setup = root / "bin" / "first_run.py"
     if (root / PROFILE_MARKER).is_file():
         subprocess.run([python, str(setup), "--non-interactive"], cwd=root,
                        check=True, stdin=subprocess.DEVNULL, timeout=600)
-    elif changed_requirements:
+    elif previous_requirements is not None:
         requirements = root / REQUIREMENTS
-        if os.name == "nt":
-            with tempfile.TemporaryDirectory() as temp:
-                filtered = Path(temp) / REQUIREMENTS
-                filtered.write_text("\n".join(
-                    line for line in requirements.read_text(encoding="utf-8").splitlines()
-                    if not line.startswith("pywhispercpp")
-                ) + "\n", encoding="utf-8")
-                _install_requirements(root, python, filtered)
-        else:
+        previous = set(_requirement_lines(previous_requirements))
+        current = _requirement_lines(requirements.read_text(encoding="utf-8"))
+        # Keep pip's include paths and option ordering for a structured manifest.
+        if any(line.startswith("-") or line.endswith("\\") for line in previous.union(current)):
             _install_requirements(root, python, requirements)
+            return
+        changed = [line for line in current if line not in previous
+                   and not (os.name == "nt" and line.startswith("pywhispercpp"))]
+        if changed:
+            with tempfile.TemporaryDirectory(prefix="decisions-update-deps-") as temp:
+                pending = Path(temp) / REQUIREMENTS
+                pending.write_text("\n".join(changed) + "\n", encoding="utf-8")
+                _install_requirements(root, python, pending)
 
 
 def _install_requirements(root, python, requirements):
@@ -189,9 +197,11 @@ def run_update(root, parent_pid, port):
         update = check_update(root)
         if update["status"] == "available":
             changed = bool(_git(root, "diff", "--name-only", "HEAD", update["target"], "--", REQUIREMENTS))
+            requirements = root / REQUIREMENTS
+            previous = requirements.read_text(encoding="utf-8") if changed and requirements.is_file() else ""
             _git(root, "merge", "--ff-only", "--no-overwrite-ignore", update["target"])
             _write_state("preparing", "Checking Python dependencies.")
-            _prepare(root, changed)
+            _prepare(root, previous if changed and requirements.is_file() else None)
         elif update["status"] != "current":
             raise ValueError(update["message"])
         _write_state("restarting", "Starting the updated app.")

@@ -67,6 +67,21 @@ def test_failed_precondition_keeps_app_open(installation, monkeypatch, tmp_path)
     assert git(root, "rev-parse", "HEAD") == current
 
 
+def test_legacy_setup_installs_only_changed_requirements(tmp_path, monkeypatch):
+    previous = "pywhispercpp @ git+https://example.invalid/whisper\nplaywright==1.63.0\npathspec>=0.11.0\n"
+    (tmp_path / software_update.REQUIREMENTS).write_text(
+        previous.replace("pathspec>=0.11.0", "pathspec>=1.1.1") + "# Comment only\n",
+        encoding="utf-8",
+    )
+    installs = []
+    monkeypatch.setattr(
+        software_update, "_install_requirements",
+        lambda root, python, requirements: installs.append(requirements.read_text(encoding="utf-8")),
+    )
+    software_update._prepare(tmp_path, previous)
+    assert installs == ["pathspec>=1.1.1\n"]
+
+
 def test_update_requires_local_browser_action(monkeypatch):
     app = FastAPI()
     router = APIRouter()
