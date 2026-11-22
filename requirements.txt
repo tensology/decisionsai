@@ -131,6 +131,8 @@ httpx>=0.24.0
 ddgs>=1.0.0
 # FastAPI and uvicorn for Flow Logic web server
 fastapi>=0.100.0
+# Multipart form uploads in the local web API.
+python-multipart>=0.0.34
 uvicorn[standard]>=0.23.0
 # WebRTC AEC3 (hands-free echo cancellation)
 pywebrtc-audio>=0.2.0
