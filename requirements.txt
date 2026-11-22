@@ -137,7 +137,7 @@ pywebrtc-audio>=0.2.0
 # WebRTC desktop streaming
 aiortc>=1.9.0
 # pathspec for .gitignore parsing in project indexing
-pathspec>=0.11.0
+pathspec>=1.1.1
 pytest>=8.0.0
 pytest-playwright>=0.5.0  # uses the pinned playwright below
 hypothesis>=6.100.0
