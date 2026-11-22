@@ -213,6 +213,7 @@ installer/build-audit/
 **/kokoro-*.onnx
 **/voices*.bin
 assets/**/*.webm
+!/assets/avatars/headphone-llama/*.webm
 /assets/avatars/imported-*/
 assets/**/*.mp4
 assets/**/*.wav

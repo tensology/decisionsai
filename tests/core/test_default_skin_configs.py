@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from distr.core.skin_config import parse, validate
+from distr.core.skin_config import EVENT_HOOKS, parse, validate
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -18,6 +18,7 @@ AVATARS_DIR = PROJECT_ROOT / "assets" / "avatars"
 
 SHIPPED_SKINS = [
     "oracle",
+    "headphone-llama",
     "clippy",
     "nugget",
     "rusty",
@@ -25,7 +26,7 @@ SHIPPED_SKINS = [
     "madame-patate",
 ]
 
-AVATAR_SKINS = [s for s in SHIPPED_SKINS if s != "oracle"]
+AVATAR_SKINS = [s for s in SHIPPED_SKINS if s not in {"oracle", "headphone-llama"}]
 
 
 def _load_skin(name: str):
@@ -193,3 +194,17 @@ def test_hayley_runtime_states_use_their_matching_animations() -> None:
         hook: hayley.events[hook].animation
         for hook in expected
     } == expected
+
+
+def test_headphone_llama_ships_a_distinct_asset_for_every_behavior() -> None:
+    config = _load_skin("headphone-llama")
+    folder = AVATARS_DIR / "headphone-llama"
+    assert config.type == "oracle"
+    assert config.rendering.glow_on_hold
+    assert config.events["ptt_active"].glow
+    assert config.events["dictation"].glow
+    assert set(config.events) == set(EVENT_HOOKS)
+    animations = {response.animation for response in config.events.values()}
+    assert len(animations) == len(EVENT_HOOKS)
+    assert all((folder / name).is_file() for name in animations)
+    assert (folder / "idle.webp").is_file()
