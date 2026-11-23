@@ -331,6 +331,83 @@ def test_macos_vpio_input_emits_frames_and_configured_vad(tmp_path):
     assert audio_frames[0].num_channels == 1
 
 
+def test_output_transports_emit_transport_tts_started_for_player():
+    """Regression: the GUI player only opens for source='transport'.
+
+    The desktop event queue ignores any other tts_started source, so the new
+    transports emitting 'macos_vpio'/'sdapm' left audio playing with no player.
+    """
+    import queue as _queue
+
+    from distr.core.agent.libs import AudioRawFrame, LLMFullResponseStartFrame
+    from distr.core.agent.macos_vpio_transport import MacOsVpioAudioTransport
+    from distr.core.agent.sd_apm_transport import SdApmAudioTransport
+    from distr.core.audio.echo_canceller import ReferenceBuffer
+
+    def _drain_source(evq):
+        sources = []
+        while True:
+            try:
+                ev, data = evq.get_nowait()
+            except _queue.Empty:
+                break
+            if ev == "tts_started" and isinstance(data, dict):
+                sources.append(data.get("source"))
+        return sources
+
+    # sdapm (Windows/Unix path)
+    evq = _queue.Queue()
+    sd = SdApmAudioTransport(
+        input_sample_rate=16000, output_sample_rate=44100, vad_enabled=False,
+        event_queue=evq, aec_reference_buffer=ReferenceBuffer(max_duration_secs=1.0, sample_rate=44100),
+    )
+    out = sd.output()
+    out._started = True
+
+    async def run_sd():
+        async def noop(frame, direction=None):
+            pass
+
+        out.push_frame = noop
+        await out.process_frame(LLMFullResponseStartFrame(), None)
+        await out.process_frame(AudioRawFrame(audio=b"\x10\x00" * 4410, sample_rate=44100, num_channels=1), None)
+
+    asyncio.run(run_sd())
+    assert _drain_source(evq) == ["transport"]
+
+    # macos_vpio
+    evq2 = _queue.Queue()
+    import struct as _struct
+
+    vp = MacOsVpioAudioTransport(
+        pipeline_sample_rate=16000, output_sample_rate=44100, vad_enabled=False,
+        event_queue=evq2, aec_reference_buffer=ReferenceBuffer(max_duration_secs=1.0, sample_rate=44100),
+        helper_binary="/usr/bin/true",
+    )
+
+    class _FakeStdin:
+        def write(self, data):
+            pass
+
+        async def drain(self):
+            pass
+
+    vp._proc = SimpleNamespace(stdin=_FakeStdin(), stdout=None, returncode=None, pid=1)
+    vout = vp.output()
+    vout._started = True
+
+    async def run_vp():
+        async def noop(frame, direction=None):
+            pass
+
+        vout.push_frame = noop
+        await vout.process_frame(LLMFullResponseStartFrame(), None)
+        await vout.process_frame(AudioRawFrame(audio=b"\x10\x00" * 4410, sample_rate=44100, num_channels=1), None)
+
+    asyncio.run(run_vp())
+    assert _drain_source(evq2) == ["transport"]
+
+
 def test_livekit_aec_cursor_does_not_drift_during_silence():
     ref_buf = ReferenceBuffer(max_duration_secs=1.0, sample_rate=44100)
     aec = LiveKitAECFilter(input_sample_rate=16000, output_sample_rate=44100, reference_buffer=ref_buf)

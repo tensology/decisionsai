@@ -431,6 +431,7 @@ class MacOsVpioOutputTransport(FrameProcessor):
                 self._first_audio_at = None
                 self._total_out_secs = 0.0
                 self._state = AudioPlaybackState.SYNTHESIZING
+                t.new_playback_id()
 
         if isinstance(frame, AudioRawFrame) and isinstance(frame.audio, (bytes, bytearray)) and frame.audio:
             if not self._force_silence and not self._pipeline_cut:
@@ -491,7 +492,7 @@ class MacOsVpioOutputTransport(FrameProcessor):
             self._first_audio_at = time.monotonic()
             if t._ref_buf is not None:
                 t._ref_buf.set_active(True)
-            self._emit("tts_started", {"source": "macos_vpio", "playback_id": t._playback_id})
+            self._emit("tts_started", {"source": "transport", "backend": "macos_vpio", "playback_id": t._playback_id})
 
     def _schedule_finish(self):
         if self._finish_task is not None and not self._finish_task.done():

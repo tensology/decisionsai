@@ -24,11 +24,12 @@ STALE_CANCELLED_CLEAR_SEC = 1.5
 # barge-in valid for a short window instead.
 BARGEIN_ACCEPT_WINDOW_SEC = 1.5
 # How many spoken sentences may wait ahead of playback. Providers such as
-# FishAudio take about ten seconds per sentence, so an unbounded queue let a
-# normal reply fall 97 seconds behind and then play stale speech.
-# Conversational backlog cap: when live speech falls behind we drop stale lines
-# rather than reading minutes-old sentences.
-SPEAK_QUEUE_MAX = 4
+# FishAudio take a few seconds per sentence, so an unbounded queue could let a
+# reply fall minutes behind and then play stale speech. The cap is a safety
+# valve for a pathological backlog only: normal multi-sentence replies (and
+# stories) are read in full, because dropping here silently ate whole sentences.
+# A deliberate read-aloud uses SPEAK_QUEUE_MAX_READ_ALL below.
+SPEAK_QUEUE_MAX = 64
 # A deliberate read-aloud (About "Read about", a long document handed to
 # speak_text_directly) is the opposite case: the user asked for every word, so
 # the queue is given room and nothing is dropped.

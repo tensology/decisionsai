@@ -203,6 +203,7 @@ class MediaDevicesOutputTransport(FrameProcessor):
             self._response_started_at = time.monotonic()
             self._first_audio_at = None
             self._total_out_secs = 0.0
+            self._transport.new_playback_id()
 
         if isinstance(frame, AudioRawFrame) and isinstance(frame.audio, (bytes, bytearray)) and frame.audio:
             await self._write(frame)
@@ -259,7 +260,7 @@ class MediaDevicesOutputTransport(FrameProcessor):
             self._first_audio_at = time.monotonic()
             if md._ref_buf is not None:
                 md._ref_buf.set_active(True)
-            self._emit("tts_started", {"source": "mediadevices", "playback_id": md._playback_id})
+            self._emit("tts_started", {"source": "transport", "backend": "mediadevices", "playback_id": md._playback_id})
 
     def _schedule_finish(self):
         if self._scheduled_finish is not None and not self._scheduled_finish.done():
