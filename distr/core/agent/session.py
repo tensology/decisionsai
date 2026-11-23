@@ -1707,19 +1707,40 @@ class AgentSession:
         return str(value or "livekit").strip().lower()
 
     def _resolve_audio_backend(self) -> str:
-        """Pick the audio I/O backend: 'portaudio' (default, stable) or
-        'mediadevices' (rtc.MediaDevices APM).
+        """Pick the cross-platform full-duplex audio I/O backend.
 
-        Only the DECISIONS_AUDIO_BACKEND env var enables MediaDevices. The
-        MediaDevices transport is unstable here (native SIGABRT on dictation),
-        so it must never be selected implicitly from stored settings.
+        Resolution order:
+          1. ``DECISIONS_AUDIO_BACKEND`` env var (explicit override)
+          2. ``audio_backend`` DB setting (legacy ``mediadevices`` maps to ``auto``
+             because ``rtc.MediaDevices`` hits native SIGABRT on dictation)
+          3. ``auto``:
+             - macOS (``darwin``): ``vpio`` (Apple CoreAudio VoiceProcessingIO),
+               falling back to ``sdapm``, then ``portaudio``.
+             - Windows / Linux / Unix: ``sdapm`` (sounddevice + LiveKit WebRTC APM),
+               falling back to ``portaudio``.
         """
         import os
+        import sys
 
-        return str(os.environ.get("DECISIONS_AUDIO_BACKEND") or "portaudio").strip().lower()
+        env_val = (os.environ.get("DECISIONS_AUDIO_BACKEND") or "").strip().lower()
+        if env_val:
+            raw = env_val
+        else:
+            try:
+                raw = str(self.settings.get("audio_backend") or "auto").strip().lower()
+            except Exception:
+                raw = "auto"
+            # Legacy unstable setting upgrades cleanly to cross-platform 'auto'.
+            if raw in ("", "mediadevices"):
+                raw = "auto"
 
-    # Backends: 'portaudio' (default), 'sdapm' (sounddevice + LiveKit APM AEC),
-    # 'mediadevices' (unsupported: native SIGABRT).
+        if raw == "auto":
+            return "vpio" if sys.platform == "darwin" else "sdapm"
+        return raw
+
+    # Backends: 'auto' (macOS -> 'vpio' -> 'sdapm' -> 'portaudio';
+    # Windows/Unix -> 'sdapm' -> 'portaudio'), 'vpio', 'sdapm', 'portaudio',
+    # 'mediadevices' (env-only, unsupported: native SIGABRT).
 
     def _create_pipeline(self):
         """Create the Pipecat pipeline"""
@@ -1864,25 +1885,62 @@ class AgentSession:
 
         audio_backend = self._resolve_audio_backend()
         aec_filter = None
-        if audio_backend == 'sdapm':
-            from distr.core.agent.sd_apm_transport import SdApmAudioTransport
+        self.transport = None
 
-            self.transport = SdApmAudioTransport(
-                input_device=input_device_idx,
-                output_device=output_device_idx,
-                input_sample_rate=audio_config['input_sample_rate'],
-                output_sample_rate=audio_config['output_sample_rate'],
-                pipeline_sample_rate=audio_config['input_sample_rate'],
-                vad_analyzer=self.vad_analyzer,
-                event_queue=self.event_queue,
-                aec_reference_buffer=aec_ref_buf,
-            )
-            self.logger.info(
-                "Audio backend: sdapm (sounddevice + LiveKit APM, in_sr=%s out_sr=%s, aec=True)",
-                audio_config['input_sample_rate'],
-                audio_config['output_sample_rate'],
-            )
-        elif audio_backend == 'mediadevices':
+        if audio_backend == 'vpio':
+            try:
+                from distr.core.agent.macos_vpio_transport import MacOsVpioAudioTransport
+
+                self.transport = MacOsVpioAudioTransport(
+                    input_device_name=audio_config.get('input_device'),
+                    output_device_name=audio_config.get('output_device'),
+                    pipeline_sample_rate=audio_config['input_sample_rate'],
+                    output_sample_rate=audio_config['output_sample_rate'],
+                    vad_analyzer=self.vad_analyzer,
+                    event_queue=self.event_queue,
+                    aec_reference_buffer=aec_ref_buf,
+                )
+                aec_filter = self.transport.aec_metrics
+                self.logger.info(
+                    "Audio backend: vpio (macOS Apple VoiceProcessingIO, pipe_sr=%s out_sr=%s, hardware_aec=True)",
+                    audio_config['input_sample_rate'],
+                    audio_config['output_sample_rate'],
+                )
+            except Exception as exc:
+                self.logger.warning(
+                    "macOS VoiceProcessingIO backend unavailable (%s) — falling back to sdapm",
+                    exc,
+                )
+                audio_backend = 'sdapm'
+
+        if self.transport is None and audio_backend == 'sdapm':
+            try:
+                from distr.core.agent.sd_apm_transport import SdApmAudioTransport
+
+                self.transport = SdApmAudioTransport(
+                    input_device=input_device_idx,
+                    output_device=output_device_idx,
+                    input_sample_rate=audio_config['input_sample_rate'],
+                    output_sample_rate=audio_config['output_sample_rate'],
+                    pipeline_sample_rate=audio_config['input_sample_rate'],
+                    vad_analyzer=self.vad_analyzer,
+                    event_queue=self.event_queue,
+                    aec_reference_buffer=aec_ref_buf,
+                )
+                aec_filter = self.transport.aec_metrics
+                self.logger.info(
+                    "Audio backend: sdapm (sounddevice + LiveKit WebRTC APM, in_sr=%s out_sr=%s, aec=True)",
+                    audio_config['input_sample_rate'],
+                    audio_config['output_sample_rate'],
+                )
+            except Exception as exc:
+                self.logger.warning(
+                    "sdapm backend unavailable (%s) — falling back to portaudio",
+                    exc,
+                )
+                audio_backend = 'portaudio'
+
+        if self.transport is None and audio_backend == 'mediadevices':
             from distr.core.agent.mediadevices_transport import MediaDevicesAudioTransport
 
             self.transport = MediaDevicesAudioTransport(
@@ -1899,7 +1957,8 @@ class AgentSession:
                 audio_config['input_sample_rate'],
                 audio_config['output_sample_rate'],
             )
-        else:
+
+        if self.transport is None:
             aec_engine = self._resolve_aec_engine()
             if aec_engine == 'livekit':
                 try:

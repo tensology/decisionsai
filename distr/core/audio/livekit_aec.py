@@ -235,15 +235,22 @@ class LiveKitAECFilter(BaseAudioFilter):
         """Pull the next lockstep far-end window from the reference buffer."""
         if self._ref_buf is None:
             return None
+        if not bool(getattr(self._ref_buf, "is_active", False)):
+            # Reset cursor while TTS is idle so it never drifts ahead of write_pos.
+            self._far_read = None
+            return None
         num_out = max(1, int(round(num_in * self._output_sample_rate / self._input_sample_rate)))
         try:
             wp = int(self._ref_buf.write_pos)
         except Exception:
             return None
-        if self._far_read is None:
-            if wp < num_out:
-                return None
+        if wp < num_out:
+            return None
+        if self._far_read is None or self._far_read > wp:
             self._far_read = wp - num_out
+        if wp - self._far_read < num_out:
+            # No new speaker samples have arrived yet; do not advance past write_pos.
+            return np.zeros(num_in, dtype=np.float32)
         delay = max(0, wp - (self._far_read + num_out))
         raw = np.asarray(self._ref_buf.pull(num_out, delay), dtype=np.float32)
         self._far_read += num_out
@@ -295,15 +302,31 @@ class LiveKitAECFilter(BaseAudioFilter):
 
     @staticmethod
     def _correlation(a: np.ndarray, b: np.ndarray) -> float:
+        """Peak normalized cross-correlation allowing small acoustic lag."""
         if a.size == 0 or b.size == 0:
             return 0.0
         n = min(a.size, b.size)
-        a_c = a[-n:] - np.mean(a[-n:])
-        b_c = b[-n:] - np.mean(b[-n:])
-        denom = float(np.linalg.norm(a_c) * np.linalg.norm(b_c))
-        if denom < 1e-8:
+        if n < 16:
             return 0.0
-        return abs(float(np.dot(a_c, b_c))) / denom
+        a_seg = a[-n:]
+        b_seg = b[-n:]
+        best = 0.0
+        max_lag = min(n // 2, 160)
+        for lag in range(0, max_lag + 1, 4):
+            a_slice = a_seg[lag:] if lag else a_seg
+            b_slice = b_seg[: a_slice.size]
+            if a_slice.size < 16:
+                break
+            a_c = a_slice - np.mean(a_slice)
+            b_c = b_slice - np.mean(b_slice)
+            denom = float(np.linalg.norm(a_c) * np.linalg.norm(b_c))
+            if denom >= 1e-8:
+                c = abs(float(np.dot(a_c, b_c))) / denom
+                if c > best:
+                    best = c
+                    if best >= 0.85:
+                        break
+        return best
 
     @staticmethod
     def _resample(data: np.ndarray, target_length: int) -> np.ndarray:

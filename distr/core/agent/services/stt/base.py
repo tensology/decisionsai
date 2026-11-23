@@ -99,6 +99,11 @@ class BaseSTTService(STTService):
     # barge-in. Below this the frame is background noise, never speech.
     _SMART_BARGEIN_MIN_INPUT_RMS: float = 0.04
 
+    # Hardware AEC (macOS VoiceProcessingIO) suppresses noise down to ~0.0005
+    # and cancels speaker echo at the CoreAudio HAL boundary, so user speech
+    # starts cleanly around 0.012-0.02 RMS.
+    _HARDWARE_AEC_BARGEIN_MIN_RMS: float = 0.012
+
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
@@ -874,6 +879,15 @@ class BaseSTTService(STTService):
                 # mic, so the VAD is authoritative — no in-process
                 # discriminator is available or needed.
                 return False
+            if bool(getattr(aec, 'is_hardware_aec', False)):
+                # OS-level hardware AEC (macOS VoiceProcessingIO) cancels echo
+                # at the CoreAudio HAL boundary; only filter out quiet clicks/
+                # noise floor below real speech level.
+                metrics = getattr(aec, 'last_metrics', {}) or {}
+                resid_rms = float(
+                    metrics.get('residual_rms', metrics.get('input_rms', 0.0)) or 0.0
+                )
+                return resid_rms < self._HARDWARE_AEC_BARGEIN_MIN_RMS
             # Until the per-device delay is measured the reference is
             # misaligned, so correlation cannot be trusted — hold instead of
             # risking a self-interruption on the first response.

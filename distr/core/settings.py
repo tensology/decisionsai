@@ -70,7 +70,7 @@ DEFAULT_SETTINGS = {
     # Audio I/O backend: 'mediadevices' (rtc.MediaDevices APM, device-timed
     # AEC — default) | 'portaudio' (the legacy PyAudio transport).
     # Env override: DECISIONS_AUDIO_BACKEND.
-    'audio_backend': 'portaudio',
+    'audio_backend': 'auto',
     'startup_listening_state': 'remember',
     'hands_free_mode': False,
     'oracle_position': 'Custom',

@@ -155,8 +155,9 @@ class Settings(Base):
     bargein_mode = Column(String, default='smart')
     # Acoustic echo cancellation engine: 'livekit' (default) | 'pywebrtc'.
     aec_engine = Column(String, default='livekit')
-    # Audio I/O backend: 'mediadevices' (default) | 'portaudio'.
-    audio_backend = Column(String, default='mediadevices')
+    # Audio I/O backend: 'auto' (macOS VoiceProcessingIO; Windows/Unix sdapm),
+    # 'vpio', 'sdapm', or 'portaudio'.
+    audio_backend = Column(String, default='auto')
 
     # AI Settings
     ai_model = Column(String)
