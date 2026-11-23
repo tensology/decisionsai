@@ -2749,6 +2749,17 @@
     margin-bottom: 0;
 }
 
+@media (min-width: 760px) {
+    #chatConfigMain > .modal-row > .form-group {
+        flex: 3;
+        min-width: 0;
+    }
+
+    #chatConfigMain > .modal-row > .form-group + .form-group {
+        flex: 7;
+    }
+}
+
 .voice-select-row {
     display: flex;
     align-items: center;
