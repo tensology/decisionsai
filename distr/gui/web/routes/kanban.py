@@ -5761,14 +5761,20 @@ def create_routes():
                         from requests.auth import HTTPBasicAuth
 
                         base_url = f"https://{domain}"
-                        resp = requests.get(
-                            f"{base_url}/rest/agile/1.0/board",
-                            auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
-                            headers={"Accept": "application/json"},
-                            timeout=10,
-                        )
-                        if resp.status_code == 200:
-                            for b in resp.json().get("values", []):
+                        start_at = 0
+                        for _ in range(5):
+                            resp = requests.get(
+                                f"{base_url}/rest/agile/1.0/board",
+                                params={"startAt": start_at, "maxResults": 100},
+                                auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
+                                headers={"Accept": "application/json"},
+                                timeout=10,
+                            )
+                            if resp.status_code != 200:
+                                break
+                            payload = resp.json() or {}
+                            values = payload.get("values", [])
+                            for b in values:
                                 location = b.get("location") or {}
                                 jira_boards.append({
                                     "id": str(b["id"]),
@@ -5778,6 +5784,9 @@ def create_routes():
                                     "project_key": location.get("projectKey") or "",
                                     "can_create_ticket": True,
                                 })
+                            if payload.get("isLast", True) or not values:
+                                break
+                            start_at += len(values)
                     except Exception as e:
                         logger.warning("Jira board fetch failed: %s", e)
         except Exception as e:

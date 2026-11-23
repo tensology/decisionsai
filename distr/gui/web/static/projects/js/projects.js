@@ -453,7 +453,8 @@
             if (!items.length) return;
             html += '<optgroup label="' + escapeAttr(group.label) + '">';
             html += items.map(function(opt) {
-                return '<option value="' + escapeAttr(opt.value) + '">' + escapeAttr(opt.label) + "</option>";
+                var rawAttr = opt.rawName ? ' data-board-name="' + escapeAttr(opt.rawName) + '"' : "";
+                return '<option value="' + escapeAttr(opt.value) + '"' + rawAttr + ">" + escapeAttr(opt.label) + "</option>";
             }).join("");
             html += "</optgroup>";
         });
@@ -487,9 +488,17 @@
                 });
             });
             (external.jira || []).forEach(function(b) {
+                var rawName = b.name || String(b.id || "");
+                var projName = (b.project_name || "").trim();
+                var projKey = (b.project_key || "").trim();
+                var label = rawName;
+                if (projName && projName.toLowerCase() !== rawName.toLowerCase()) {
+                    label = rawName + " — " + projName + (projKey ? " (" + projKey + ")" : "");
+                }
                 projectBoardOptions.push({
                     source: "jira",
-                    label: b.name || String(b.id || ""),
+                    label: label,
+                    rawName: rawName,
                     value: "jira:" + b.id
                 });
             });
@@ -536,7 +545,8 @@
         var boardSel = document.getElementById("detail-board");
         var boardName = null;
         if (boardSel && boardSel.selectedIndex >= 0) {
-            boardName = (boardSel.options[boardSel.selectedIndex].textContent || "").trim() || null;
+            var selOpt = boardSel.options[boardSel.selectedIndex];
+            boardName = ((selOpt.getAttribute("data-board-name") || selOpt.textContent) || "").trim() || null;
         }
         if (source === "local") {
             return {

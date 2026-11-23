@@ -1281,7 +1281,10 @@ class KanbanTicketTool(BaseTool):
                 external_board, external_boards = self._find_external_board(provider, board_id=board_id, board_name=board_name, text=text)
                 if not external_board:
                     if external_boards:
-                        names = ", ".join(f"'{b.get('name')}' (ID {b.get('id')})" for b in external_boards[:8])
+                        names = ", ".join(
+                            f"'{b.get('name')}' (ID {b.get('id')}){self._format_jira_project_suffix(b)}"
+                            for b in external_boards[:25]
+                        )
                         return voice_then_reference("Tell me which Trello board that card is on.", f"Available Trello boards: {names}")
                     return voice_then_reference("I could not find connected Trello boards.", "No Trello boards are available.")
                 target_list, lists = self._trello_list_for_lane(external_board, lane_name)
@@ -1541,13 +1544,16 @@ class KanbanTicketTool(BaseTool):
             elif action in ("list_trello_tickets", "list_jira_tickets", "list_external_tickets"):
                 provider = "trello" if "trello" in action else "jira" if "jira" in action else (text.split()[0] if text else "trello")
                 ext_board_id = str(board_id) if board_id else ""
-                if not ext_board_id and board_name:
-                    # Try to find the external board by name
-                    ext = self._fetch_external_boards()
-                    for b in ext.get(provider, []):
-                        if board_name.lower() in b["name"].lower():
-                            ext_board_id = b["id"]
-                            break
+                matched_board = None
+                if not ext_board_id and (board_name or text):
+                    matched_board, _ = self._find_external_board(
+                        provider,
+                        board_id=None,
+                        board_name=board_name,
+                        text=text,
+                    )
+                    if matched_board:
+                        ext_board_id = str(matched_board.get("id") or "")
                 if not ext_board_id:
                     return voice_then_reference(
                         f"Say which {provider} board to use, or list boards first.",
@@ -1560,7 +1566,10 @@ class KanbanTicketTool(BaseTool):
                         f"No tickets found on {provider} board {ext_board_id}.",
                     )
                 lines = [f"#{t['id']} {t['title']}" + (f" [{t.get('status', '')}]" if t.get('status') else "") for t in tickets[:30]]
-                ref = f"{provider.title()} board tickets ({len(tickets)}):\n" + "\n".join(lines)
+                board_label = ""
+                if matched_board:
+                    board_label = f" '{matched_board.get('name')}'{self._format_jira_project_suffix(matched_board)}"
+                ref = f"{provider.title()} board{board_label} tickets ({len(tickets)}):\n" + "\n".join(lines)
                 spoken = f"I pulled your {provider} board; there are {len(tickets)} items. Details are below."
                 return voice_then_reference(spoken, ref)
             elif action in ("update_external_ticket", "move_external_ticket", "comment_external_ticket"):
@@ -1831,14 +1840,37 @@ class KanbanTicketTool(BaseTool):
         ] if t.todos else []
         links = [f"{(l.title or '').strip()}: {(l.url or '').strip()}" for l in t.links] if t.links else []
         desc = self._plain_ticket_description(t.description)
-        parts = [
-            f"Ticket #{t.id}: {t.title}",
+        parts = [f"Ticket #{t.id}: {t.title}"]
+        board = t.lane.board if (t.lane and getattr(t.lane, "board", None)) else None
+        if board is not None:
+            b_src = (getattr(board, "source", None) or "database").strip().lower()
+            b_src_label = "local" if b_src == "database" else b_src
+            ext_bid = (getattr(board, "external_board_id", None) or "").strip()
+            ext_part = f", external_board_id={ext_bid}" if ext_bid else ""
+            parts.append(f"Board: {board.name} (ID {board.id}, {b_src_label}{ext_part})")
+        parts.extend([
             f"Lane: {t.lane.name if t.lane else '?'}",
             f"Priority: {t.priority}",
             f"Complexity: {normalize_ticket_complexity(getattr(t, 'complexity', None))}",
             f"Description: {desc}",
             f"Send to CLI: {'Yes' if t.send_to_cli else 'No'}",
-        ]
+        ])
+        project_id = getattr(t, "linked_project_id", None) or (
+            getattr(board, "default_project_id", None) if board is not None else None
+        )
+        if project_id:
+            try:
+                sess = getattr(getattr(t, "_sa_instance_state", None), "session", None)
+                if sess is not None:
+                    ext_link = self._project_external_link_in_session(sess, int(project_id))
+                    if ext_link:
+                        prov_title = ext_link["provider"].title()
+                        bname = f" ({ext_link['board_name']})" if ext_link.get("board_name") else ""
+                        parts.append(
+                            f"Project external board: {prov_title} board {ext_link['board_id']}{bname}"
+                        )
+            except Exception:
+                pass
         source_provider = (getattr(t, "source_provider", None) or "").strip()
         if source_provider:
             source_bits = [source_provider]
@@ -1886,15 +1918,111 @@ class KanbanTicketTool(BaseTool):
 
     # ── Action implementations ────────────────────────────────────────────
 
+    @staticmethod
+    def _format_jira_project_suffix(board: dict) -> str:
+        project = (board.get("project_name") or "").strip()
+        pkey = (board.get("project_key") or "").strip()
+        label = f"{project} ({pkey})" if project and pkey else (project or pkey)
+        return f" [project: {label}]" if label else ""
+
+    @staticmethod
+    def _project_external_link_in_session(session, project_id: int) -> Optional[dict]:
+        """Return external Jira/Trello board link for a project, if configured."""
+        from distr.core.db.kanban import KanbanBoard
+        from distr.core.db.projects import Project
+
+        proj = (
+            session.query(Project)
+            .filter(Project.id == project_id, Project.deleted_at.is_(None))
+            .first()
+        )
+        if proj is not None:
+            prov = (proj.provider or "").strip().lower()
+            bid = (proj.board_id or "").strip()
+            if prov in ("jira", "trello") and bid:
+                return {
+                    "provider": prov,
+                    "board_id": bid,
+                    "board_name": (proj.board_name or "").strip(),
+                }
+        ext_board = (
+            session.query(KanbanBoard)
+            .filter(
+                KanbanBoard.default_project_id == project_id,
+                KanbanBoard.source.in_(["jira", "trello"]),
+                KanbanBoard.external_board_id.isnot(None),
+            )
+            .first()
+        )
+        if ext_board is not None:
+            return {
+                "provider": (ext_board.source or "").strip().lower(),
+                "board_id": str(ext_board.external_board_id).strip(),
+                "board_name": (ext_board.name or "").strip(),
+            }
+        return None
+
+    def _project_external_link_maps(self) -> tuple[dict[int, dict], dict[tuple[str, str], str]]:
+        """Map project_id -> external board link and (provider, ext_board_id) -> project name."""
+        by_project: dict[int, dict] = {}
+        by_ext_board: dict[tuple[str, str], str] = {}
+        try:
+            from distr.core.db.kanban import KanbanBoard
+            from distr.core.db.projects import Project
+
+            with self._get_session() as s:
+                projects = s.query(Project).filter(Project.deleted_at.is_(None)).all()
+                proj_names = {int(p.id): (p.name or "").strip() for p in projects}
+                for p in projects:
+                    prov = (p.provider or "").strip().lower()
+                    bid = (p.board_id or "").strip()
+                    if prov in ("jira", "trello") and bid:
+                        by_project[int(p.id)] = {
+                            "provider": prov,
+                            "board_id": bid,
+                            "board_name": (p.board_name or "").strip(),
+                        }
+                        if proj_names[int(p.id)]:
+                            by_ext_board[(prov, bid)] = proj_names[int(p.id)]
+                ext_boards = (
+                    s.query(KanbanBoard)
+                    .filter(
+                        KanbanBoard.source.in_(["jira", "trello"]),
+                        KanbanBoard.external_board_id.isnot(None),
+                        KanbanBoard.default_project_id.isnot(None),
+                    )
+                    .all()
+                )
+                for eb in ext_boards:
+                    pid = int(eb.default_project_id)
+                    prov = (eb.source or "").strip().lower()
+                    bid = str(eb.external_board_id).strip()
+                    if not bid:
+                        continue
+                    by_project.setdefault(
+                        pid,
+                        {"provider": prov, "board_id": bid, "board_name": (eb.name or "").strip()},
+                    )
+                    if pid in proj_names and proj_names[pid]:
+                        by_ext_board.setdefault((prov, bid), proj_names[pid])
+        except Exception:
+            pass
+        return by_project, by_ext_board
+
     def _action_list_boards(self) -> str:
         active_board, _ = self._get_active_board(auto_recover=True)
         active_id = active_board["id"] if active_board else None
         boards = self._all_boards()
+        project_ext_by_pid, ext_linked_project = self._project_external_link_maps()
         lines = []
         for b in boards:
             marker = ", ACTIVE" if active_id is not None and b["id"] == active_id else ""
             path = self._ticket_board_path("database", b["id"])
-            lines.append(f"Board '{b['name']}' (ID {b['id']}, local{marker}) → {path}")
+            ext_link = project_ext_by_pid.get(int(b["default_project_id"])) if b.get("default_project_id") else None
+            link_suffix = ""
+            if ext_link:
+                link_suffix = f" [project linked to {ext_link['provider'].title()} board {ext_link['board_id']}]"
+            lines.append(f"Board '{b['name']}' (ID {b['id']}, local{marker}){link_suffix} → {path}")
 
         # Also fetch external boards
         try:
@@ -1906,17 +2034,19 @@ class KanbanTicketTool(BaseTool):
                     continue
                 seen.add(key)
                 path = self._ticket_board_path("trello", b["id"], b.get("url", ""))
-                lines.append(f"Board '{b['name']}' (Trello, ID {b['id']}) → {path}")
+                linked_name = ext_linked_project.get(key)
+                linked_suffix = f" [linked project: {linked_name}]" if linked_name else ""
+                lines.append(f"Board '{b['name']}' (Trello, ID {b['id']}){linked_suffix} → {path}")
             for b in ext.get("jira", []):
                 key = ("jira", str(b.get("id") or ""))
                 if key in seen:
                     continue
                 seen.add(key)
                 path = self._ticket_board_path("jira", b["id"])
-                project = (b.get("project_name") or "").strip()
-                pkey = (b.get("project_key") or "").strip()
-                label = f"{project} ({pkey})" if project and pkey else (project or pkey)
-                suffix = f" [project: {label}]" if label else ""
+                suffix = self._format_jira_project_suffix(b)
+                linked_name = ext_linked_project.get(key)
+                if linked_name:
+                    suffix += f" [linked project: {linked_name}]"
                 lines.append(f"Board '{b['name']}' (Jira, ID {b['id']}){suffix} → {path}")
         except Exception as e:
             logger.debug("Could not fetch external boards: %s", e)
@@ -1975,13 +2105,20 @@ class KanbanTicketTool(BaseTool):
                     from requests.auth import HTTPBasicAuth
                     domain = self._jira_domain(acct)
                     if domain:
-                        resp = requests.get(
-                            f"https://{domain}/rest/agile/1.0/board",
-                            auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
-                            headers={"Accept": "application/json"}, timeout=10,
-                        )
-                        if resp.status_code == 200:
-                            for b in resp.json().get("values", []):
+                        start_at = 0
+                        for _ in range(5):
+                            resp = requests.get(
+                                f"https://{domain}/rest/agile/1.0/board",
+                                params={"startAt": start_at, "maxResults": 100},
+                                auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
+                                headers={"Accept": "application/json"},
+                                timeout=10,
+                            )
+                            if resp.status_code != 200:
+                                break
+                            payload = resp.json() or {}
+                            values = payload.get("values", [])
+                            for b in values:
                                 location = b.get("location") or {}
                                 result["jira"].append({
                                     "id": str(b["id"]),
@@ -1990,6 +2127,9 @@ class KanbanTicketTool(BaseTool):
                                     "project_name": location.get("projectName") or "",
                                     "display_name": location.get("displayName") or "",
                                 })
+                            if payload.get("isLast", True) or not values:
+                                break
+                            start_at += len(values)
                 except Exception:
                     pass
         return result
@@ -2088,8 +2228,8 @@ class KanbanTicketTool(BaseTool):
             if not external_board:
                 if external_boards:
                     board_list = ", ".join(
-                        f"'{b.get('name')}' (ID {b.get('id')})"
-                        for b in external_boards[:8]
+                        f"'{b.get('name')}' (ID {b.get('id')}){self._format_jira_project_suffix(b)}"
+                        for b in external_boards[:25]
                     )
                     return voice_then_reference(
                         f"Tell me which {remote_provider.title()} board to use.",
@@ -3302,6 +3442,8 @@ class KanbanTicketTool(BaseTool):
                         "id": board["id"],
                         "name": board["name"],
                         "board_url": board.get("url", ""),
+                        "project_name": board.get("project_name", ""),
+                        "project_key": board.get("project_key", ""),
                     }
                 )
 
@@ -3374,7 +3516,7 @@ class KanbanTicketTool(BaseTool):
                     candidate.get("board_url", ""),
                 )
                 lines.append(
-                    f"- '{candidate['name']}' ({label}, ID {candidate['id']}) → {path}"
+                    f"- '{candidate['name']}' ({label}, ID {candidate['id']}){self._format_jira_project_suffix(candidate)} → {path}"
                 )
             ref = (
                 "Multiple boards match that name. Say which source to open (local, Jira, or Trello), "

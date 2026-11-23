@@ -343,6 +343,7 @@ class ContextAssembler:
                         if domain:
                             resp = requests.get(
                                 f"https://{domain}/rest/agile/1.0/board",
+                                params={"maxResults": 100},
                                 auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
                                 headers={"Accept": "application/json"}, timeout=5,
                             )

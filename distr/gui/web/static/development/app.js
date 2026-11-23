@@ -1047,6 +1047,18 @@ function pickerOptionHtml({ key, label, provider, meta, selected }) {
     return `<button type="button" role="option" data-picker-key="${escapeHtml(key)}" aria-selected="${selected}"><span class="picker-option-label">${escapeHtml(label)}</span>${meta ? `<small>${escapeHtml(meta)}</small>` : ''}</button>`;
 }
 
+function boardDisplayMeta(board) {
+    const parts = [];
+    const projName = String(board?.project_name || '').trim();
+    const boardName = String(board?.name || '').trim();
+    if (projName && projName.toLowerCase() !== boardName.toLowerCase()) {
+        const key = String(board?.project_key || '').trim();
+        parts.push(key ? `${projName} (${key})` : projName);
+    }
+    parts.push(board?.project_id ? 'Linked' : 'Not linked');
+    return parts.join(' · ');
+}
+
 function renderBoardPicker() {
     const board = boardByKey(state.selectedBoardKey);
     const locked = Boolean(state.currentChat || state.boardScopedDraft);
@@ -1070,7 +1082,7 @@ function renderBoardPicker() {
         groups
             .map(
                 (group) =>
-                    `<div class="picker-group-label" role="presentation">${escapeHtml(providerName(group.provider))}</div>${group.boards.map((item) => pickerOptionHtml({ key: item.key, label: item.name || 'Untitled board', meta: item.project_id ? 'Linked' : 'Not linked', selected: item.key === state.selectedBoardKey })).join('')}`
+                    `<div class="picker-group-label" role="presentation">${escapeHtml(providerName(group.provider))}</div>${group.boards.map((item) => pickerOptionHtml({ key: item.key, label: item.name || 'Untitled board', meta: boardDisplayMeta(item), selected: item.key === state.selectedBoardKey })).join('')}`
             )
             .join('');
     menu.querySelectorAll('[data-picker-key]').forEach((button) => button.addEventListener('click', () => selectBoard(button.dataset.pickerKey)));

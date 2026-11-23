@@ -5024,6 +5024,8 @@
             id: String(board.id),
             source: source,
             name: board.name || "Untitled Board",
+            project_name: board.project_name || "",
+            project_key: board.project_key || "",
             url: board.url || board.external_url || "",
             local_id: board.local_id || (source === "database" ? board.id : null),
             default_project_id: board.default_project_id || null,
@@ -5058,6 +5060,9 @@
             html += '<optgroup label="' + esc(group.label) + '">';
             html += items.map(function (opt) {
                 var projectName = projectNameById(opt.default_project_id);
+                if (!projectName && opt.project_name && String(opt.project_name).toLowerCase() !== String(opt.name || "").toLowerCase()) {
+                    projectName = opt.project_name + (opt.project_key ? " (" + opt.project_key + ")" : "");
+                }
                 var label = opt.name + (projectName ? "  [" + projectName + "]" : "");
                 return '<option value="' + esc(opt.value) + '">' + esc(label) + '</option>';
             }).join("");

@@ -853,9 +853,16 @@ export function createSidebar({ context, actions, el }) {
         const kanbanButton = actions.boardSupportsKanban?.(board)
             ? `<button class="board-row-action board-kanban" type="button" data-board-kanban="${actions.escapeHtml(board.key)}" aria-label="Open board for ${actions.escapeHtml(board.name || 'board')}" title="Open board"><svg aria-hidden="true" viewBox="0 0 16 16"><rect x="2.5" y="3" width="3" height="10" rx=".8"/><rect x="6.5" y="3" width="3" height="7" rx=".8"/><rect x="10.5" y="3" width="3" height="5" rx=".8"/></svg></button>`
             : '';
+        const baseName = String(board.name || 'Ticket board').trim();
+        const jiraProject = String(board.project_name || '').trim();
+        const distinctJiraProject = jiraProject && jiraProject.toLowerCase() !== baseName.toLowerCase();
+        const displayName = distinctJiraProject ? `${baseName} · ${jiraProject}` : baseName;
+        const selectTitle = distinctJiraProject
+            ? `${baseName} — ${jiraProject}${board.project_key ? ` (${board.project_key})` : ''}`
+            : baseName;
         const projectRow = `<div class="project-row${selected ? ' active' : ''}">
             ${hasTasks ? `<button class="project-toggle project-folder${collapsed ? '' : ' expanded'}" type="button" data-board-toggle="${actions.escapeHtml(board.key)}" aria-expanded="${String(!collapsed)}" aria-label="${collapsed ? 'Expand' : 'Collapse'} ${actions.escapeHtml(board.name || 'board')} threads"><span class="folder-icon">${boardFolderIconHtml(true)}${busyIcon}</span></button>` : `<span class="project-toggle project-folder empty" aria-hidden="true"><span class="folder-icon">${boardFolderIconHtml(false)}</span></span>`}
-            <button class="project-select" type="button" data-board-select="${actions.escapeHtml(board.key)}"${selected ? ' aria-current="true"' : ''}><span>${actions.escapeHtml(board.name || 'Ticket board')}</span></button>
+            <button class="project-select" type="button" data-board-select="${actions.escapeHtml(board.key)}" title="${actions.escapeHtml(selectTitle)}"${selected ? ' aria-current="true"' : ''}><span>${actions.escapeHtml(displayName)}</span></button>
             <div class="board-row-tail${hasTasks ? ' has-threads' : ''}">${kanbanButton}${boardTerminalActionHtml(board)}<button class="board-row-action board-new-chat" type="button" data-board-new-chat="${actions.escapeHtml(board.key)}" aria-label="New thread in ${actions.escapeHtml(board.name || 'board')}" title="New thread in board"><span aria-hidden="true">+</span></button></div>
         </div>`;
         return `<section class="project-group${running ? ' has-running-thread' : ''}${ready ? ' has-ready-thread' : ''}" data-board-group="${actions.escapeHtml(board.key)}">
