@@ -348,7 +348,14 @@ class ContextAssembler:
                             )
                             if resp.status_code == 200:
                                 for b in resp.json().get("values", []):
-                                    summary.append({"board_name": b["name"], "source": "jira", "board_id": str(b["id"])})
+                                    location = b.get("location") or {}
+                                    summary.append({
+                                        "board_name": b["name"],
+                                        "source": "jira",
+                                        "board_id": str(b["id"]),
+                                        "project_name": location.get("projectName") or "",
+                                        "project_key": location.get("projectKey") or "",
+                                    })
                     except Exception:
                         pass
         except Exception:

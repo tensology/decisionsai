@@ -1158,7 +1158,10 @@
         }
         boards = sortExternalBoardsForSidebar(boards);
         var search = (document.getElementById("kb-search").value || "").toLowerCase();
-        var filtered = search ? boards.filter(function(b) { return b.name.toLowerCase().indexOf(search) >= 0; }) : boards;
+        var filtered = search ? boards.filter(function(b) {
+            var haystack = [b.name, b.project_name, b.project_key].filter(Boolean).join(" ").toLowerCase();
+            return haystack.indexOf(search) >= 0;
+        }) : boards;
         container.innerHTML = filtered.length ? "" : '<p class="text-xs text-gray-500 italic">No matching boards</p>';
         filtered.forEach(function(b) {
             var div = document.createElement("div");
@@ -1171,7 +1174,11 @@
             div.setAttribute("aria-selected", currentBoard && currentBoard.id === b.id && currentBoard.source === source ? "true" : "false");
             var defaultColor = source === "trello" ? "#0079bf" : "#0052cc";
             var iconColor = b.color || defaultColor;
-            div.innerHTML = '<span class="kb-src-icon" style="background:' + esc(iconColor) + '"></span><span class="flex-1 truncate">' + esc(b.name) + '</span>';
+            var projectLabel = b.project_name && String(b.project_name).toLowerCase() !== String(b.name).toLowerCase()
+                ? esc(b.project_name) + (b.project_key ? " (" + esc(b.project_key) + ")" : "")
+                : "";
+            var sub = projectLabel ? '<span class="block text-[10px] text-gray-500 truncate">' + projectLabel + '</span>' : '';
+            div.innerHTML = '<span class="kb-src-icon" style="background:' + esc(iconColor) + '"></span><span class="flex-1 min-w-0"><span class="block truncate">' + esc(b.name) + '</span>' + sub + '</span>';
             div.onclick = function() { selectBoard(source, b.id, b.url); };
             div.onfocus = function() { if (!currentBoard || currentBoard.id !== b.id || currentBoard.source !== source) selectBoard(source, b.id, b.url); };
             div.oncontextmenu = function(e) { e.preventDefault(); showExtBoardContextMenu(e, source, b.id, b.url); };

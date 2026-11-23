@@ -987,10 +987,36 @@ class KanbanTicketTool(BaseTool):
             candidate = re.sub(r"\s+", " ", candidate.lower()).strip()
             if not candidate:
                 continue
+            candidate_words = set(re.findall(r"[a-z0-9]+", candidate))
+            strong_match: Optional[dict] = None
+            weak_matches: List[dict] = []
             for board in boards:
-                external_name = (board.get("name") or "").lower()
-                if external_name and (external_name in candidate or candidate in external_name):
-                    return board, boards
+                # Match on the board name and, for Jira, its project name/display
+                # name so a board like 'STK board' resolves for "SpoorTrack".
+                aliases = [
+                    (board.get("name") or "").lower(),
+                    (board.get("project_name") or "").lower(),
+                    (board.get("display_name") or "").lower(),
+                ]
+                if any(alias and (alias in candidate or candidate in alias) for alias in aliases):
+                    strong_match = board
+                    break
+                project_key = (board.get("project_key") or "").strip().lower()
+                if project_key and re.search(rf"\b{re.escape(project_key)}\b", candidate):
+                    strong_match = board
+                    break
+                # Weak match: a distinctive project-name word inside the sentence.
+                project_words = {
+                    w
+                    for w in re.findall(r"[a-z0-9]+", (board.get("project_name") or "").lower())
+                    if len(w) >= 4
+                }
+                if project_words & candidate_words:
+                    weak_matches.append(board)
+            if strong_match is not None:
+                return strong_match, boards
+            if len(weak_matches) == 1:
+                return weak_matches[0], boards
 
         if len(boards) == 1:
             return boards[0], boards
@@ -1887,7 +1913,11 @@ class KanbanTicketTool(BaseTool):
                     continue
                 seen.add(key)
                 path = self._ticket_board_path("jira", b["id"])
-                lines.append(f"Board '{b['name']}' (Jira, ID {b['id']}) → {path}")
+                project = (b.get("project_name") or "").strip()
+                pkey = (b.get("project_key") or "").strip()
+                label = f"{project} ({pkey})" if project and pkey else (project or pkey)
+                suffix = f" [project: {label}]" if label else ""
+                lines.append(f"Board '{b['name']}' (Jira, ID {b['id']}){suffix} → {path}")
         except Exception as e:
             logger.debug("Could not fetch external boards: %s", e)
 
@@ -1957,6 +1987,8 @@ class KanbanTicketTool(BaseTool):
                                     "id": str(b["id"]),
                                     "name": b["name"],
                                     "project_key": location.get("projectKey") or "",
+                                    "project_name": location.get("projectName") or "",
+                                    "display_name": location.get("displayName") or "",
                                 })
                 except Exception:
                     pass

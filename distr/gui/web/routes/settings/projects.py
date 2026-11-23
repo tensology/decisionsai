@@ -629,7 +629,13 @@ def register_routes(router, templates):
                         br = requests.get(f"{url}/rest/agile/1.0/board", headers=headers, params={"maxResults": 1000, "type": "scrum,kanban"}, timeout=30)
                         if br.status_code == 200 and "values" in br.json():
                             for b in br.json()["values"]:
-                                all_boards.append({"id": str(b.get("id")), "name": b.get("name") or "Unnamed Board"})
+                                location = b.get("location") or {}
+                                all_boards.append({
+                                    "id": str(b.get("id")),
+                                    "name": b.get("name") or "Unnamed Board",
+                                    "project_name": location.get("projectName") or "",
+                                    "project_key": location.get("projectKey") or "",
+                                })
                     except Exception as e:
                         logger.warning(f"Jira boards fetch: {e}")
                 return JSONResponse({"boards": all_boards})

@@ -5769,10 +5769,13 @@ def create_routes():
                         )
                         if resp.status_code == 200:
                             for b in resp.json().get("values", []):
+                                location = b.get("location") or {}
                                 jira_boards.append({
                                     "id": str(b["id"]),
                                     "name": b["name"],
-                                    "url": f"https://{domain}/jira/software/projects/{b.get('location', {}).get('projectKey', '')}/boards/{b['id']}",
+                                    "url": f"https://{domain}/jira/software/projects/{location.get('projectKey', '')}/boards/{b['id']}",
+                                    "project_name": location.get("projectName") or "",
+                                    "project_key": location.get("projectKey") or "",
                                     "can_create_ticket": True,
                                 })
                     except Exception as e:
