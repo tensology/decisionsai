@@ -432,3 +432,79 @@ def test_manual_model_route_defaults_empty_backend_to_pi():
     with get_session() as db:
         chat = db.get(Chat, chat_id)
         assert development_thread_metadata(chat)["model_route"]["backend"] == "pi"
+
+
+def test_thread_title_referencing_existing_ticket_reuses_it_instead_of_duplicating():
+    """A thread titled 'Ticket #N …' must bind ticket N, not mint a duplicate.
+
+    Regression for the Plan My Charter case: the agent created ticket #329,
+    then dispatched a Development thread whose title began with
+    'Ticket #329 on the Plan My Charter board — …', and promotion created a
+    second tracking ticket (#330).
+    """
+    from distr.core.workflow.development_threads import _ensure_local_ticket_for_thread
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    with Session() as db:
+        board = KanbanBoard(name="Plan My Charter", source="database")
+        db.add(board)
+        db.flush()
+        lanes = {}
+        for i, name in enumerate(("Backlog", "In Progress", "QA", "Complete")):
+            lane = KanbanLane(board_id=board.id, name=name, position=i)
+            db.add(lane)
+            lanes[name] = lane
+        db.flush()
+
+        real = KanbanTicket(
+            lane_id=lanes["Backlog"].id,
+            title="Replace vessel/charter selector icon with a proper cog icon",
+            source_provider="manual",
+        )
+        db.add(real)
+        db.flush()
+
+        root = Chat(
+            title=f'Ticket #{real.id} on the Plan My Charter board — "Replace vessel/c',
+            project_id=12,
+        )
+        db.add(root)
+        db.flush()
+
+        ticket_id, ticket_key, lane_name = _ensure_local_ticket_for_thread(
+            db, root, board_key=f"decisions:{board.id}", ticket_id=None, title=root.title,
+        )
+
+        assert ticket_id == real.id
+        assert ticket_key == str(real.id)
+        # No duplicate tracking ticket was created.
+        assert db.query(KanbanTicket).count() == 1
+        assert db.get(KanbanTicket, real.id).source_chat_id == root.id
+
+
+def test_thread_title_without_ticket_reference_still_creates_its_own_ticket():
+    from distr.core.workflow.development_threads import _ensure_local_ticket_for_thread
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    with Session() as db:
+        board = KanbanBoard(name="Plan My Charter", source="database")
+        db.add(board)
+        db.flush()
+        for i, name in enumerate(("Backlog", "In Progress", "QA", "Complete")):
+            db.add(KanbanLane(board_id=board.id, name=name, position=i))
+        db.flush()
+
+        root = Chat(title="Fix the booking flow on the charter site", project_id=12)
+        db.add(root)
+        db.flush()
+
+        ticket_id, _, _ = _ensure_local_ticket_for_thread(
+            db, root, board_key=f"decisions:{board.id}", ticket_id=None, title=root.title,
+        )
+
+        assert ticket_id is not None
+        assert db.query(KanbanTicket).count() == 1

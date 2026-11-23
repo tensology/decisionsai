@@ -448,6 +448,26 @@ def _ensure_local_ticket_for_thread(
             existing.linked_project_id = target_board.default_project_id
             existing.linked_workflow_id = target_board.default_workflow_id or existing.linked_workflow_id
         return int(existing.id), str(existing.id), lane.name if lane else None
+
+    # A thread raised to run an existing ticket usually carries that ticket in
+    # its title (e.g. "Ticket #329 on the Plan My Charter board — …"). Reuse the
+    # referenced ticket instead of minting a duplicate tracking ticket.
+    if ticket_id is None and target_board is not None:
+        import re as _re
+        source_text = _clean(title) or _clean(root.title)
+        _match = _re.search(r"ticket\s*#\s*(\d+)\b", source_text, _re.IGNORECASE)
+        if _match:
+            referenced = db.get(KanbanTicket, int(_match.group(1)))
+            ref_lane = db.get(KanbanLane, int(referenced.lane_id)) if (referenced is not None and referenced.lane_id) else None
+            if (
+                referenced is not None
+                and ref_lane is not None
+                and int(ref_lane.board_id) == int(target_board.id)
+                and referenced.source_chat_id in (None, int(root.id))
+            ):
+                referenced.source_chat_id = int(root.id)
+                return int(referenced.id), str(referenced.id), ref_lane.name
+
     if target_board is None:
         if _clean(board_key).lower().startswith("decisions:"):
             raise ValueError("Selected board was not found.")
