@@ -493,6 +493,19 @@ class OracleControlTool(BaseTool):
         return self._run(action=action, text=text)
 
 
+class ModeControlInput(BaseModel):
+    """Arguments for switching the input mode."""
+
+    action: str = Field(
+        default="",
+        description="One of 'ptt' (push-to-talk), 'continuous' (hands-free), or 'toggle'.",
+    )
+    text: str = Field(
+        default="",
+        description="The user's words when action is omitted, e.g. 'swap over from continuous mode to push to talk'.",
+    )
+
+
 class ModeControlTool(BaseTool):
     """Tool for controlling the input mode (PTT vs Continuous/Hands-free)."""
     
@@ -519,6 +532,7 @@ class ModeControlTool(BaseTool):
     
     chat_manager: Optional[Any] = Field(default=None, exclude=True)
     event_queue: Optional[Any] = Field(default=None, exclude=True)
+    args_schema: type[BaseModel] = ModeControlInput
     
     def __init__(self, chat_manager=None, event_queue=None, **kwargs):
         super().__init__(**kwargs)
@@ -528,6 +542,10 @@ class ModeControlTool(BaseTool):
     def _run(self, action: str = "", text: str = "", **kwargs) -> str:
         """Execute mode control action."""
         try:
+            # The model sometimes omits action/text and only forwards the user's
+            # message; fall back to it so "swap to push to talk" still works.
+            if not action and not text:
+                text = str(kwargs.get("last_user_message") or "")
             # Extract action from text if not provided
             if not action and text:
                 text_lower = text.lower()

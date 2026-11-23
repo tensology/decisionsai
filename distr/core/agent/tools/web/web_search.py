@@ -163,31 +163,42 @@ def format_weather_response(weather_data: dict, location: str) -> str:
         return f"I found weather data for {location} but had trouble formatting it."
 
 
+def _clean_snippet(text: str) -> str:
+    """Tidy a DDG snippet: collapse whitespace and repair glued words.
+
+    DDG often returns text with missing spaces between a word and a following
+    capitalised word ("GPT-5is here", "AudioboxResearchPapers"). Insert a space
+    at a lower->Upper boundary so the model reads real sentences.
+    """
+    import re as _re
+
+    clean = _re.sub(r"\s+", " ", str(text or "")).strip()
+    clean = _re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", clean)
+    return clean
+
+
 def format_search_results(results: list, query: str) -> str:
-    """Format search results into a conversational response."""
+    """Format search results into a citable response for the agent."""
     if not results:
         return f"I couldn't find any information about '{query}'."
-    
-    # Build a conversational summary
-    response_parts = []
-    
-    for i, result in enumerate(results[:3]):  # Top 3 results
-        title = result.get('title', '')
-        body = result.get('body', result.get('description', ''))
-        
+
+    lines = [f"Here's what I found about '{query}':"]
+    for result in results[:5]:
+        title = _clean_snippet(result.get('title', ''))
+        body = _clean_snippet(result.get('body', result.get('description', '')))
+        href = str(result.get('href', '') or '').strip()
+        if len(body) > 300:
+            body = body[:300].rstrip() + "..."
+        entry = f"- {title}" if title else "-"
         if body:
-            # Clean up and truncate
-            body = body.strip()
-            if len(body) > 200:
-                body = body[:200] + "..."
-            response_parts.append(body)
-    
-    if response_parts:
-        # Combine into a flowing response
-        combined = " ".join(response_parts)
-        return f"Here's what I found about '{query}': {combined}"
-    else:
+            entry += f": {body}"
+        if href:
+            entry += f" ({href})"
+        lines.append(entry)
+
+    if len(lines) == 1:
         return f"I found some results for '{query}' but couldn't extract the details."
+    return "\n".join(lines)
 
 
 def format_news_results(results: list, topic: str) -> str:
