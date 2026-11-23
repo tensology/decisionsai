@@ -104,6 +104,24 @@ class TTSPipelineMixin:
                 except asyncio.QueueEmpty:
                     break
 
+    def discard_pending_sentences(self) -> None:
+        """Drop sentences still queued from a superseded response.
+
+        Called when a *new* response starts. Normally the previous response has
+        drained its queue by then, so this is a no-op. But when a response was
+        superseded while a blocking tool ran, its sentences can still be queued;
+        playing them would speak a stale reply on top of the new one.
+        """
+        self._tts_generation += 1
+        queue = self._speak_queue
+        if queue is not None:
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                    queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
+
     def is_stale_interrupt_frame(self) -> bool:
         if getattr(self, "_accept_bargein_interrupt", False):
             return False

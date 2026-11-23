@@ -56,6 +56,10 @@ class OpenAICompatibleLLMService(BaseLLMService):
                                    "playwright_browser": 1200.0, "web_browser": 1020.0,
                                    "calendar_blocks": 1020.0, "snippets": 1020.0}
     _tool_execution_in_progress = False
+    # Monotonic token for the active response. A superseded generation (its
+    # task may still be unwinding a blocking tool) compares its captured token
+    # against this and abandons its response instead of speaking it a second time.
+    _response_generation = 0
     _DIRECT_SPEECH_TOOLS = {"speak_on_desktop"}
     _GENERIC_TOOL_COMPLETIONS = {"done", "done.", "finished", "finished."}
     _MAX_PROVIDER_TOOLS = 128
@@ -323,6 +327,11 @@ class OpenAICompatibleLLMService(BaseLLMService):
         full_content = ""
         follow_up_content = ""
 
+        # Capture this response's token. If a newer generation starts while we
+        # are still running (e.g. a barge-in during a blocking tool call), we
+        # must not push another spoken response.
+        my_generation = self._response_generation
+
         self._cancelled = False
         self._active_chat_stream_id = None
         self._chat_stream_terminal_emitted = False
@@ -368,7 +377,13 @@ class OpenAICompatibleLLMService(BaseLLMService):
             logger.info("%s: [3] call_stream returned: %.3fs", self.SERVICE_NAME, _time.time() - _t2)
 
             _t3 = _time.time()
-            full_content, tool_calls = await self._consume_stream(stream)
+            full_content, tool_calls = await self._consume_stream(stream, my_generation)
+            if my_generation != self._response_generation:
+                logger.info(
+                    "%s: response superseded during stream — abandoning stale reply",
+                    self.SERVICE_NAME,
+                )
+                return
             if getattr(self, '_prompt_leak_blocked', False):
                 logger.warning("%s: blocked probable prompt leak from model output", self.SERVICE_NAME)
                 full_content = ""
@@ -431,6 +446,13 @@ class OpenAICompatibleLLMService(BaseLLMService):
                         await self._execute_chained_tools(tool_calls, full_content)
                 finally:
                     self._tool_execution_in_progress = False
+
+                if my_generation != self._response_generation:
+                    logger.info(
+                        "%s: response superseded after tool round %d — abandoning stale reply",
+                        self.SERVICE_NAME, round_num,
+                    )
+                    return
 
                 # request_tool can expose a cached capability during this turn.
                 # Rebuild provider schemas before the follow-up so the model can
@@ -786,7 +808,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 await asyncio.sleep(delay)
                 delay *= 2
 
-    async def _consume_stream(self, stream):
+    async def _consume_stream(self, stream, my_generation: int = 0):
         """Consume a streaming response. Returns (full_content, tool_calls)."""
         full_content = ""
         tool_calls = []
@@ -822,7 +844,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
         try:
             async for chunk in stream:
-                if self._cancelled:
+                if self._cancelled or my_generation != self._response_generation:
                     break
                 chunk_count += 1
                 wd_chunk_count[0] = chunk_count

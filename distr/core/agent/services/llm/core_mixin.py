@@ -2529,6 +2529,11 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 pass
             self._cancelled = False
 
+        # New response supersedes any generation still unwinding in the
+        # background (e.g. a blocking tool). Its token no longer matches, so it
+        # will not push a second spoken reply.
+        self._response_generation += 1
+
         try:
             from distr.core.provider_failover import is_chat_capable_model
 
@@ -2995,6 +3000,10 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 except (asyncio.CancelledError, asyncio.TimeoutError):
                     pass
                 self._cancelled = False
+
+            # Supersede any generation still unwinding (a blocking tool can
+            # outlive the 3s shield): its token stops it from speaking again.
+            self._response_generation += 1
 
             if hasattr(self, '_generation_requested_at'):
                 self._generation_requested_at = time.monotonic()

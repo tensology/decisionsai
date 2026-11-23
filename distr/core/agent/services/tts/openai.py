@@ -512,6 +512,10 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
         if isinstance(frame, LLMFullResponseStartFrame):
             self._llm_response_started_at = time.monotonic()
             logger.debug(f"TTS: LLMFullResponseStartFrame - resetting TTS state for new response (cancelled={self._cancelled} -> False)")
+            # Discard any sentences still queued from a response that was
+            # superseded mid-tool; otherwise both replies get spoken.
+            if hasattr(self, "discard_pending_sentences"):
+                self.discard_pending_sentences()
             self._text_buffer = ""
             self._cancelled = False
             self._cancelled_since = 0.0
