@@ -2754,15 +2754,15 @@ def _migrate_legacy_hermes_schema_to_orchestrator(engine) -> None:
             # Keep the oldest ticket as the durable owner if legacy data linked
             # several tickets to one thread. The other tickets remain intact and
             # can be deliberately relinked through Development.
+            # A chat may own several tickets (a comment, a follow-up, a
+            # reorder). The old unique index blocked that and made "create a
+            # ticket" fail with a constraint error whenever the chat already
+            # had one. Drop it and keep a plain index for lookups; the
+            # one-ticket-per-thread rule lives in the Development work item.
+            conn.execute(text("DROP INDEX IF EXISTS ux_kanban_tickets_source_chat"))
             conn.execute(text(
-                "UPDATE kanban_tickets SET source_chat_id = NULL "
-                "WHERE source_chat_id IS NOT NULL AND id NOT IN ("
-                "SELECT MIN(id) FROM kanban_tickets WHERE source_chat_id IS NOT NULL GROUP BY source_chat_id"
-                ")"
-            ))
-            conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ux_kanban_tickets_source_chat "
-                "ON kanban_tickets (source_chat_id) WHERE source_chat_id IS NOT NULL"
+                "CREATE INDEX IF NOT EXISTS ix_kanban_tickets_source_chat "
+                "ON kanban_tickets (source_chat_id)"
             ))
             # Remove only references whose root row definitively no longer
             # exists. Richer projection backfills run through the Development

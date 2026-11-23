@@ -150,12 +150,10 @@ Index('ix_kanban_tickets_lane_id', KanbanTicket.lane_id)
 Index('ix_kanban_tickets_position', KanbanTicket.position)
 Index('ix_kanban_tickets_merged_into_ticket_id', KanbanTicket.merged_into_ticket_id)
 Index('ix_kanban_lanes_board_id', KanbanLane.board_id)
-Index(
-    'ux_kanban_tickets_source_chat',
-    KanbanTicket.source_chat_id,
-    unique=True,
-    sqlite_where=KanbanTicket.source_chat_id.is_not(None),
-)
+# A chat may raise several tickets (a comment, a follow-up, a reorder); the
+# origin chat is many-to-one, not a unique binding. The one-ticket-per-thread
+# rule is enforced by the Development work item, not this index.
+Index('ix_kanban_tickets_source_chat', KanbanTicket.source_chat_id)
 
 
 class KanbanTicketFile(Base):
