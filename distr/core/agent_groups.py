@@ -80,8 +80,12 @@ def primary_agent_id(session) -> Optional[int]:
 
 
 def orchestrator_id(session) -> Optional[int]:
-    row = session.query(ChatAgentPrefs).filter(ChatAgentPrefs.is_orchestrator.is_(True)).first()
-    return int(row.agent_id) if row else None
+    """Use the loaded agent, or the starred agent when no agent is loaded."""
+    from distr.core.chat_agents import appearance_owner
+    from distr.core.db import Settings
+
+    owner, _ = appearance_owner(session, session.query(Settings).first())
+    return int(owner.id) if owner else primary_agent_id(session)
 
 
 def agent_payload(agent: ChatAgent, *, primary_id=None, orch_id=None, order=None) -> dict:
@@ -112,7 +116,7 @@ def reorder_agents(agent_ids: Iterable[int]) -> list[dict]:
         for index, agent_id in enumerate(ids + rest):
             pref = prefs.get(agent_id)
             if pref is None:
-                session.add(ChatAgentPrefs(agent_id=agent_id, sort_order=index, is_orchestrator=False))
+                session.add(ChatAgentPrefs(agent_id=agent_id, sort_order=index))
             else:
                 pref.sort_order = index
         session.commit()
@@ -138,8 +142,7 @@ def set_primary(agent_id: int) -> dict:
         return primary_agent_payload(agent)
 
 
-def update_agent(agent_id: int, *, name: Optional[str] = None, role: Optional[str] = None,
-                 is_orchestrator: Optional[bool] = None) -> dict:
+def update_agent(agent_id: int, *, name: Optional[str] = None, role: Optional[str] = None) -> dict:
     from distr.core.chat_agents import validate_agent_profile
 
     with get_session() as session:
@@ -149,17 +152,6 @@ def update_agent(agent_id: int, *, name: Optional[str] = None, role: Optional[st
         new_name, new_role = validate_agent_profile(agent.name if name is None else name,
                                                     agent.role if role is None else role)
         agent.name, agent.role = new_name, new_role
-        if is_orchestrator is not None:
-            prefs = _prefs(session)
-            if is_orchestrator:  # at most one orchestrator
-                for pref in prefs.values():
-                    pref.is_orchestrator = False
-            pref = prefs.get(agent.id)
-            if pref is None:
-                session.add(ChatAgentPrefs(agent_id=agent.id, sort_order=next_sort_order(session),
-                                           is_orchestrator=bool(is_orchestrator)))
-            else:
-                pref.is_orchestrator = bool(is_orchestrator)
         session.commit()
     return next(a for a in list_agents() if a["id"] == int(agent_id))
 

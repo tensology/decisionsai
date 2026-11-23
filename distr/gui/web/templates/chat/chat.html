@@ -4,7 +4,7 @@
 {% block title %}Chat{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-20261123-oracle-picker">
+<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-20261123-config-tabs">
 <link rel="stylesheet" href="/static/shared/css/mermaid_viewer.css?v=20261028-responsive">
 {% endblock %}
 
@@ -222,38 +222,43 @@
 </div>
 
 <!-- Current Chat Configuration Modal -->
-<div class="modal" id="chatConfigModal" style="display: none;">
+<div class="modal" id="chatConfigModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="chatConfigTitle">
     <div class="modal-content chat-config-modal-content">
         <div class="modal-header">
-            <h2>Configure Chat</h2>
-            <button class="modal-close" id="chatConfigClose">&times;</button>
+            <h2 id="chatConfigTitle">Configure Chat</h2>
+            <button type="button" class="modal-close" id="chatConfigClose" aria-label="Close">&times;</button>
+        </div>
+        <div class="chat-config-tabs" id="chatConfigTabs" role="tablist" aria-label="Chat configuration" hidden>
+            <button type="button" id="chatConfigMainTab" role="tab" aria-selected="true" aria-controls="chatConfigMain">Main</button>
+            <button type="button" id="chatConfigAdvancedTab" role="tab" aria-selected="false" aria-controls="chatConfigAgent" tabindex="-1">Advanced</button>
         </div>
         <div class="modal-body">
-            <p class="chat-config-note">Changes apply to this chat only. If this chat is loaded, the agent hot-swaps to the new settings.</p>
-            <p class="modal-section-label">LLM</p>
-            <div class="modal-row">
-                <div class="form-group">
-                    <label for="chatConfigLlmProvider">Provider</label>
-                    <select id="chatConfigLlmProvider" class="form-control form-control-select chat-config-select"><option value="">Loading...</option></select>
+            <div id="chatConfigMain" role="tabpanel" aria-labelledby="chatConfigMainTab">
+                <p class="chat-config-note">Changes apply to this chat only. If this chat is loaded, the agent hot-swaps to the new settings.</p>
+                <p class="modal-section-label">LLM</p>
+                <div class="modal-row">
+                    <div class="form-group">
+                        <label for="chatConfigLlmProvider">Provider</label>
+                        <select id="chatConfigLlmProvider" class="form-control form-control-select chat-config-select"><option value="">Loading...</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="chatConfigLlmModel">Model</label>
+                        <select id="chatConfigLlmModel" class="form-control form-control-select chat-config-select"><option value="">Loading...</option></select>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="chatConfigLlmModel">Model</label>
-                    <select id="chatConfigLlmModel" class="form-control form-control-select chat-config-select"><option value="">Loading...</option></select>
+                {{ voice_select_fields('chatConfig') }}
+                <div class="modal-row chat-config-appearance">
+                    <div class="form-group">
+                        <label for="chatConfigSkin">Skin</label>
+                        <select id="chatConfigSkin" class="form-control form-control-select chat-config-select"></select>
+                    </div>
+                    <div class="form-group" id="chatConfigOracleBackgroundField" hidden>
+                        <label for="chatConfigOracleBackground">Oracle background</label>
+                        <select id="chatConfigOracleBackground" class="form-control form-control-select chat-config-select" disabled></select>
+                    </div>
                 </div>
             </div>
-            {{ voice_select_fields('chatConfig') }}
-            <div class="modal-row chat-config-appearance">
-                <div class="form-group">
-                    <label for="chatConfigSkin">Skin</label>
-                    <select id="chatConfigSkin" class="form-control form-control-select chat-config-select"></select>
-                </div>
-                <div class="form-group" id="chatConfigOracleBackgroundField" hidden>
-                    <label for="chatConfigOracleBackground">Oracle background</label>
-                    <select id="chatConfigOracleBackground" class="form-control form-control-select chat-config-select" disabled></select>
-                </div>
-            </div>
-            <details class="agent-configuration" id="chatConfigAgent" hidden>
-                <summary>Advanced</summary>
+            <div id="chatConfigAgent" role="tabpanel" aria-labelledby="chatConfigAdvancedTab" hidden>
                 <div class="form-group">
                     <label for="chatConfigAgentName">Custom name</label>
                     <input id="chatConfigAgentName" class="form-control" type="text" maxlength="80" autocomplete="off">
@@ -262,17 +267,11 @@
                     <label for="chatConfigAgentRole">Agent scope</label>
                     <textarea id="chatConfigAgentRole" class="form-control form-control-textarea" rows="3" maxlength="4000"></textarea>
                 </div>
-                <label class="agent-orchestrator-toggle"><input type="checkbox" id="chatConfigOrchestrator"> Orchestrator <span>answers first in groups and delegates</span></label>
-                <div class="agent-memory">
-                    <div class="agent-memory-head"><span>Memory</span><button type="button" class="link-btn" id="agentMemoryClearAll" hidden>Clear all</button></div>
-                    <ul class="agent-memory-list" id="agentMemoryList"></ul>
-                </div>
-                <button type="button" class="btn btn-danger agent-delete-btn" id="chatConfigDeleteAgent">Delete agent</button>
-            </details>
-            <p class="chat-config-status" id="chatConfigStatus"></p>
+            </div>
+            <p class="chat-config-status" id="chatConfigStatus" role="status"></p>
         </div>
         <div class="modal-footer">
-            <span class="modal-footer-note">The transcript is not rewritten when settings change.</span>
+            <button type="button" class="btn agent-delete-btn" id="chatConfigDeleteAgent" hidden disabled>Delete agent</button>
             <div class="modal-footer-actions">
                 <button class="btn btn-secondary" id="chatConfigCancel">Cancel</button>
                 <button class="btn btn-primary" id="chatConfigSave">Save</button>

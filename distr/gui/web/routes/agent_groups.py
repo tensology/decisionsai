@@ -21,7 +21,6 @@ class ReorderRequest(BaseModel):
 class AgentUpdateRequest(BaseModel):
     name: Optional[str] = Field(default=None, max_length=80)
     role: Optional[str] = Field(default=None, max_length=4000)
-    is_orchestrator: Optional[bool] = None
 
 
 class GroupCreateRequest(BaseModel):
@@ -73,7 +72,7 @@ def register_agent_group_routes(router) -> None:
     async def update_agent(agent_id: int, body: AgentUpdateRequest):
         try:
             return JSONResponse({"agent": await asyncio.to_thread(
-                ag.update_agent, agent_id, name=body.name, role=body.role, is_orchestrator=body.is_orchestrator)})
+                ag.update_agent, agent_id, name=body.name, role=body.role)})
         except ag.GroupError as exc:
             _bad(exc, 404)
         except ValueError as exc:

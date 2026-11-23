@@ -135,7 +135,7 @@ def create_agent_profile(session, chat, name, role):
     from distr.core.agent_groups import next_sort_order
     from distr.core.db import ChatAgentPrefs
 
-    session.add(ChatAgentPrefs(agent_id=agent.id, sort_order=next_sort_order(session), is_orchestrator=False))
+    session.add(ChatAgentPrefs(agent_id=agent.id, sort_order=next_sort_order(session)))
     return agent
 
 

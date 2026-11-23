@@ -483,13 +483,12 @@ class AgentConversation(Base):
 
 
 class ChatAgentPrefs(Base):
-    """Additive per-agent sidebar order and orchestrator flag (kept off chat_agents
-    so no ALTER TABLE is needed on existing databases)."""
+    """Per-agent sidebar order and capability overrides."""
     __tablename__ = 'chat_agent_prefs'
 
     agent_id = Column(Integer, ForeignKey('chat_agents.id'), primary_key=True)
     sort_order = Column(Integer, nullable=False, default=0)
-    is_orchestrator = Column(Boolean, nullable=False, default=False)
+    is_orchestrator = Column(Boolean, nullable=False, default=False)  # Legacy column for existing databases.
     # JSON list overriding the default capability set; NULL = defaults.
     capabilities = Column(Text, nullable=True)
 

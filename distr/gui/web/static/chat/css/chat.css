@@ -2585,9 +2585,39 @@
 }
 
 .chat-config-status {
-    min-height: 18px;
     margin-top: 12px;
     color: #f97316;
+}
+
+.chat-config-status:empty { display: none; }
+
+.chat-config-tabs:not([hidden]) {
+    display: flex;
+    gap: 16px;
+    padding: 0 24px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.chat-config-tabs button {
+    background: transparent;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    min-height: 44px;
+    padding: 0 12px;
+    color: #b8b9ca;
+    font: inherit;
+    cursor: pointer;
+}
+
+.chat-config-tabs button[aria-selected="true"] {
+    border-bottom-color: #f97316;
+    color: #ececf1;
+}
+
+.chat-config-tabs button:focus-visible {
+    outline: 2px solid #fb923c;
+    outline-offset: -4px;
+    border-radius: 6px;
 }
 
 .chat-config-select {
@@ -3024,9 +3054,9 @@
 @media (max-width: 359px) {
     .chat-config-appearance .form-group + .form-group { flex: 1.8; }
     .chat-config-appearance .form-control-select { padding-inline: 8px 24px; background-position: right 4px center; }
-    #chatConfigModal .modal-footer { flex-wrap: wrap; gap: 8px; }
-    #chatConfigModal .modal-footer-note { flex-basis: 100%; }
-    #chatConfigModal .modal-footer-actions { margin-left: auto; }
+    #chatConfigModal .modal-footer { padding-inline: 16px; gap: 6px; }
+    #chatConfigModal .modal-footer-actions { gap: 6px; }
+    #chatConfigModal .modal-footer .btn { padding-inline: 10px; }
 }
 
 /* Agent creation keeps identity fields visible and advanced defaults together. */
@@ -3154,18 +3184,7 @@ body.group-mode #emptyState, body.group-mode #ttsPlayerCard { display: none !imp
 .group-agent-pick { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer; color: #ececf1; }
 .group-agent-pick:hover { background: rgba(255, 255, 255, 0.06); }
 
-.agent-orchestrator-toggle { display: flex; align-items: center; gap: 8px; color: #ececf1; font-size: 14px; margin: 4px 0 12px; }
-.agent-orchestrator-toggle span { color: #8e8ea0; font-size: 12px; }
-.agent-memory { margin: 8px 0 16px; }
-.agent-memory-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #c5c5d2; margin-bottom: 6px; }
-.link-btn { background: none; border: 0; color: #fca5a5; cursor: pointer; font-size: 12px; padding: 0; }
-.agent-memory-list { list-style: none; margin: 0; padding: 0; max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
-.agent-memory-list li { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: #ececf1; background: rgba(255, 255, 255, 0.04); border-radius: 6px; padding: 6px 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.agent-memory-list li span { flex: 1; }
-.agent-memory-list li.agent-memory-empty { color: #8e8ea0; background: none; padding-left: 0; }
-.agent-memory-forget { background: none; border: 0; color: #8e8ea0; cursor: pointer; font-size: 15px; line-height: 1; }
-.agent-memory-forget:hover { color: #fca5a5; }
-.agent-delete-btn { background: transparent; border: 1px solid rgba(248, 113, 113, 0.5); color: #fca5a5; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.agent-delete-btn { background: transparent; border: 1px solid rgba(248, 113, 113, 0.5); color: #fca5a5; white-space: nowrap; }
 .agent-delete-btn:hover:not(:disabled) { background: rgba(248, 113, 113, 0.12); }
 .agent-delete-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
@@ -3191,3 +3210,4 @@ body.group-mode #emptyState, body.group-mode #ttsPlayerCard { display: none !imp
     background: #1a1f3a;
     border-top: 1px solid rgba(255, 255, 255, 0.10);
 }
+#chatConfigModal .modal-footer-actions { margin-left: auto; }

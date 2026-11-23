@@ -11,7 +11,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,7 +25,7 @@ def ma(monkeypatch, tmp_path):
     from distr.core.db import Base, Settings
     import distr.core.db.orchestrator  # noqa: F401  (registers memory tables)
 
-    engine = create_engine('sqlite://', connect_args={'check_same_thread': False}, poolclass=StaticPool)
+    engine = create_engine(f"sqlite:///{tmp_path / 'agents.db'}")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
 
@@ -116,15 +115,21 @@ def test_reorder_rejects_unknown_agents(ma):
     assert ma['client'].put('/api/agents/order', json={'agent_ids': [999]}).status_code == 422
 
 
-def test_make_primary_and_orchestrator_is_unique(ma):
+def test_loaded_agent_leads_even_if_star_or_viewed_chat_differs(ma):
+    from distr.core.db import ChatAgentPrefs
+
     client, ids = ma['client'], ma['ids']
     assert client.post(f"/api/agents/{ids['Uncle Roger']}/primary").json()['primary_agent']['name'] == 'Uncle Roger'
     assert client.get('/api/agents/primary').json()['primary_agent']['name'] == 'Uncle Roger'
-    client.patch(f"/api/agents/{ids['Ada']}", json={'is_orchestrator': True})
-    client.patch(f"/api/agents/{ids['Hayley']}", json={'is_orchestrator': True, 'role': 'Planner', 'name': 'Hayley W'})
+    with ma['sessions']() as session:
+        session.get(ChatAgentPrefs, ids['Ada']).is_orchestrator = True
+    ma['save']({'last_chat_id': ids['Ada:chat']})
+    client.patch(f"/api/agents/{ids['Hayley']}", json={'role': 'Planner', 'name': 'Hayley W'})
     agents = {a['id']: a for a in client.get('/api/agents').json()['agents']}
     assert [a['name'] for a in agents.values() if a['is_orchestrator']] == ['Hayley W']
     assert agents[ids['Hayley']]['role'] == 'Planner'
+    ma['save']({'agent_current_chat_id': None})
+    assert [a['name'] for a in client.get('/api/agents').json()['agents'] if a['is_orchestrator']] == ['Uncle Roger']
 
 
 def test_restore_chat_skin_uses_the_loaded_agents_own_skin(ma, monkeypatch):
@@ -176,10 +181,11 @@ def test_group_chats_are_hidden_from_the_agent_list(ma):
     assert [g['title'] for g in ma['client'].get('/api/groups').json()['groups']] == ['Team']
 
 
-def test_without_orchestrator_or_mention_the_primary_answers(ma):
+def test_without_loaded_agent_or_mention_the_primary_answers(ma):
     from distr.core import agent_groups as ag
 
     ids = ma['ids']
+    ma['save']({'agent_current_chat_id': None})
     group = ag.create_group([ids['Uncle Roger'], ids['Hayley'], ids['Ada']])
     replies = ag.run_turn(group['id'], 'Hello team', generate=fake_generate({}))
     assert [r['agent_name'] for r in replies] == ['Hayley']
@@ -209,17 +215,20 @@ def test_mentions_pick_responders_and_run_concurrently(ma):
     assert not any(r['error'] for r in replies), [r['content'] for r in replies]
 
 
-def test_orchestrator_answers_first_and_delegates(ma):
+def test_loaded_agent_answers_first_and_delegates(ma):
     from distr.core import agent_groups as ag
 
     ids = ma['ids']
-    ag.update_agent(ids['Ada'], is_orchestrator=True)
+    ma['save']({'agent_current_chat_id': ids['Ada:chat']})
     group = ag.create_group([ids['Hayley'], ids['Uncle Roger'], ids['Ada']])
     gen = fake_generate({'Ada': ['@Uncle Roger please check the rice.'], 'Uncle Roger': ['Rice is fine.']})
     replies = ag.run_turn(group['id'], 'Plan dinner', generate=gen)
     assert [r['agent_name'] for r in replies] == ['Ada', 'Uncle Roger']
     messages = ag.group_messages(group['id'])['messages']
     assert [m.get('agent_name') or 'Paul' for m in messages] == ['Paul', 'Ada', 'Uncle Roger']
+    ma['save']({'agent_current_chat_id': ids['Uncle Roger:chat']})
+    replies = ag.run_turn(group['id'], 'Next question', generate=fake_generate({}))
+    assert [r['agent_name'] for r in replies] == ['Uncle Roger']
 
 
 def test_agent_ping_pong_is_capped(ma):
@@ -343,7 +352,7 @@ def test_default_capabilities_and_enforcement(ma, monkeypatch):
     from distr.core.db import Snippet
 
     ids = ma['ids']
-    ag.update_agent(ids['Ada'], is_orchestrator=True)
+    ma['save']({'agent_current_chat_id': ids['Ada:chat']})
     assert capabilities_for(ids['Hayley']) == ALL      # primary
     assert capabilities_for(ids['Ada']) == ALL         # orchestrator
     assert capabilities_for(ids['Uncle Roger']) == LIMITED

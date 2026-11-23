@@ -1,7 +1,7 @@
 """Per-agent capability sets for workspace tools (Calendar, Snippets, Actions, Development).
 
 Capabilities: read, create, update, delete, run, browse.
-Defaults: the primary and the orchestrator get all six; every other agent gets
+Defaults: the primary and the loaded agent get all six; every other agent gets
 read + run (browser: open/extract/screenshot freely, click/type only after the owner
 confirms in chat). A per-agent override can be stored in chat_agent_prefs.capabilities
 (JSON list). Deletes and other destructive changes additionally need the owner's
@@ -77,7 +77,7 @@ def set_capabilities(agent_id: int, capabilities: Optional[list[str]]) -> frozen
     with get_session() as session:
         pref = session.get(ChatAgentPrefs, int(agent_id))
         if pref is None:
-            pref = ChatAgentPrefs(agent_id=int(agent_id), sort_order=next_sort_order(session), is_orchestrator=False)
+            pref = ChatAgentPrefs(agent_id=int(agent_id), sort_order=next_sort_order(session))
             session.add(pref)
         pref.capabilities = value
         session.commit()
@@ -104,7 +104,7 @@ def denied(agent_id: Optional[int], capability: str) -> str:
     except Exception:
         pass
     return (f"Not permitted: {name} can {', '.join(sorted(caps)) or 'not use workspace tools'} "
-            f"but not {capability}. Ask the primary or orchestrator agent to do this.")
+            f"but not {capability}. Ask the primary or loaded agent to do this.")
 
 
 def tool_block_reason(func_name: str, agent_id: Optional[int] = None) -> str:
@@ -170,7 +170,7 @@ def safe_confirm(confirm) -> "callable":
 
 # Browser policy -------------------------------------------------------------
 # read actions: any agent with "read". Mutating actions (click/type/submit/fill):
-#   - agents with "browse" (primary, orchestrator): allowed, still behind the
+#   - agents with "browse" (primary, loaded): allowed, still behind the
 #     existing approval gates for submits/purchases;
 #   - everyone else: only after the owner confirms that specific action.
 # Unknown capability state => refused.

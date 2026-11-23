@@ -306,6 +306,7 @@ const chatConfigVoiceProvider = document.getElementById('chatConfigVoiceProvider
 const chatConfigVoiceModel = document.getElementById('chatConfigVoiceModel');
 const chatConfigStatus = document.getElementById('chatConfigStatus');
 let _chatConfigBaseline = null;
+let chatConfigReturnFocus = null;
 const headerLlmSummary = document.getElementById('headerLlmSummary');
 const headerVoiceSummary = document.getElementById('headerVoiceSummary');
 const voiceUsageMeter = document.getElementById('voiceUsageMeter');
@@ -678,6 +679,37 @@ function setupEventListeners() {
     if (chatConfigClose) chatConfigClose.addEventListener('click', hideChatConfigModal);
     if (chatConfigCancel) chatConfigCancel.addEventListener('click', hideChatConfigModal);
     if (chatConfigSave) chatConfigSave.addEventListener('click', saveChatConfig);
+    chatConfigModal?.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            hideChatConfigModal();
+        } else if (event.key === 'Tab') {
+            const focusable = [...chatConfigModal.querySelectorAll('button, input, select, textarea, a[href]')]
+                .filter(element => !element.disabled && element.tabIndex >= 0 && element.getClientRects().length);
+            const edge = event.shiftKey ? focusable[0] : focusable.at(-1);
+            if (event.target === edge) {
+                event.preventDefault();
+                (event.shiftKey ? focusable.at(-1) : focusable[0]).focus();
+            }
+        }
+    });
+    const configTabs = document.getElementById('chatConfigTabs');
+    const mainConfigTab = document.getElementById('chatConfigMainTab');
+    const advancedConfigTab = document.getElementById('chatConfigAdvancedTab');
+    mainConfigTab?.addEventListener('click', () => selectChatConfigTab(mainConfigTab));
+    advancedConfigTab?.addEventListener('click', () => selectChatConfigTab(advancedConfigTab));
+    configTabs?.addEventListener('keydown', (event) => {
+        const alternate = event.target === mainConfigTab ? advancedConfigTab : mainConfigTab;
+        const tab = { ArrowLeft: alternate, ArrowRight: alternate, Home: mainConfigTab, End: advancedConfigTab }[event.key];
+        if (!tab) return;
+        event.preventDefault();
+        selectChatConfigTab(tab);
+        tab.focus();
+    });
+    document.getElementById('chatConfigDeleteAgent')?.addEventListener('click', async () => {
+        const agentId = document.getElementById('chatConfigAgent').dataset.agentId;
+        if (agentId && await deleteAgent(Number(agentId))) hideChatConfigModal();
+    });
     document.getElementById('chatConfigSkin')?.addEventListener('change', updateChatConfigOracleVisibility);
     if (chatConfigLlmProvider) {
         chatConfigLlmProvider.addEventListener('change', () => {
@@ -2488,7 +2520,7 @@ function renderChatList(chats) {
     const rows = chats.map(chat => {
         const id = String(chat.id);
         const row = existing.get(id);
-        const identity = JSON.stringify([chat.agent_id, chat.is_primary, chat.is_orchestrator]);
+        const identity = JSON.stringify([chat.agent_id, chat.is_primary]);
         if (row?.dataset.identity !== identity) return createChatItem(chat);
         updateChatItem(row, chat);
         return row;
@@ -2508,7 +2540,7 @@ function createChatItem(chat) {
     const div = document.createElement('div');
     div.className = 'chat-item';
     div.setAttribute('data-chat-id', String(chat.id));
-    div.dataset.identity = JSON.stringify([chat.agent_id, chat.is_primary, chat.is_orchestrator]);
+    div.dataset.identity = JSON.stringify([chat.agent_id, chat.is_primary]);
     div.setAttribute('title', 'Click to view. Use Load to make it active in the agent.');
     div.setAttribute('tabindex', '0');
     div.setAttribute('role', 'option');
@@ -2529,7 +2561,6 @@ function createChatItem(chat) {
     if (chat.agent_id != null) {
         div.dataset.agentId = String(chat.agent_id);
         if (chat.is_primary) div.classList.add('is-primary-agent');
-        div.dataset.orchestrator = chat.is_orchestrator ? '1' : '0';
         const star = div.querySelector('.agent-star');
         star.addEventListener('click', (e) => {
             e.preventDefault();
@@ -5883,13 +5914,28 @@ function changedChatConfigFields(previous, current) {
     return patch;
 }
 
+function selectChatConfigTab(selected) {
+    if (!selected) return;
+    document.querySelectorAll('#chatConfigTabs [role="tab"]').forEach(tab => {
+        const active = tab === selected;
+        tab.setAttribute('aria-selected', String(active));
+        tab.tabIndex = active ? 0 : -1;
+        document.getElementById(tab.getAttribute('aria-controls')).hidden = !active;
+    });
+    chatConfigModal.querySelector('.modal-body').scrollTop = 0;
+}
+
 async function openChatConfigModal(chatId) {
     const targetId = chatId || currentChatId;
     if (!targetId || !chatConfigModal) return;
     stopAllChatVoicePreviews();
+    fillAgentAdvanced(null);
+    selectChatConfigTab(document.getElementById('chatConfigMainTab'));
     document.getElementById('chatConfigOracleBackgroundField')?.setAttribute('hidden', '');
     if (chatConfigStatus) chatConfigStatus.textContent = '';
+    chatConfigReturnFocus = document.activeElement;
     chatConfigModal.style.display = 'flex';
+    chatConfigClose?.focus();
     if (chatConfigSave) chatConfigSave.disabled = true;
     try {
         await _ensureTTSProviders();
@@ -5956,6 +6002,9 @@ async function openChatConfigModal(chatId) {
 function hideChatConfigModal() {
     stopVoiceForContext('chatConfig');
     if (chatConfigModal) chatConfigModal.style.display = 'none';
+    if (chatConfigReturnFocus?.getClientRects().length) chatConfigReturnFocus.focus();
+    else chatList.querySelector('.chat-item.active')?.focus();
+    chatConfigReturnFocus = null;
 }
 
 function showChatSnackbar(message, type) {
@@ -6239,10 +6288,12 @@ async function saveChatConfig() {
     const selected = selectedChatConfigValues();
     const patch = changedChatConfigFields(_chatConfigBaseline, selected);
     if (('provider' in patch || 'model_name' in patch) && (!selected.provider || !selected.model_name)) {
+        selectChatConfigTab(document.getElementById('chatConfigMainTab'));
         if (chatConfigStatus) chatConfigStatus.textContent = 'Choose an LLM provider and model.';
         return;
     }
     if (('voice_provider' in patch || 'voice_model' in patch) && (!selected.voice_provider || !selected.voice_model)) {
+        selectChatConfigTab(document.getElementById('chatConfigMainTab'));
         if (chatConfigStatus) chatConfigStatus.textContent = 'Choose a voice provider and voice.';
         return;
     }
@@ -7139,8 +7190,8 @@ document.addEventListener('keydown', event => {
 
 
 // ---------------------------------------------------------------------------
-// Multi-agent roster: primary star, manual order (drag), edit Advanced, delete,
-// per-agent memory. Group chats live in chat-groups.js.
+// Multi-agent roster: primary star, manual order (drag), profile editing and deletion.
+// Group chats live in chat-groups.js.
 // ---------------------------------------------------------------------------
 let agentDragState = null;
 let sidebarOrderSaving = false;
@@ -7285,34 +7336,32 @@ function fillAgentAdvanced(chatData) {
     const box = document.getElementById('chatConfigAgent');
     if (!box) return;
     const agentId = chatData && chatData.agent_id != null ? Number(chatData.agent_id) : null;
-    box.hidden = agentId == null;
     box.dataset.agentId = agentId == null ? '' : String(agentId);
+    document.getElementById('chatConfigTabs').hidden = agentId == null;
+    const del = document.getElementById('chatConfigDeleteAgent');
+    del.hidden = agentId == null;
+    del.disabled = true;
     if (agentId == null) { _agentAdvancedBaseline = null; return; }
     const row = chatList.querySelector(`.chat-item[data-agent-id="${agentId}"]`);
     const values = {
         name: chatData.agent_name || '',
         role: chatData.agent_role || '',
-        is_orchestrator: Boolean(chatData.is_orchestrator ?? (row && row.dataset.orchestrator === '1')),
     };
     document.getElementById('chatConfigAgentName').value = values.name;
     document.getElementById('chatConfigAgentRole').value = values.role;
-    document.getElementById('chatConfigOrchestrator').checked = values.is_orchestrator;
-    const del = document.getElementById('chatConfigDeleteAgent');
     const isPrimary = Boolean(row && row.classList.contains('is-primary-agent'));
     del.disabled = isPrimary;
     del.title = isPrimary ? 'Make another agent primary first' : '';
     _agentAdvancedBaseline = values;
-    loadAgentMemories(agentId);
 }
 
 // null = nothing to save, true = saved, false = failed (keep the modal open).
 async function saveAgentAdvanced() {
     const box = document.getElementById('chatConfigAgent');
-    if (!box || box.hidden || !box.dataset.agentId || !_agentAdvancedBaseline) return null;
+    if (!box?.dataset.agentId || !_agentAdvancedBaseline) return null;
     const current = {
         name: document.getElementById('chatConfigAgentName').value.trim(),
         role: document.getElementById('chatConfigAgentRole').value.trim(),
-        is_orchestrator: document.getElementById('chatConfigOrchestrator').checked,
     };
     const patch = {};
     Object.keys(current).forEach(key => { if (current[key] !== _agentAdvancedBaseline[key]) patch[key] = current[key]; });
@@ -7328,59 +7377,3 @@ async function saveAgentAdvanced() {
     _agentAdvancedBaseline = current;
     return true;
 }
-
-async function loadAgentMemories(agentId) {
-    const list = document.getElementById('agentMemoryList');
-    const clearAll = document.getElementById('agentMemoryClearAll');
-    if (!list) return;
-    list.innerHTML = '';
-    try {
-        const res = await fetch(`${API_BASE}/agents/${agentId}/memories`);
-        const memories = res.ok ? ((await res.json()).memories || []) : [];
-        clearAll.hidden = memories.length === 0;
-        if (!memories.length) {
-            list.innerHTML = '<li class="agent-memory-empty">Nothing remembered yet.</li>';
-            return;
-        }
-        for (const memory of memories) {
-            const li = document.createElement('li');
-            const text = document.createElement('span');
-            text.textContent = memory.content;
-            const forget = document.createElement('button');
-            forget.type = 'button';
-            forget.className = 'agent-memory-forget';
-            forget.setAttribute('aria-label', 'Forget this');
-            forget.title = 'Forget this';
-            forget.textContent = '×';
-            forget.addEventListener('click', async () => {
-                await fetch(`${API_BASE}/agents/${agentId}/memories?memory_id=${encodeURIComponent(memory.id)}`, { method: 'DELETE' });
-                loadAgentMemories(agentId);
-            });
-            li.append(text, forget);
-            list.append(li);
-        }
-    } catch (error) {
-        list.innerHTML = '<li class="agent-memory-empty">Memory unavailable.</li>';
-    }
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-    const clearAll = document.getElementById('agentMemoryClearAll');
-    if (clearAll) clearAll.addEventListener('click', async () => {
-        const agentId = document.getElementById('chatConfigAgent').dataset.agentId;
-        if (!agentId) return;
-        const ok = await window.DecisionsAPI.confirm({
-            title: 'Clear memory', message: 'Forget everything this agent remembers? Shared memory is not affected.',
-            confirmLabel: 'Clear all', danger: true,
-        });
-        if (!ok) return;
-        await fetch(`${API_BASE}/agents/${agentId}/memories`, { method: 'DELETE' });
-        loadAgentMemories(agentId);
-    });
-    const del = document.getElementById('chatConfigDeleteAgent');
-    if (del) del.addEventListener('click', async () => {
-        const agentId = document.getElementById('chatConfigAgent').dataset.agentId;
-        if (!agentId) return;
-        if (await deleteAgent(Number(agentId))) hideChatConfigModal();
-    });
-});
