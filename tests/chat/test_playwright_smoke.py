@@ -117,9 +117,13 @@ def test_all_sidebar_rows_reorder_and_viewed_chat_controls_corner_avatar(tmp_pat
             row(22).click()
             expect(corner).to_have_attribute("data-skin-name", "Oracle")
             expect(corner).to_have_attribute("src", "/api/skins/oracle/preview/scene.svg")
-            oracle_width = corner_button.bounding_box()["width"]
+            oracle_box = corner_button.bounding_box()
+            oracle_width = oracle_box["width"]
             assert 44 < oracle_width <= 136
             assert oracle_width < avatar_width
+            composer = page.locator("#inputContainer").bounding_box()
+            assert composer["y"] - oracle_box["y"] - oracle_box["height"] == pytest.approx(24, abs=1)
+            assert composer["x"] + composer["width"] - oracle_box["x"] - oracle_width == pytest.approx(32, abs=1)
             assert order() == [44, 33, 11, 22]
             assert not loads
             page.screenshot(path=str(tmp_path / "chat-oracle-reordered.png"))

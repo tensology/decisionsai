@@ -468,6 +468,8 @@
 /* Main Content */
 .chat-shell .main-content {
     --chat-corner-avatar-width: min(264px, 24%);
+    --chat-corner-avatar-right: 16px;
+    --chat-corner-avatar-bottom: 16px;
     flex: 1;
     min-height: 0;
     min-width: 0;
@@ -478,12 +480,14 @@
 
 .main-content:has([data-assistant-idle] > .oracle) {
     --chat-corner-avatar-width: min(136px, 15%);
+    --chat-corner-avatar-right: 32px;
+    --chat-corner-avatar-bottom: 24px;
 }
 
 .llama-click-target {
     position: absolute;
-    bottom: calc(100% + 16px);
-    right: 16px;
+    bottom: calc(100% + var(--chat-corner-avatar-bottom));
+    right: var(--chat-corner-avatar-right);
     width: var(--chat-corner-avatar-width);
     aspect-ratio: 1;
     padding: 0;
@@ -875,7 +879,7 @@
 
 @media (min-width: 1024px) {
     .main-content:has([data-assistant-idle] > .assistant-avatar-image):not(:has(> .tts-player-card:not([hidden]))) > :is(.chat-messages, .empty-state) {
-        padding-right: calc(var(--chat-corner-avatar-width) + 32px);
+        padding-right: calc(var(--chat-corner-avatar-width) + var(--chat-corner-avatar-right) + 16px);
     }
 }
 
