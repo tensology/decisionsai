@@ -167,3 +167,80 @@ def test_agent_restart_replaces_queues(monkeypatch):
     assert app.initiative_service.event_queue is app.agent_event_queue
     assert old_command_queue.closed is True
     assert old_event_queue.closed is True
+
+
+def test_dead_agent_is_not_restarted_during_shutdown():
+    class _Process:
+        exitcode = -9
+
+        @staticmethod
+        def is_alive():
+            return False
+
+    restarts = []
+    app = SimpleNamespace(
+        agent_process=_Process(),
+        _quitting=True,
+        _agent_restart_halted=False,
+        _agent_auto_restart_pending=False,
+        _request_agent_auto_restart=lambda *args, **kwargs: restarts.append((args, kwargs)),
+    )
+
+    AgentLifecycleMixin.check_agent_health(app)
+
+    assert restarts == []
+
+
+def test_auto_restart_request_is_skipped_during_shutdown():
+    reloaded = []
+    app = SimpleNamespace(
+        _quitting=True,
+        _agent_restart_halted=False,
+        _agent_auto_restart_pending=False,
+        _agent_auto_restart_times=[],
+        _agent_started_at=None,
+        reload_agent_session=lambda **kwargs: reloaded.append(kwargs),
+    )
+
+    result = AgentLifecycleMixin._request_agent_auto_restart(app, "process_dead", exitcode=-9)
+
+    assert result is False
+    assert reloaded == []
+
+
+def test_scheduled_restart_is_skipped_if_shutdown_starts_during_backoff(monkeypatch):
+    """A restart scheduled before quit must not fire once _quitting is set."""
+    scheduled = []
+
+    def capture_schedule(self, delay, callback):
+        scheduled.append((delay, callback))
+
+    monkeypatch.setattr(AgentLifecycleMixin, "_schedule_agent_restart", capture_schedule)
+    monkeypatch.setattr(AgentLifecycleMixin, "_append_agent_restart_log", lambda *a, **k: None)
+    monkeypatch.setattr("distr.app.agent_lifecycle.append_runtime_event", lambda *a, **k: None)
+
+    class _App(AgentLifecycleMixin):
+        pass
+
+    app = _App()
+    app.__dict__.update(
+        _quitting=False,
+        _agent_restart_halted=False,
+        _agent_auto_restart_pending=False,
+        _agent_auto_restart_times=[],
+        _agent_started_at=None,
+        _agent_ready_since_restart=True,
+        _agent_restart_generation=0,
+        reload_agent_session=lambda **kwargs: setattr(app, "reloaded", True),
+    )
+
+    assert AgentLifecycleMixin._request_agent_auto_restart(app, "process_dead", exitcode=-9) is True
+    assert scheduled
+    _delay, callback = scheduled[0]
+
+    app._quitting = True
+    app.reloaded = False
+    callback()
+
+    assert app.reloaded is False
+    assert app._agent_auto_restart_pending is False

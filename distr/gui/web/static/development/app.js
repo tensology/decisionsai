@@ -11,7 +11,7 @@ import { planCrumbs, renderPlanCrumbs, clearPlanCrumbs } from './planning/breadc
 import { setOverflowLabel } from './shared/overflow-names.js?v=20261111-overflow-names3';
 import { rememberBoardThread, boardLastThread, rememberBoardSection, boardLastSection, boardViewOptions, boardViewSwitchHtml, projectClickTarget } from './planning/view-switch.js?v=20261111-nav-apply-chrome3';
 
-import { createSidebar } from './sidebar/index.js?v=20261123-sidebar-read';
+import { createSidebar } from './sidebar/index.js?v=20261123-menu-consistency';
 
 import { createAutomations } from './automations/index.js?v=20261113-calendar-page1';
 
@@ -20,7 +20,7 @@ import { fileDropZoneHtml, proposalThreadToast } from './shared/ticket-modal.js?
 
 import { createWorkflows } from './workflows/index.js?v=20261120-wfplan';
 
-import { createBoards } from './boards/index.js?v=20261112-ticket-draft-project';
+import { createBoards } from './boards/index.js?v=20261123-menu-consistency';
 
 import { createTerminals, terminalProjectActionIcon } from './terminals/index.js?v=20261110-startup-only1';
 
@@ -1384,11 +1384,25 @@ function closeThreadHeaderMenu({ restoreFocus = false } = {}) {
     if (wasOpen && restoreFocus) button.focus();
 }
 
-function syncOpenThreadHeaderMenu() {
+function setThreadHeaderDoneVisibility(chat) {
+    const show = Boolean(boards.canMarkLinkedTicketDone?.(chat));
+    el('thread-menu-done')?.classList.toggle('hidden', !show);
+    el('thread-menu-done-heading')?.classList.toggle('hidden', !show);
+}
+
+async function syncOpenThreadHeaderMenu() {
     const hasChat = Boolean(state.currentChat);
     el('thread-menu-details').disabled = !hasChat;
     el('thread-menu-clear-context').disabled = !hasChat || isActiveAgentRun(state.currentRun);
     el('thread-menu-edit-time').disabled = !hasChat;
+    setThreadHeaderDoneVisibility(state.currentChat);
+    placeThreadHeaderMenu();
+    if (!state.currentChat || typeof boards.prepareLinkedTicketDone !== 'function') return;
+    const chatId = Number(state.currentChat.id);
+    await boards.prepareLinkedTicketDone(state.currentChat);
+    if (Number(state.currentChat?.id) !== chatId) return;
+    if (el('thread-header-menu').classList.contains('hidden')) return;
+    setThreadHeaderDoneVisibility(state.currentChat);
     placeThreadHeaderMenu();
 }
 
@@ -2976,6 +2990,10 @@ function bindEvents() {
     });
     el('thread-menu-clear-context').addEventListener('click', clearThreadContext);
     el('thread-menu-edit-time').addEventListener('click', openTimeDialog);
+    el('thread-menu-done')?.addEventListener('click', async () => {
+        closeThreadHeaderMenu();
+        await boards.markLinkedTicketDone?.(state.currentChat);
+    });
     el('time-play-button').addEventListener('click', () => updateThreadTime('play'));
     el('time-pause-button').addEventListener('click', () => updateThreadTime('pause'));
     el('time-reset-button').addEventListener('click', () => updateThreadTime('reset'));
@@ -3072,6 +3090,10 @@ const sidebar = createSidebar({
         terminalProjectActionIcon: (...args) => terminalProjectActionIcon(...args),
         incomingProposalCount: () => incoming.incomingProposalCount(),
         loadChat: (...args) => loadChat(...args),
+        loadBoardTickets: (...args) => loadBoardTickets(...args),
+        canMarkLinkedTicketDone: (...args) => boards.canMarkLinkedTicketDone(...args),
+        markLinkedTicketDone: (...args) => boards.markLinkedTicketDone(...args),
+        prepareLinkedTicketDone: (...args) => boards.prepareLinkedTicketDone(...args),
         loadProjectTerminalSessions: (...args) => terminals.loadProjectTerminalSessions(...args),
         openBoardFromSidebar: (...args) => openBoardFromSidebar(...args),
         openBoardKanban: (...args) => openBoardKanban(...args),

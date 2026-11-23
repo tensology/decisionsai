@@ -1116,6 +1116,12 @@ def register_routes(router, templates):
                     inp = msg.get("data")
                     if isinstance(inp, str) and inp:
                         sess.write(inp)
+                        if "\r" in inp and getattr(sess, "purpose", "") == "pi_cli":
+                            from distr.core.kanban.thread_lane_tracking import track_cli_pane_submit
+
+                            asyncio.get_running_loop().run_in_executor(
+                                None, track_cli_pane_submit, int(sess.project_id), terminal_id,
+                            )
         except WebSocketDisconnect:
             pass
         except Exception as e:

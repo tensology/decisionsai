@@ -5190,7 +5190,7 @@ async function deleteChat(chatId) {
     if (wasLoaded && streamAbortController) { streamAbortController.abort(); streamAbortController = null; }
     if (wasLoaded) { _streamToken++; isStreaming = false; setSendButtonStreaming(false); }
     try {
-        await fetch(`${API_BASE}/agent-conversations/${chatId}`, { method: 'DELETE' });
+        await fetch(`${API_BASE}/agent-conversations/${chatId}?confirm=${encodeURIComponent(chatId)}`, { method: 'DELETE' });
         currentChatId = null;
         loadedChatId = null;
         chatMessages.innerHTML = '';

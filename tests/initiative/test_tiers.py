@@ -28,17 +28,26 @@ def test_effective_maxes_configured_and_boundary():
     assert eff == PermissionTier.ESCALATE
 
 
-def test_routine_silent_when_allowed():
+def test_routine_requires_approve_when_allowed():
     boundaries = {"initiative_allow_routine_tasks": True}
     eff = effective_permission_tier("routine_task", boundaries, {})
-    assert eff == PermissionTier.SILENT
+    assert eff == PermissionTier.APPROVE
+    assert configured_tier_for_action("routine_task", boundaries, {}) == PermissionTier.APPROVE
+    assert boundary_minimum_tier("routine_task", boundaries) == PermissionTier.APPROVE
 
 
-def test_default_notify_floor_does_not_lift_silent_routine():
+def test_default_notify_floor_does_not_lower_routine_approve():
     boundaries = {"initiative_allow_routine_tasks": True}
     settings = {"initiative_default_tier": PermissionTier.NOTIFY}
     eff = effective_permission_tier("routine_task", boundaries, settings)
-    assert eff == PermissionTier.SILENT
+    assert eff == PermissionTier.APPROVE
+
+
+def test_routine_approve_floor_overrides_silent_setting():
+    boundaries = {"initiative_allow_routine_tasks": True}
+    settings = {"initiative_tier_routine_task": PermissionTier.SILENT}
+    eff = effective_permission_tier("routine_task", boundaries, settings)
+    assert eff == PermissionTier.APPROVE
 
 
 def test_external_comm_stays_approve_with_default_notify_floor():

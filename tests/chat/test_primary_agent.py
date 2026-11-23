@@ -113,8 +113,8 @@ def test_primary_api_avatar_activation_and_message_routing(primary_app, monkeypa
         assert chat_skin(session.get(Chat, first)) == 'rusty'
         assert session.query(PrimaryChatAgent).count() == 1
         assert session.query(ChatAgent).count() == count
-    assert client.delete(f'/api/agent-conversations/{second}').status_code == 409
-    assert client.delete(f'/api/agent-conversations/{first}').status_code != 409
+    assert client.delete(f'/api/agent-conversations/{second}?confirm={second}').status_code == 409
+    assert client.delete(f'/api/agent-conversations/{first}?confirm={first}').status_code != 409
 
 
 def test_oracle_background_is_saved_per_agent_and_survives_skin_changes(primary_app):

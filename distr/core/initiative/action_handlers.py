@@ -38,6 +38,9 @@ def execute_initiative_action(
         _require(settings, "initiative_allow_routine_tasks", "routine task execution is disabled")
         _require(settings, "initiative_allow_project_cli", "project CLI execution is disabled")
         return run_project_cli_tasks(payload)
+    if action_type == "routine_task":
+        _require(settings, "initiative_allow_routine_tasks", "routine task execution is disabled")
+        return run_routine_task(payload, description=description, draft=draft)
     if action_type == "jira_intake":
         return run_jira_intake_from_initiative(payload, settings=settings)
     return {
@@ -45,6 +48,78 @@ def execute_initiative_action(
         "message": description or f"{action_type} acknowledged",
         "details": {"action_type": action_type, "draft": draft},
     }
+
+
+def run_routine_task(
+    payload: dict[str, Any],
+    *,
+    description: str = "",
+    draft: str = "",
+) -> dict[str, Any]:
+    """Run an approved routine_task: start a workflow or create a ticket."""
+    runner_type = str((payload or {}).get("runner_type") or "").strip().lower()
+    if runner_type == "workflow" or (not runner_type and (payload or {}).get("workflow_id")):
+        return start_ticket_workflows(payload)
+    if runner_type == "kanban" or (payload or {}).get("board_id"):
+        return create_initiative_ticket(payload, description=description, draft=draft)
+    return {
+        "success": True,
+        "message": description or "routine task acknowledged",
+        "details": {"action_type": "routine_task", "draft": draft},
+    }
+
+
+def create_initiative_ticket(
+    payload: dict[str, Any],
+    *,
+    description: str = "",
+    draft: str = "",
+) -> dict[str, Any]:
+    """Create a Kanban ticket from an approved Initiative routine_task payload."""
+    from distr.core.db import get_session
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+
+    payload = payload or {}
+    board_id = payload.get("board_id")
+    lane_name = payload.get("lane", "Backlog")
+    title = payload.get("title") or description
+    ticket_description = payload.get("description") or draft or ""
+
+    with get_session() as session:
+        if not board_id:
+            board = session.query(KanbanBoard).first()
+            board_id = board.id if board else None
+        if not board_id:
+            raise ValueError("No board is available to create this ticket")
+        lane = (
+            session.query(KanbanLane)
+            .filter(KanbanLane.board_id == int(board_id), KanbanLane.name.ilike(f"%{lane_name}%"))
+            .first()
+        )
+        if not lane:
+            lane = (
+                session.query(KanbanLane)
+                .filter(KanbanLane.board_id == int(board_id))
+                .order_by(KanbanLane.position)
+                .first()
+            )
+        if not lane:
+            raise ValueError("No lane is available on that board")
+        max_pos = max((t.position for t in lane.tickets), default=-1)
+        ticket = KanbanTicket(
+            lane_id=lane.id,
+            title=str(title)[:200],
+            description=str(ticket_description)[:2000],
+            position=max_pos + 1,
+        )
+        session.add(ticket)
+        session.commit()
+        session.refresh(ticket)
+        return {
+            "success": True,
+            "message": f"Created ticket: {ticket.title}",
+            "details": {"ticket_id": ticket.id, "lane_id": lane.id, "board_id": int(board_id)},
+        }
 
 
 def run_jira_intake_from_initiative(

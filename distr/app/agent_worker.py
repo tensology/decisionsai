@@ -25,6 +25,10 @@ import gc
 import sys
 import time
 
+# A multiprocessing Manager proxy raises these when the manager process is already gone
+# (parent shutting down, or the agent was killed and then respawned against a dead manager).
+_MANAGER_GONE_ERRORS = (EOFError, ConnectionRefusedError, BrokenPipeError, OSError)
+
 
 def run_agent_session(settings, input_device=None, output_device=None,
                       command_queue=None, event_queue=None,
@@ -49,10 +53,19 @@ def run_agent_session(settings, input_device=None, output_device=None,
     setup_worker_logging()
     logger = logging.getLogger(__name__)
 
-    # Initialise screen cache
-    if screen_info_cache:
-        from distr.core.screen_utils import init_screen_cache_manager
-        init_screen_cache_manager(screen_info_cache)
+    # Initialise screen cache. Truthiness of a Manager proxy calls __len__ and
+    # needs the manager process; if it is already gone, exit cleanly (no traceback).
+    try:
+        if screen_info_cache:
+            from distr.core.screen_utils import init_screen_cache_manager
+            init_screen_cache_manager(screen_info_cache)
+    except _MANAGER_GONE_ERRORS as e:
+        logger.warning(
+            "Agent worker exiting: the shared-memory manager is gone (%s: %s)",
+            type(e).__name__,
+            e,
+        )
+        os._exit(0)
 
     # Create a QCoreApplication (no GUI) so Qt signals work in this process
     from PyQt6.QtCore import QCoreApplication

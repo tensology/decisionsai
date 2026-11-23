@@ -360,43 +360,46 @@ def _cmd_update_audio_devices(session, params):
     if target_loop is None:
         target_loop = getattr(session, '_main_loop', None)
 
+    transport = getattr(session, 'transport', None)
+    input_endpoint = transport.input() if transport is not None else None
+    output_endpoint = transport.output() if transport is not None else None
+
     if input_device:
         audio_cfg['input_device'] = input_device
-        if (input_changed or force_refresh) and hasattr(session, 'transport'):
+        if (input_changed or force_refresh) and input_endpoint is not None:
             input_idx = session._get_device_index(input_device, is_input=True)
             session.logger.debug(f"Hot-swapping input device to index {input_idx} (None=Default)")
-            endpoint = session.transport.input()
-            swap = endpoint.refresh_device if force_refresh and hasattr(endpoint, 'refresh_device') else endpoint.set_device
+            swap = input_endpoint.refresh_device if force_refresh and hasattr(input_endpoint, 'refresh_device') else input_endpoint.set_device
             if target_loop and target_loop.is_running():
                 target_loop.call_soon_threadsafe(swap, input_idx)
             else:
                 swap(input_idx)
         elif not input_changed:
-            if hasattr(session, 'transport') and new_input == "System Default":
+            if input_endpoint is not None and new_input == "System Default":
                 session.logger.debug("Refreshing input stream for unchanged System Default selection")
                 if target_loop and target_loop.is_running():
-                    target_loop.call_soon_threadsafe(session.transport.input().refresh_system_default)
+                    target_loop.call_soon_threadsafe(input_endpoint.refresh_system_default)
                 else:
-                    session.transport.input().refresh_system_default()
+                    input_endpoint.refresh_system_default()
             else:
                 session.logger.debug("Skipping input hot-swap (device unchanged)")
 
     if output_device:
         audio_cfg['output_device'] = output_device
-        if (output_changed or force_refresh) and hasattr(session, 'transport'):
+        if (output_changed or force_refresh) and output_endpoint is not None:
             output_idx = session._get_device_index(output_device, is_input=False)
             session.logger.debug(f"Hot-swapping output device to index {output_idx} (None=Default)")
             if target_loop and target_loop.is_running():
-                target_loop.call_soon_threadsafe(session.transport.output().set_device, output_idx, output_device)
+                target_loop.call_soon_threadsafe(output_endpoint.set_device, output_idx, output_device)
             else:
-                session.transport.output().set_device(output_idx, output_device)
+                output_endpoint.set_device(output_idx, output_device)
         elif not output_changed:
-            if hasattr(session, 'transport') and new_output == "System Default":
+            if output_endpoint is not None and new_output == "System Default":
                 session.logger.debug("Refreshing output stream for unchanged System Default selection")
                 if target_loop and target_loop.is_running():
-                    target_loop.call_soon_threadsafe(session.transport.output().set_device, None, output_device)
+                    target_loop.call_soon_threadsafe(output_endpoint.set_device, None, output_device)
                 else:
-                    session.transport.output().set_device(None, output_device)
+                    output_endpoint.set_device(None, output_device)
             else:
                 session.logger.debug("Skipping output hot-swap (device unchanged)")
 

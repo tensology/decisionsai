@@ -336,23 +336,28 @@ def choose_proposal_execution_mode(proposal: dict[str, Any]) -> dict[str, Any]:
     """Incoming proposals stay on the shared dispatcher as one direct hand-off.
 
     Typed Development-composer requests use ``allocate_development_request``
-    instead. A large proposal that is opened as a new Development thread is
-    allocated there, from the prompt text.
+    instead.
     """
     import hashlib
     import json
 
     scope = proposal_execution_scope(proposal)
+    scope_text = "\n".join([scope["title"], scope["description"], *scope["tasks"]])
+    try:
+        complexity = assess_development_request(scope_text)["complexity"]
+    except Exception:
+        complexity = "medium"
+
     return {
         "mode": "direct",
-        "complexity": "low",
+        "complexity": complexity,
         "workflow_class": None,
         "policy": "proposal-scope-v1",
         "scope_hash": hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest(),
         "signals": ["direct_by_default", "direct_proposal_handoff"],
-        "reason": "Requested work is handed to Development as one agent turn unless that thread's composer starts a workflow.",
+        "reason": "Requested work is handed to Development as one direct agent turn.",
         "visible_reason": humanize_orchestrator_update(
-            "Handled directly as a Development hand-off. If the work is large, Development will start a workflow when the thread is opened."
+            "Handled directly as one Development agent turn."
         ),
-        "scope_text": "\n".join([scope["title"], scope["description"], *scope["tasks"]]),
+        "scope_text": scope_text,
     }

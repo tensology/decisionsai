@@ -32,6 +32,11 @@ def _normalize_output_device_name(device_name: Optional[str]) -> str:
     return text
 
 
+def _stream_already_closed(exc: BaseException) -> bool:
+    """PortAudio raises this when close/stop is called on an already-closed stream."""
+    return "stream not open" in str(exc).lower()
+
+
 class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
     """Local audio input transport that supports hot-swapping devices."""
 
@@ -422,19 +427,39 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         await self.set_transport_ready(frame)
 
     def _close_output_stream(self, *, abort=False):
-        """Run only on the output executor, after any outstanding native write."""
+        """Run only on the output executor, after any outstanding native write.
+
+        Closing an already-closed stream is a no-op (logged at debug, not error).
+        """
         stream, self._out_stream = self._out_stream, None
         if stream is None:
             return
         try:
-            if stream.is_active():
+            try:
+                active = bool(stream.is_active())
+            except Exception as e:
+                if _stream_already_closed(e):
+                    logger.debug("Output stream already closed: %s", e)
+                    return
+                raise
+            if active:
                 abort_stream = getattr(stream, "abort_stream", None)
                 if abort and callable(abort_stream):
                     abort_stream()
                 else:
                     stream.stop_stream()
-        finally:
+        except Exception as e:
+            if _stream_already_closed(e):
+                logger.debug("Error stopping output stream: %s", e)
+            else:
+                logger.error("Error stopping output stream: %s", e)
+        try:
             stream.close()
+        except Exception as e:
+            if _stream_already_closed(e):
+                logger.debug("Error closing output stream: %s", e)
+            else:
+                logger.error("Error closing output stream: %s", e)
 
     async def _close_output_stream_async(self, *, abort=False):
         loop = asyncio.get_running_loop()
@@ -1546,15 +1571,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 or self._original_sample_rate
                 or 24000
             )
-        old_stream = self._out_stream
-        self._out_stream = None
-        if old_stream:
-            try:
-                if old_stream.is_active():
-                    old_stream.stop_stream()
-                old_stream.close()
-            except Exception as e:
-                logger.error(f"Error closing output stream: {e}")
+        self._close_output_stream()
 
         try:
             output_channels = self._device_output_channels(device_index)

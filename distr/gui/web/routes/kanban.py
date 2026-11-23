@@ -3486,6 +3486,16 @@ def create_routes():
             automation_thread_ids = {int(row.thread_chat_id) for row in automation_rows if row.thread_chat_id}
             chat_ids.update(board_thread_ids)
             chat_ids.update(automation_thread_ids)
+            # Board cascades only remove Development threads, never agent conversations.
+            from distr.core.db import Chat as _Chat
+            from distr.core.workflow.development_threads import is_development_thread
+
+            chat_ids = {
+                cid for cid in chat_ids
+                if (row := s.get(_Chat, cid)) is not None
+                and row.parent_id is None
+                and is_development_thread(s, row)
+            }
             linked_files = [str(file.file_path or "") for ticket in tickets for file in ticket.files if file.file_path]
             if chat_ids:
                 from distr.core.db import Chat
@@ -3609,7 +3619,7 @@ def create_routes():
         return JSONResponse({"success": True})
 
     @router.get("/tickets/boards/{board_id}")
-    async def get_board(board_id: int):
+    async def get_board(board_id: int, include_archived: bool = False):
         with get_session() as s:
             board = orm_get_by_id(s, KanbanBoard,board_id)
             if not board:
@@ -3633,10 +3643,11 @@ def create_routes():
             for lane in board.lanes:
                 tickets = []
                 for t in lane.tickets:
-                    if is_merged_duplicate(t):
+                    archived = is_merged_duplicate(t)
+                    if archived and not include_archived:
                         continue
                     linked_project = projects.get(t.linked_project_id)
-                    tickets.append({
+                    payload = {
                         "id": t.id, "title": t.title, "description": t.description or "",
                         "priority": t.priority or "medium", "position": t.position,
                         "complexity": normalize_ticket_complexity(t.complexity),
@@ -3659,7 +3670,11 @@ def create_routes():
                         "whatsapp_message_wa_id": t.whatsapp_message_wa_id,
                         "source_chat_id": t.source_chat_id,
                         **_ticket_source_payload(t),
-                    })
+                    }
+                    if archived:
+                        payload["archived"] = True
+                        payload["merged_into_ticket_id"] = t.merged_into_ticket_id
+                    tickets.append(payload)
                 lanes.append({"id": lane.id, "name": lane.name, "position": lane.position, "tickets": tickets})
             return JSONResponse({
                 "id": board.id, "name": board.name, "description": board.description or "",
@@ -4628,8 +4643,16 @@ def create_routes():
             if linked_chat_id and delete_thread:
                 from distr.core.chat import cleanup_chat_dependencies
 
+                from distr.core.workflow.development_threads import is_development_thread
+
                 linked_chat = s.get(Chat, linked_chat_id)
-                if linked_chat is not None and linked_chat.parent_id is None:
+                # Only Development threads cascade; agent conversations are never
+                # deleted from a ticket delete.
+                if (
+                    linked_chat is not None
+                    and linked_chat.parent_id is None
+                    and is_development_thread(s, linked_chat)
+                ):
                     cleanup_chat_dependencies(
                         s,
                         linked_chat_id,

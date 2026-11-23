@@ -188,18 +188,23 @@ def _gmail_reply_identities(connector):
     return address, _addresses([address, *aliases])
 
 
-def mail_target(channel, message, own_addresses):
+def mail_target(channel, message, own_addresses, *, reply_all=False):
+    """Reply to the original sender only (Reply-To, else From) by default.
+
+    ``reply_all=True`` restores the old behaviour (sender + To, original Cc kept).
+    """
     own = set(_addresses(own_addresses))
     if not own:
-        raise ValueError('The sending account identity is unavailable. Reply all cannot be verified.')
+        raise ValueError('The sending account identity is unavailable. The reply recipient cannot be verified.')
     sender = _addresses(message.get('reply_to') or message.get('from'))
-    to = list(dict.fromkeys(sender + _addresses(message.get('to'))))
+    to = list(dict.fromkeys(sender + _addresses(message.get('to')))) if reply_all else sender
     to = [address for address in to if address not in own]
-    cc = [address for address in _addresses(message.get('cc')) if address not in own and address not in to]
+    cc = ([address for address in _addresses(message.get('cc')) if address not in own and address not in to]
+          if reply_all else [])
     if not to:
         raise ValueError('No external reply recipient could be verified.')
     # Keep display names for the greeting, without deriving names from addresses
-    # or introducing people who are not part of this Reply all destination.
+    # or introducing people who are not part of this reply destination.
     def named_addresses(value):
         if isinstance(value, list):
             return [pair for item in value for pair in named_addresses(item)]

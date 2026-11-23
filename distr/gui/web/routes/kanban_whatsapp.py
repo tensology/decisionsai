@@ -12,6 +12,7 @@ import subprocess
 import shutil
 import threading
 import time
+from concurrent.futures import Future
 from pathlib import Path
 from urllib.parse import quote
 
@@ -26,6 +27,7 @@ from distr.core.integrations.whatsapp.paths import (
     media_path_for_database,
     resolve_whatsapp_media_disk_path,
 )
+from distr.core.integrations.whatsapp.relay_client import whatsapp_send_dry_run_enabled
 from distr.core.kanban.ticket_policy import infer_ticket_complexity
 from distr.core.db import get_session, WhatsAppMessage
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket, KanbanTicketFile
@@ -40,6 +42,11 @@ _wa_sse_loop = None
 _wa_media_negative_cache: dict[str, float] = {}
 _wa_media_negative_cache_lock = threading.Lock()
 _wa_media_fetch_locks: dict[str, asyncio.Lock] = {}
+_WA_SEND_CACHE_TTL_SECONDS = 600
+_WA_SEND_CACHE_MAX_ENTRIES = 1024
+_wa_send_cache: dict[str, tuple[float, dict, int]] = {}
+_wa_sends_in_flight: dict[str, Future[None]] = {}
+_wa_send_cache_lock = threading.Lock()
 
 
 def _wa_media_cache_key(message_id: int, wa_id: str, path_hint: str) -> str:
@@ -429,14 +436,52 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
     @router.post("/tickets/whatsapp/send")
     async def send_whatsapp_message(payload: dict):
         """Proxy: send a WhatsApp message through the relay server."""
+        pending = None
         try:
             import httpx
 
-            base_url = _whatsapp_relay_base_url()
+            jid = payload.get("jid", "")
             audio = payload.get("audio") if isinstance(payload.get("audio"), dict) else None
             media = payload.get("media") if isinstance(payload.get("media"), dict) else None
+            if whatsapp_send_dry_run_enabled():
+                logger.info(
+                    "WhatsApp composer dry-run jid=%s text_len=%d caption_len=%d audio_len=%d media_len=%d",
+                    jid,
+                    len(str(payload.get("text") or "")),
+                    len(str(payload.get("caption") or "")),
+                    len(str((audio or {}).get("data_b64") or "")),
+                    len(str((media or {}).get("data_b64") or "")),
+                )
+                return JSONResponse({"success": True, "dry_run": True, "jid": jid})
+
+            key = ""
+            for field in ("client_key", "idempotency_key"):
+                value = payload.get(field)
+                if isinstance(value, str) and value.strip():
+                    key = value.strip()
+                    break
+            while key:
+                with _wa_send_cache_lock:
+                    now = time.monotonic()
+                    while _wa_send_cache:
+                        oldest = next(iter(_wa_send_cache))
+                        if now - _wa_send_cache[oldest][0] < _WA_SEND_CACHE_TTL_SECONDS:
+                            break
+                        del _wa_send_cache[oldest]
+                    cached = _wa_send_cache.get(key)
+                    if cached is not None:
+                        _, body, status = cached
+                        return JSONResponse({**body, "duplicate": True}, status_code=status)
+                    existing = _wa_sends_in_flight.get(key)
+                    if existing is None:
+                        pending = _wa_sends_in_flight[key] = Future()
+                        break
+                # Wait for the same key without blocking the event loop or other sends.
+                await asyncio.shield(asyncio.wrap_future(existing))
+
+            base_url = _whatsapp_relay_base_url()
             relay_payload = {
-                "jid": payload.get("jid", ""),
+                "jid": jid,
                 "text": payload.get("text", ""),
                 "caption": payload.get("caption", ""),
                 "audio": {
@@ -460,10 +505,23 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
                     _h, _p = await _get_media_auth(base_url)
                     params = _p or {}
                 resp = await client.post(f"{base_url}/send", json=relay_payload, headers=headers, params=params)
-                return JSONResponse(content=resp.json(), status_code=resp.status_code)
+                body = resp.json()
+                response = JSONResponse(content=body, status_code=resp.status_code)
+                if pending is not None and 200 <= resp.status_code < 300:
+                    with _wa_send_cache_lock:
+                        if len(_wa_send_cache) >= _WA_SEND_CACHE_MAX_ENTRIES:
+                            del _wa_send_cache[next(iter(_wa_send_cache))]
+                        cached_body = body if isinstance(body, dict) else {"result": body}
+                        _wa_send_cache[key] = (time.monotonic(), cached_body, resp.status_code)
+                return response
         except Exception as e:
             logger.error(f"WhatsApp send proxy error: {e}")
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+        finally:
+            if pending is not None:
+                with _wa_send_cache_lock:
+                    del _wa_sends_in_flight[key]
+                pending.set_result(None)
 
     @router.get("/tickets/whatsapp/drafts")
     async def list_whatsapp_compose_drafts():

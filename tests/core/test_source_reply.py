@@ -407,7 +407,7 @@ def test_reply_all_deduplicates_self_honors_reply_to_and_keeps_cc():
     target = replies.mail_target('gmail', {'id': 'm', 'from': 'Original <original@example.com>',
         'reply_to': 'Support <support@example.com>', 'to': 'Paul <paul@example.com>, Friend <friend@example.com>',
         'cc': 'friend@example.com, reviewer@example.com, paul@example.com', 'subject': 'Billing',
-        'message_id_header': '<rfc@example.com>', 'threadId': 'thread'}, ['paul@example.com'])
+        'message_id_header': '<rfc@example.com>', 'threadId': 'thread'}, ['paul@example.com'], reply_all=True)
     assert target['to'] == ['support@example.com', 'friend@example.com']
     assert target['cc'] == ['reviewer@example.com']
     assert target['in_reply_to'] == '<rfc@example.com>'
@@ -474,7 +474,8 @@ def test_mailshot_transport_reply_all_threads_without_appending_signature(monkey
     replies.send_reply(target, 'Exact approved text.', 'approval-key')
     args, kwargs = client.post.call_args
     assert args[0] == 'mail/send'
-    assert args[1]['to'] == ['client@example.com'] and args[1]['cc'] == ['reviewer@example.com']
+    # Sender-only by default: the original Cc is not copied.
+    assert args[1]['to'] == ['client@example.com'] and args[1]['cc'] == []
     assert args[1]['body'] == 'Exact approved text.'
     assert args[1]['inReplyTo'] == '<original@example.com>'
     assert args[1]['include_signature'] is False
@@ -502,7 +503,7 @@ def test_gmail_preview_uses_exact_thread_and_keeps_relevant_context(monkeypatch)
         'message_ids': ['earlier', 'latest'], 'scoped_ids': True})
     assert target['source_message_ids'] == ['earlier', 'latest']
     assert target['to'] == ['client@example.com']
-    assert target['cc'] == ['reviewer@example.com', 'separate@example.com', 'pending@example.com']
+    assert target['cc'] == []
     assert 'Orders' not in target['recipient_names']
     connector.get_email.return_value = None
     connector.get_email.side_effect = lambda mid: {'threadId': 'foreign-thread'}
@@ -541,7 +542,7 @@ def test_mailshot_preview_uses_verified_senders_and_original_email(monkeypatch):
     monkeypatch.setattr(tensology_client, 'configured_tensology_client', lambda **kwargs: client)
     target = replies.resolve_target({'channel': 'mailshot', 'thread_id': 'original', 'message_ids': ['original']})
     assert target['from'] == 'paul@example.com'
-    assert target['to'] == ['client@example.com'] and target['cc'] == ['reviewer@example.com']
+    assert target['to'] == ['client@example.com'] and target['cc'] == []
     assert target['in_reply_to'] == '<original@example.com>'
 
 
@@ -618,7 +619,7 @@ def test_email_greeting_names_are_from_actual_recipients_only():
     target = replies.mail_target('gmail', {
         'from': 'Old Sender <old@example.com>', 'reply_to': 'Greg <greg@example.com>',
         'to': [{'name': 'Paul', 'email': 'paul@example.com'}, {'name': 'Jane', 'email': 'jane@example.com'}],
-        'cc': 'Jane <jane@example.com>, unnamed@example.com'}, ['paul@example.com'])
+        'cc': 'Jane <jane@example.com>, unnamed@example.com'}, ['paul@example.com'], reply_all=True)
     assert target['recipient_names'] == ['Greg', 'Jane']
     assert 'unnamed@example.com' in target['cc']
 
@@ -652,7 +653,8 @@ def test_gmail_transport_keeps_approved_to_cc_and_rfc_thread_headers(monkeypatch
     message = message_from_bytes(base64.urlsafe_b64decode(payload['raw']))
     assert payload['threadId'] == 'original-thread'
     assert message['From'] == 'paul@example.com'
-    assert message['To'] == 'client@example.com' and message['Cc'] == 'reviewer@example.com'
+    # Sender-only by default: the original Cc is not copied onto the reply.
+    assert message['To'] == 'client@example.com' and message['Cc'] is None
     assert message['In-Reply-To'] == '<original@example.com>'
     assert message.get_payload().strip() == 'Exact approved message.'
 
@@ -675,3 +677,19 @@ def test_merged_reply_choice_keeps_all_original_ids_for_the_same_conversation():
 def test_synthetic_merge_without_original_provenance_is_not_a_reply_destination():
     assert replies.source_choices({'source': 'gmail', 'source_thread_id': 'merged:unknown',
                                    'message_ids': ['merged-message:1']}) == []
+
+
+def test_reply_defaults_to_the_original_sender_only():
+    message = {'id': 'm', 'from': 'Client <client@example.com>',
+        'to': 'Paul <paul@example.com>, Friend <friend@example.com>',
+        'cc': 'Jane <jane@example.com>, reviewer@example.com', 'subject': 'Work'}
+    target = replies.mail_target('gmail', message, ['paul@example.com'])
+    assert target['to'] == ['client@example.com']
+    assert target['cc'] == []
+    assert target['recipient_names'] == ['Client']
+    # Reply-To wins over From; other To recipients are not added.
+    target = replies.mail_target('gmail', {**message, 'reply_to': 'Support <support@example.com>'}, ['paul@example.com'])
+    assert target['to'] == ['support@example.com'] and target['cc'] == []
+    # A message whose only sender is the account itself has no external recipient.
+    with pytest.raises(ValueError, match='No external reply recipient'):
+        replies.mail_target('gmail', {**message, 'from': 'paul@example.com'}, ['paul@example.com'])

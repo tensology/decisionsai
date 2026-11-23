@@ -2685,6 +2685,11 @@ async def _run_execution(
         elif not _direct_job_can_start(chat_id, job_id, expected_scope, board_id):
             return
         runtime_started = True
+        lane_tracking_started_at = utc_now_naive()
+        if not audit_only:
+            from distr.core.kanban.thread_lane_tracking import track_work_started
+
+            track_work_started(chat_id)
         result = await execute_turn(
             request,
             on_event=on_event,
@@ -2854,6 +2859,10 @@ async def _run_execution(
             complete_turn(chat_id, turn_id=turn_id, display_text=response)
         else:
             terminal_turn(chat_id, "turn_failed", turn_id=turn_id, summary=response.split("\n\n", 1)[0] or error)
+        if status == "completed" and success and not waiting and not audit_only and git_change_count:
+            from distr.core.kanban.thread_lane_tracking import track_work_finished
+
+            track_work_finished(chat_id, started_at=lane_tracking_started_at)
         if (
             bool((adapter_options or {}).get("unload_when_done"))
             and str((adapter_options or {}).get("model_provider") or "").lower() == "ollama"

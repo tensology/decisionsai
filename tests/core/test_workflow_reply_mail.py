@@ -56,7 +56,7 @@ def posts(connector):
     return [call for call in connector._make_request.call_args_list if call.args[0] == 'POST']
 
 
-def test_builtin_gmail_preserves_original_thread_reply_all_headers_and_account(store, monkeypatch):
+def test_builtin_gmail_preserves_original_thread_sender_reply_headers_and_account(store, monkeypatch):
     connector, _ = gmail(monkeypatch)
     ticket = mail_ticket(store)
     result = delivery.deliver_ticket_reply(ticket, 'Fixed and checked.')
@@ -67,7 +67,8 @@ def test_builtin_gmail_preserves_original_thread_reply_all_headers_and_account(s
     message = BytesParser(policy=policy.default).parsebytes(base64.urlsafe_b64decode(sent['raw']))
     assert str(message['From']) == 'paul@example.com'
     assert str(message['To']) == 'support@example.com'
-    assert str(message['Cc']) == 'reviewer@example.com'
+    # Sender-only by default: the original Cc is not copied onto the reply.
+    assert message['Cc'] is None
     assert message['Subject'] == 'Re: Original billing request'
     assert message['In-Reply-To'] == '<original@example.com>'
     assert message['References'] == '<older@example.com> <original@example.com>'
@@ -109,7 +110,7 @@ def test_account_switch_after_review_stops_before_post_and_keeps_exact_body(stor
     ticket = mail_ticket(store, title='Add schema migration')
     def gate(*args, **kwargs):
         assert kwargs['details']['delivery']['resolved_target']['from'] == 'paul@example.com'
-        assert kwargs['details']['delivery']['resolved_target']['cc'] == ['reviewer@example.com']
+        assert kwargs['details']['delivery']['resolved_target']['cc'] == []
         state['account'] = 'other@example.com'
         return None
     monkeypatch.setattr(dev_approvals, 'gate', gate)
@@ -159,7 +160,7 @@ def test_builtin_mailshot_uses_verified_primary_original_reply_and_ledger_key(st
     assert result['delivered']
     call = client.post.call_args
     assert call.args[0] == 'mail/send'
-    assert call.args[1]['to'] == ['client@example.com'] and call.args[1]['cc'] == ['reviewer@example.com']
+    assert call.args[1]['to'] == ['client@example.com'] and call.args[1]['cc'] == []
     assert call.args[1]['subject'] == 'Re: Original request'
     assert call.args[1]['from'] == 'paul@example.com'
     assert call.args[1]['inReplyTo'] == '<original@example.com>'
@@ -193,7 +194,7 @@ def test_approved_helper_sends_exact_reviewed_body_without_shape_or_second_send(
     transport.assert_called_once_with(target='12025550142', body=details['body'], subject='')
 
 
-def test_approved_workflow_requires_review_again_when_own_alias_becomes_external(store, monkeypatch):
+def test_approved_sender_only_reply_is_unaffected_when_own_alias_becomes_external(store, monkeypatch):
     connector, state = gmail(monkeypatch)
     ticket = mail_ticket(store)
     details = reviewed_workflow(store, ticket, 'Exact reviewed wording.')
@@ -204,10 +205,16 @@ def test_approved_workflow_requires_review_again_when_own_alias_becomes_external
         details['delivery'] = delivery._delivery_envelope(db, row, target, prepared['subject'], prepared)
     assert prepared['to'] == ['support@example.com']
 
+    # Sender-only replies never include the original To/Cc, so an alias
+    # becoming external no longer changes the reviewed recipients.
     state['alias_is_ours'] = False
     result = delivery.execute_approved_workflow_reply(details)
-    assert result['scope_changed'] and not result['delivered']
-    assert posts(connector) == []
+    assert result['delivered'] and not result.get('scope_changed')
+    [post] = posts(connector)
+    from email import policy as _policy
+    from email.parser import BytesParser as _BytesParser
+    sent = _BytesParser(policy=_policy.default).parsebytes(base64.urlsafe_b64decode(post.kwargs['json']['raw']))
+    assert str(sent['To']) == 'support@example.com' and sent['Cc'] is None
 
 
 @pytest.mark.parametrize('mutation', ['run-status', 'run-ticket', 'root-project', 'root-turn', 'destination', 'board', 'body-channel'])

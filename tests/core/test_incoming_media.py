@@ -162,7 +162,7 @@ def test_missing_whatsapp_media_is_skipped_and_reported_not_blocking_thread(stor
     registered = Mock(return_value={'failed': []})
     monkeypatch.setattr(media, 'register_thread_attachments', registered)
     reports = []
-    monkeypatch.setattr(proposals, '_record_attachment_report', lambda cid, failed, ticket: reports.append((cid, failed)))
+    monkeypatch.setattr(proposals, '_record_attachment_report', lambda cid, failed, ticket, **kwargs: reports.append((cid, failed)))
     monkeypatch.setattr(proposals, '_record_proposal_handoff', Mock())
     monkeypatch.setattr('distr.core.incoming.events.publish_incoming_change', Mock())
     chat_id = proposals.create_proposal_thread({'id': 'local:missing', 'source': 'whatsapp', 'project_id': 7,

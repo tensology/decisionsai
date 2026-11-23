@@ -476,9 +476,11 @@ def reconcile_decisions(remote_rows):
             continue
         thread_id = None
         for chat_id, receipt in receipts:
+            if receipt.get('start_pending') or receipt.get('start_failed'):
+                continue
             match = receipt.get('key') == incoming._proposal_handoff_key(shaped)
             if shaped.get('requires_merge_receipt'):
-                if not match or not receipt.get('merge_ack_ready') or receipt.get('start_pending'):
+                if not match or not receipt.get('merge_ack_ready'):
                     continue
                 merge = incoming._thread_merge_receipt(chat_id, shaped)
                 try:

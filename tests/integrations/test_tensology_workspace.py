@@ -227,15 +227,18 @@ def test_tensology_thread_uses_shared_scope_routing_and_quality_contract():
     project = {"id": 11, "name": "Local Model Smoke", "coding_backend": "cursor", "coding_backend_model": "grok-4.7-medium"}
     local_response = {"task": {"id": 42}}
 
+    # Complexity comes from the real assessment of the ticket scope (no
+    # hard-coded "low"); pin the assessment so the test stays deterministic.
     with (
         patch("distr.core.tensology_client._ensure_tensology_kanban_ticket", return_value=91),
         patch("distr.core.tensology_client._local_api_post", return_value=local_response) as post,
+        patch("distr.core.workflow.execution_mode.assess_development_request", return_value={"complexity": "medium"}),
     ):
         chat_id, route = _create_tensology_thread(ticket, project)
 
     assert chat_id == 42
     assert route == {
-        "complexity": "low",
+        "complexity": "medium",
         "backend": "cursor",
         "provider": "cursor",
         "model": "grok-4.7-medium",

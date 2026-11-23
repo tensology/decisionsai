@@ -25,7 +25,13 @@ def boundary_minimum_tier(action_type: str, boundaries: dict) -> int:
     at = (action_type or "none").strip().lower()
     if at == "sensitive":
         return PermissionTier.ESCALATE
-    if at in ("ticket_lane_move", "workflow_start", "project_cli_task", "development_thread_control"):
+    if at in (
+        "routine_task",
+        "ticket_lane_move",
+        "workflow_start",
+        "project_cli_task",
+        "development_thread_control",
+    ):
         return PermissionTier.APPROVE
     if at == "external_comms" and boundaries.get("initiative_ask_external_comms"):
         return PermissionTier.ESCALATE
@@ -46,11 +52,7 @@ def configured_tier_for_action(
     if at == "suggestion":
         return PermissionTier.NOTIFY
     if at == "routine_task":
-        return (
-            PermissionTier.SILENT
-            if boundaries.get("initiative_allow_routine_tasks")
-            else PermissionTier.NOTIFY
-        )
+        return PermissionTier.APPROVE
     if at in ("board_triage", "message_triage", "email_triage", "jira_intake"):
         return PermissionTier.NOTIFY
     if at == "ticket_lane_move":

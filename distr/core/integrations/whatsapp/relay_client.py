@@ -40,7 +40,8 @@ def whatsapp_send_dry_run_enabled() -> bool:
 
         return bool(load_settings_from_db().get("whatsapp_send_dry_run"))
     except Exception:
-        return False
+        logger.warning("Could not load WhatsApp send settings. Enabling dry-run.")
+        return True
 
 
 _DEVICE_IDENTITY_PATH = Path.home() / ".decisions" / "device_identity.json"

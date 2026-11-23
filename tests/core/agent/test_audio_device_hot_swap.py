@@ -145,3 +145,43 @@ def test_update_audio_devices_refreshes_unchanged_system_default_output():
     assert session.transport.input().swap_calls == []
     assert session.transport.output().swap_calls == [None]
     assert session.transport.output().swap_names == ["System Default"]
+
+
+def test_update_audio_devices_skips_when_output_endpoint_is_missing():
+    session = _Session()
+    session.transport.output = lambda: None
+    session.config["audio"] = {
+        "input_device": "Studio Mic",
+        "output_device": "USB Speakers",
+    }
+    session.input_device = "Studio Mic"
+    session.output_device = "USB Speakers"
+
+    command_handler._cmd_update_audio_devices(
+        session,
+        {"input_device": "Studio Mic", "output_device": "System Default"},
+    )
+
+    assert session.output_device == "System Default"
+    assert session.config["audio"]["output_device"] == "System Default"
+    assert session.transport.input().swap_calls == []
+
+
+def test_update_audio_devices_skips_when_input_endpoint_is_missing():
+    session = _Session()
+    session.transport.input = lambda: None
+    session.config["audio"] = {
+        "input_device": "Studio Mic",
+        "output_device": "USB Speakers",
+    }
+    session.input_device = "Studio Mic"
+    session.output_device = "USB Speakers"
+
+    command_handler._cmd_update_audio_devices(
+        session,
+        {"input_device": "System Default", "output_device": "USB Speakers"},
+    )
+
+    assert session.input_device == "System Default"
+    assert session.config["audio"]["input_device"] == "System Default"
+    assert session.transport.output().swap_calls == []

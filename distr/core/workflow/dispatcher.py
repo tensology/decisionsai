@@ -3694,6 +3694,52 @@ def continue_waiting_step(
         )
     if waiting_kind == "worker_needs_input":
         return _resume_worker_needs_input(run_id, optional_input,expected_checkpoint=expected_checkpoint)
+    if waiting_kind == "approval" and literal_feedback:
+        clean = (optional_input or "").strip()
+        if not clean:
+            return {"success": False, "status": "waiting", "status_code": 422, "error": "Feedback text is required."}
+
+        with get_session() as db:
+            from distr.core.workflow.interactions import guard_workflow_checkpoint
+
+            guard_workflow_checkpoint(db, run_id, expected_checkpoint)
+            run = lock_step_result_run(db, run_id)
+            if not run or run.status != "waiting" or not run.current_step_id:
+                return {"error": "No approval is waiting", "status_code": 409}
+            step = db.get(AutoWorkflowStep, run.current_step_id)
+            if not step or step.status != "waiting":
+                return {"error": "No waiting step found", "status_code": 409}
+            try:
+                run_data = json.loads(run.run_data or "{}")
+            except (TypeError, ValueError):
+                run_data = {}
+            if not isinstance(run_data, dict) or run_data.get("waiting_kind") != "approval":
+                return {"error": "The workflow checkpoint changed before it could resume", "status_code": 409}
+
+            step_id = step.id
+            run.status = "running"
+            step.status = "queued"
+            run_data["feedback"] = clean
+            for key in ("waiting_kind", "waiting_prompt", "waiting_result", "waiting_passed"):
+                run_data.pop(key, None)
+            run.run_data = json.dumps(run_data)
+            db.commit()
+
+        summary = "Re-running the step with your feedback."
+        record_workflow_chat_event(run_id, "resumed", status="running", step_id=step_id, summary=summary)
+        try:
+            from distr.core.orchestration_events import emit_orchestration_event
+
+            emit_orchestration_event(
+                source="workflow", event_type="workflow_step_feedback_received", status="running",
+                run_id=run_id, step_id=step_id, summary=summary,
+                payload={"feedback": clean, "waiting_kind": "approval"},
+            )
+        except Exception:
+            logger.debug("Could not emit approval feedback event", exc_info=True)
+
+        dispatch = StepDispatcher().run_in_workflow(step_id, run_id)
+        return {"success": True, "action": "retry_step", "step_id": step_id, "dispatch": dispatch}
     if waiting_kind == "restart_recovery":
         clean = (optional_input or "").strip()
         if not literal_feedback and clean.lower() in {"stop", "cancel", "abort"}:
@@ -3904,7 +3950,7 @@ def continue_waiting_step(
     except Exception:
         logger.debug("Could not emit orchestrator workflow_run_resumed event", exc_info=True)
 
-    if waiting_kind == "approval":
+    if waiting_kind == "approval" and not literal_feedback:
         try:
             from distr.core.orchestration_events import emit_orchestration_event
 

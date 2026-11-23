@@ -2,10 +2,12 @@
 import { bindFileDropZone, collectNoteEdits, flattenNote, noteChanged, noteFieldsHtml, parseNoteJson, serializeNote } from '../shared/ticket-modal.js?v=20261102-proposal-files';
 export function createBoards({ context, actions, el }) {
     const state = {
-        kanbanViewMode:
-            new URLSearchParams(window.location.search).get('view') === 'list' || window.localStorage.getItem('decisions.developmentKanbanView') === 'list'
-                ? 'list'
-                : 'board',
+        kanbanViewMode: (() => {
+            const requested = new URLSearchParams(window.location.search).get('view') || window.localStorage.getItem('decisions.developmentKanbanView');
+            return requested === 'list' || requested === 'archived' ? requested : 'board';
+        })(),
+        archivedBoardDetails: {},
+        archivedBoardLoads: {},
         collapsedKanbanLanes: new Set(),
         expandedKanbanLanes: new Set(),
         contextTicketKey: '',
@@ -229,7 +231,109 @@ export function createBoards({ context, actions, el }) {
             .join('')}</div>`;
     }
 
+    function threadBelongsToBoard(chat, board) {
+        const linked = actions.boardByKey(chat?.development_board_key);
+        if (linked) return linked.key === board.key;
+        if (String(chat?.development_board_key || '') === String(board.key || '')) return true;
+        const projectId = Number(chat?.project_id || 0);
+        return Boolean(projectId) && projectId === Number(board.project_id || board.default_project_id || 0);
+    }
+
+    function archivedThreadsForBoard(board) {
+        if (!board) return [];
+        return (context.archivedChats || []).filter((chat) => threadBelongsToBoard(chat, board));
+    }
+
+    function archivedTicketsByLane(detail) {
+        return (detail?.lanes || [])
+            .map((lane) => {
+                const tickets = (lane.tickets || lane.cards || []).filter(
+                    (ticket) => ticket.archived || ticket.merged_into_ticket_id
+                );
+                return { ...lane, tickets };
+            })
+            .filter((lane) => lane.tickets.length);
+    }
+
+    function ensureArchivedBoardItems(boardKey) {
+        const board = actions.boardByKey(boardKey || context.selectedBoardKey);
+        if (!board) return null;
+        const key = board.key;
+        if (state.archivedBoardLoads[key]) return state.archivedBoardLoads[key];
+        if (board.provider !== 'decisions') {
+            state.archivedBoardDetails[key] = { lanes: [] };
+            return null;
+        }
+        const request = (async () => {
+            try {
+                const detail = await actions.api(
+                    `/tickets/boards/${Number(board.local_id || board.id)}?include_archived=true`
+                );
+                state.archivedBoardDetails[key] = detail;
+            } catch (error) {
+                state.archivedBoardDetails[key] = {
+                    lanes: [],
+                    error: error.message || 'Could not load archived tickets.'
+                };
+            }
+            if (state.kanbanViewMode === 'archived' && context.selectedBoardKey === key) renderKanbanWorkspace();
+        })().finally(() => {
+            if (state.archivedBoardLoads[key] === request) delete state.archivedBoardLoads[key];
+        });
+        state.archivedBoardLoads[key] = request;
+        return request;
+    }
+
+    function archivedThreadCardHtml(chat) {
+        const title = chat.title || 'Archived thread';
+        return `<article class="development-kanban-card list-row" tabindex="0" role="button" data-archived-thread="${Number(chat.id)}" aria-label="Open ${actions.escapeHtml(title)}">
+            <div class="development-kanban-card-copy"><span class="development-kanban-card-title"><strong>${actions.escapeHtml(title)}</strong></span></div>
+        </article>`;
+    }
+
+    function renderKanbanArchivedList(board) {
+        const cached = state.archivedBoardDetails[board.key];
+        const loading = board.provider === 'decisions' && !cached && state.archivedBoardLoads[board.key];
+        if (loading) return '<div class="development-kanban-empty">Loading archived items...</div>';
+        if (cached?.error) return `<div class="development-kanban-empty" role="alert">${actions.escapeHtml(cached.error)}</div>`;
+        const ticketLanes = archivedTicketsByLane(cached);
+        const threads = archivedThreadsForBoard(board);
+        const ticketSections = ticketLanes
+            .map((lane) => {
+                const tickets = [...lane.tickets].sort(compareKanbanListTickets);
+                const laneId = String(lane.id || lane.key || lane.name);
+                const laneKey = `${board.key}:${laneId}`;
+                const collapsed = state.collapsedKanbanLanes.has(laneKey);
+                return `<section class="development-kanban-list-section${collapsed ? ' collapsed' : ''}" data-kanban-lane="${actions.escapeHtml(laneId)}">
+                <div class="development-kanban-list-heading-row"><button type="button" class="development-kanban-list-heading" data-kanban-lane-toggle="${actions.escapeHtml(laneId)}" aria-expanded="${String(!collapsed)}"><span aria-hidden="true">›</span><strong>${actions.escapeHtml(lane.name || lane.title || 'Untitled lane')}</strong><small>${tickets.length}</small></button></div>
+                <div class="development-kanban-list-body">${tickets.map((ticket) => kanbanCardHtml(board, lane, ticket, 'list').replace('draggable="true"', 'draggable="false"')).join('')}</div>
+            </section>`;
+            })
+            .join('');
+        const threadLaneKey = `${board.key}:archived-threads`;
+        const threadsCollapsed = state.collapsedKanbanLanes.has(threadLaneKey);
+        const threadSection = threads.length
+            ? `<section class="development-kanban-list-section${threadsCollapsed ? ' collapsed' : ''}">
+                <div class="development-kanban-list-heading-row"><button type="button" class="development-kanban-list-heading" data-kanban-lane-toggle="archived-threads" aria-expanded="${String(!threadsCollapsed)}"><span aria-hidden="true">›</span><strong>Threads</strong><small>${threads.length}</small></button></div>
+                <div class="development-kanban-list-body">${threads.map(archivedThreadCardHtml).join('')}</div>
+            </section>`
+            : '';
+        const body = ticketSections + threadSection;
+        if (!body) return '<div class="development-kanban-empty">No archived tickets or threads on this board.</div>';
+        return `<div class="development-kanban-list">${body}</div>`;
+    }
+
     function bindKanbanWorkspaceInteractions(board, lanesNode) {
+        lanesNode.querySelectorAll('[data-archived-thread]').forEach((card) => {
+            const openThread = () => actions.loadChat(Number(card.dataset.archivedThread));
+            card.addEventListener('click', openThread);
+            card.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openThread();
+                }
+            });
+        });
         lanesNode.querySelectorAll('[data-kanban-ticket]').forEach((card) => {
             card.addEventListener('dblclick', (event) => {
                 if (event.target.closest('[data-kanban-menu], [data-ticket-run-status]')) return;
@@ -298,12 +402,12 @@ export function createBoards({ context, actions, el }) {
     }
 
     function syncKanbanHeader(board) {
-        const boardMode = state.kanbanViewMode === 'board';
-        el('development-kanban-view-board').classList.toggle('active', boardMode);
-        el('development-kanban-view-board').setAttribute('aria-pressed', String(boardMode));
-        el('development-kanban-view-list').classList.toggle('active', !boardMode);
-        el('development-kanban-view-list').setAttribute('aria-pressed', String(!boardMode));
-        el('development-kanban-view-label').textContent = boardMode ? 'Kanban' : 'List';
+        const mode = state.kanbanViewMode;
+        el('development-kanban-view-board').classList.toggle('active', mode === 'board');
+        el('development-kanban-view-board').setAttribute('aria-pressed', String(mode === 'board'));
+        el('development-kanban-view-list').classList.toggle('active', mode === 'list');
+        el('development-kanban-view-list').setAttribute('aria-pressed', String(mode === 'list'));
+        el('development-kanban-view-label').textContent = mode === 'board' ? 'Kanban' : mode === 'archived' ? 'Archived' : 'List';
         const refreshButton = el('development-kanban-refresh');
         const external = board && (board.provider === 'jira' || board.provider === 'trello');
         refreshButton.classList.toggle('hidden', !external);
@@ -315,13 +419,14 @@ export function createBoards({ context, actions, el }) {
     }
 
     function setKanbanViewMode(mode) {
-        state.kanbanViewMode = mode === 'list' ? 'list' : 'board';
+        state.kanbanViewMode = mode === 'list' || mode === 'archived' ? mode : 'board';
         try {
             window.localStorage.setItem('decisions.developmentKanbanView', state.kanbanViewMode);
         } catch (_) {
             /* local preference only */
         }
         actions.closeBoardContextMenu();
+        if (state.kanbanViewMode === 'archived') ensureArchivedBoardItems();
         renderKanbanWorkspace();
     }
 
@@ -343,12 +448,17 @@ export function createBoards({ context, actions, el }) {
             return;
         }
         const lanes = detail.lanes || [];
-        lanesNode.classList.toggle('list-view', state.kanbanViewMode === 'list');
-        lanesNode.innerHTML = lanes.length
-            ? state.kanbanViewMode === 'list'
-                ? renderKanbanListLanes(board, lanes)
-                : renderKanbanBoardLanes(board, lanes)
-            : '<div class="development-kanban-empty">This board has no lanes yet. Edit the board to configure it.</div>';
+        const archivedMode = state.kanbanViewMode === 'archived';
+        lanesNode.classList.toggle('list-view', state.kanbanViewMode === 'list' || archivedMode);
+        if (archivedMode) {
+            lanesNode.innerHTML = renderKanbanArchivedList(board);
+        } else {
+            lanesNode.innerHTML = lanes.length
+                ? state.kanbanViewMode === 'list'
+                    ? renderKanbanListLanes(board, lanes)
+                    : renderKanbanBoardLanes(board, lanes)
+                : '<div class="development-kanban-empty">This board has no lanes yet. Edit the board to configure it.</div>';
+        }
         bindKanbanWorkspaceInteractions(board, lanesNode);
     }
 
@@ -423,11 +533,10 @@ export function createBoards({ context, actions, el }) {
         state.contextTicketKey = ticketKey;
         const menu = el('ticket-context-menu');
         const local = board.provider === 'decisions';
-        const hasProject = Boolean(ticket.raw?.linked_project_id || context.boardDetails[board.key]?.default_project_id || board.project_id);
         const threadButton = menu.querySelector('[data-ticket-menu-action="thread"]');
         threadButton.querySelector('.context-menu-label').textContent = kanbanThreadActionLabel(ticket);
-        menu.querySelector('[data-ticket-menu-action="agent"]').classList.toggle('hidden', !local || !hasProject);
-        menu.querySelector('[data-ticket-menu-action="project"]').classList.toggle('hidden', !local || !hasProject);
+        const doneButton = menu.querySelector('[data-ticket-menu-action="done"]');
+        if (doneButton) doneButton.classList.toggle('hidden', !kanbanTicketCanMarkDone(board, ticket));
         menu.querySelector('[data-ticket-menu-action="delete"]').classList.toggle('hidden', !local);
         positionContextMenu(menu, event, anchor);
     }
@@ -517,6 +626,8 @@ export function createBoards({ context, actions, el }) {
         else if (action === 'thread') {
             openKanbanTicketDialog(ticket.key);
             await createThreadFromKanbanTicket();
+        } else if (action === 'done') {
+            await markKanbanTicketDone(ticket);
         } else if (action === 'delete') {
             openKanbanTicketDialog(ticket.key);
             await deleteKanbanTicket();
@@ -1072,9 +1183,79 @@ export function createBoards({ context, actions, el }) {
         }
     }
 
-    async function moveKanbanTicket(ticketKey, laneId, position) {
-        const board = actions.boardByKey(context.selectedBoardKey);
-        const ticket = kanbanTicketByKey(ticketKey);
+    function isCompleteLaneName(name) {
+        return ['complete', 'done', 'completed', 'closed', 'shipped'].includes(String(name || '').trim().toLowerCase());
+    }
+
+    function kanbanDoneLane(lanes) {
+        const list = Array.isArray(lanes) ? lanes : [];
+        const named = list.find((lane) => isCompleteLaneName(lane.name || lane.title));
+        if (named) return named;
+        return list.length ? list[list.length - 1] : null;
+    }
+
+    function kanbanTicketCanMarkDone(board, ticket) {
+        if (!board || !ticket) return false;
+        const laneId = ticket.lane_id;
+        if (laneId == null || laneId === '') return false;
+        const lanes = (context.boardDetails[board.key] || {}).lanes || [];
+        const current = lanes.find((lane) => [lane.id, lane.key, lane.name].some((value) => String(value) === String(laneId)));
+        if (!current) return false;
+        const target = kanbanDoneLane(lanes);
+        if (!target) return false;
+        const targetId = target.id || target.key || target.name;
+        if (String(laneId) === String(targetId) || isCompleteLaneName(current.name || current.title)) return false;
+        return true;
+    }
+
+    async function markKanbanTicketDone(ticket, boardKey) {
+        const board = actions.boardByKey(boardKey || context.selectedBoardKey);
+        if (!kanbanTicketCanMarkDone(board, ticket)) return;
+        const lanes = (context.boardDetails[board.key] || {}).lanes || [];
+        const target = kanbanDoneLane(lanes);
+        const laneId = target.id || target.key || target.name;
+        const collection = Array.isArray(target.tickets) ? target.tickets : Array.isArray(target.cards) ? target.cards : [];
+        await moveKanbanTicket(ticket.key, laneId, collection.length, board.key);
+        await actions.loadBoardTickets(board.key, { force: true, remote: false });
+    }
+
+    function linkedTicketForChat(chat) {
+        if (!chat) return { board: null, ticket: null };
+        const board = actions.boardByKey(chat.development_board_key) || actions.boardForProject(chat.project_id) || null;
+        if (!board) return { board: null, ticket: null };
+        const tickets = context.boardTickets[board.key] || [];
+        const ticketId = Number(chat.development_ticket_id || chat.development?.ticket_id || 0);
+        const ticketKey = String(chat.development_board_ticket_key || '');
+        const ticket = tickets.find((item) => (ticketKey && item.key === ticketKey) || (ticketId && Number(item.ticket_id || item.id) === ticketId)) || null;
+        return { board, ticket };
+    }
+
+    function chatHasKanbanTicketLink(chat) {
+        return Boolean(chat && (chat.development_ticket_id || chat.development?.ticket_id || chat.development_board_ticket_key));
+    }
+
+    function canMarkLinkedTicketDone(chat) {
+        const { board, ticket } = linkedTicketForChat(chat);
+        return kanbanTicketCanMarkDone(board, ticket);
+    }
+
+    async function prepareLinkedTicketDone(chat) {
+        if (!chatHasKanbanTicketLink(chat)) return false;
+        const board = actions.boardByKey(chat.development_board_key) || actions.boardForProject(chat.project_id) || null;
+        if (!board) return false;
+        if (!context.boardDetails[board.key]) await actions.loadBoardTickets(board.key);
+        return canMarkLinkedTicketDone(chat);
+    }
+
+    async function markLinkedTicketDone(chat) {
+        if (!(await prepareLinkedTicketDone(chat))) return;
+        const { board, ticket } = linkedTicketForChat(chat);
+        await markKanbanTicketDone(ticket, board.key);
+    }
+
+    async function moveKanbanTicket(ticketKey, laneId, position, boardKey) {
+        const board = actions.boardByKey(boardKey || context.selectedBoardKey);
+        const ticket = (board && (context.boardTickets[board.key] || []).find((item) => item.key === ticketKey)) || kanbanTicketByKey(ticketKey);
         if (!board || !ticket || String(ticket.lane_id) === String(laneId)) return;
         const previousDetail = JSON.parse(JSON.stringify(context.boardDetails[board.key] || {}));
         moveCachedKanbanTicket(board, ticket, laneId, position);
@@ -1083,6 +1264,7 @@ export function createBoards({ context, actions, el }) {
             if (board.provider === 'decisions') {
                 await actions.api(`/tickets/tickets/${Number(ticket.id)}/move`, {
                     method: 'PUT',
+                    headers: { 'X-Decisions-Actor': 'user' },
                     body: { lane_id: Number(laneId), position }
                 });
             } else {
@@ -1242,11 +1424,14 @@ export function createBoards({ context, actions, el }) {
     }
     return {
         bindEvents,
+        canMarkLinkedTicketDone,
         closeTicketContextMenu,
         kanbanCardHtml,
         forceRefreshKanbanBoard,
         getKanbanViewMode,
+        markLinkedTicketDone,
         openKanbanTicketDialog,
+        prepareLinkedTicketDone,
         renderKanbanWorkspace,
         setKanbanViewMode
     };

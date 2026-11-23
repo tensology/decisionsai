@@ -4,11 +4,13 @@ from __future__ import annotations
 import logging
 import hashlib
 import stat
+from collections.abc import Iterator
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
 from . import media_cache
-from .attachment_text import apply_extraction, extract_attachment_bytes, excerpt_extracted_text
+from .attachment_text import _DOCX_MIME, apply_extraction, extract_attachment_bytes, excerpt_extracted_text
 
 logger = logging.getLogger(__name__)
 
@@ -18,20 +20,19 @@ MAX_ATTACHMENTS_PER_MESSAGE = 15
 def _kind_for(mime: str, filename: str = "") -> str:
     mime = str(mime or "").split(";", 1)[0].strip().lower()
     suffix = Path(filename or "").suffix.lower()
-    if mime.startswith("image/") or suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+    if mime.startswith("image/") or suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".heif"}:
         return "image"
-    if mime == "application/pdf" or suffix == ".pdf":
+    if mime in {"application/pdf", "application/msword", _DOCX_MIME} or suffix in {".pdf", ".docx", ".doc"}:
         return "document"
     return "file"
 
 
-def collect_item_attachments(item: dict[str, Any]) -> list[dict[str, Any]]:
+def _item_attachment_rows(item: dict[str, Any]) -> Iterator[dict[str, Any]]:
     """Normalize attachment dicts from an Incoming mail item."""
     if not isinstance(item, dict):
-        return []
+        return
     source = str(item.get("source") or item.get("provider") or "").strip().lower()
     message_id = str(item.get("source_message_id") or item.get("message_id") or item.get("id") or "").strip()
-    out: list[dict[str, Any]] = []
     for raw in item.get("attachments") or []:
         if not isinstance(raw, dict):
             continue
@@ -39,7 +40,7 @@ def collect_item_attachments(item: dict[str, Any]) -> list[dict[str, Any]]:
         mime = str(raw.get("mime_type") or raw.get("content_type") or raw.get("type") or "").strip()
         mid = str(raw.get("message_id") or message_id).strip()
         provider = str(raw.get("provider") or source).strip().lower()
-        row = {
+        yield {
             "name": filename,
             "filename": filename,
             "mime_type": mime,
@@ -60,10 +61,22 @@ def collect_item_attachments(item: dict[str, Any]) -> list[dict[str, Any]]:
             "extraction_status": str(raw.get("extraction_status") or ""),
             "download_status": str(raw.get("download_status") or ("stored" if raw.get("path") else "")),
         }
-        out.append(row)
-        if len(out) >= MAX_ATTACHMENTS_PER_MESSAGE:
-            break
-    return out
+
+
+def collect_item_attachments(item: dict[str, Any]) -> list[dict[str, Any]]:
+    return list(islice(_item_attachment_rows(item), MAX_ATTACHMENTS_PER_MESSAGE))
+
+
+def skipped_item_attachments(item: dict[str, Any]) -> list[dict[str, Any]]:
+    """Keep over-cap attachment metadata available after enrichment."""
+    skipped = [
+        {**{key: row[key] for key in ("name", "mime_type", "size", "message_id")},
+         "download_status": "skipped",
+         "extraction_status": "skipped",
+         "extraction_reason": f"Not processed: this message has more than {MAX_ATTACHMENTS_PER_MESSAGE} attachments."}
+        for row in islice(_item_attachment_rows(item), MAX_ATTACHMENTS_PER_MESSAGE, None)
+    ]
+    return skipped or (item.get("skipped_attachments") or [] if isinstance(item, dict) else [])
 
 
 def collect_conversation_attachments(conversation: dict[str, Any]) -> list[dict[str, Any]]:
@@ -91,6 +104,10 @@ def prompt_attachments_for_item(item: dict[str, Any]) -> list[dict[str, Any]]:
             "extraction_status": raw.get("extraction_status") or "",
             "path": raw.get("path") or "",
         })
+    rows.extend(
+        {key: raw[key] for key in ("name", "mime_type", "size", "extraction_status", "extraction_reason")}
+        for raw in skipped_item_attachments(item)
+    )
     return rows
 
 
@@ -218,6 +235,11 @@ def enrich_conversation_mail_attachments(
     for item in conversation.get("items") or []:
         if not isinstance(item, dict):
             continue
+        skipped = skipped_item_attachments(item)
+        if skipped and skipped != item.get("skipped_attachments"):
+            item["skipped_attachments"] = skipped
+            logger.warning("Mail message %s skipped %d attachments above the limit.",
+                           skipped[0]["message_id"], len(skipped))
         enriched: list[dict[str, Any]] = []
         for raw in collect_item_attachments(item):
             raw["provider"] = raw.get("provider") or source

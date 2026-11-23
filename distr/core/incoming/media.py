@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import mimetypes
 import shutil
 import stat
@@ -280,25 +281,39 @@ def ensure_proposal_attachments(
                   'duration': int(row.media_duration) if row.media_duration not in (None, '') else None,
                   'stored': row.media_local_path or ''} for row in rows if row.media_type or row.media_local_path]
     from distr.core.integrations.whatsapp.paths import resolve_whatsapp_media_disk_path
+    from .attachment_text import apply_extraction
+    from .mail_attachments import _kind_for
+    from .transcription import is_playable
+
     for item in media:
         identity = 'whatsapp:' + item['message_id']
         extension = mimetypes.guess_extension((item['mime'] or '').split(';', 1)[0].strip()) or '.bin'
         name = item['name'] or item['message_id'] + extension
         destination = _destination(root, identity, name)
         try:
-            cached = media_cache.verified(destination, identity, {})
-            if cached:
-                attachments.append(cached)
-                continue
-            original = Path(resolve_whatsapp_media_disk_path(item['stored'])) if item['stored'] else None
-            if original and original.is_file():
-                if original.stat().st_size > MAX_MEDIA_BYTES:
-                    raise ValueError('Media exceeds the attachment limit.')
-                media_cache.copy_original(original, destination)
-            else:
-                _download_whatsapp(item['id'], item['message_id'], destination)
-            record = _record(destination, name, item['mime'], identity, source_message_id=item['message_id'], kind=item.get('kind') or '', duration=item.get('duration'))
-            media_cache.remember(record)
+            record = media_cache.verified(destination, identity, {})
+            is_new = record is None
+            if is_new:
+                original = Path(resolve_whatsapp_media_disk_path(item['stored'])) if item['stored'] else None
+                if original and original.is_file():
+                    if original.stat().st_size > MAX_MEDIA_BYTES:
+                        raise ValueError('Media exceeds the attachment limit.')
+                    media_cache.copy_original(original, destination)
+                else:
+                    _download_whatsapp(item['id'], item['message_id'], destination)
+                record = _record(destination, name, item['mime'], identity, source_message_id=item['message_id'], kind=item.get('kind') or '', duration=item.get('duration'))
+            kind = str(item.get('kind') or record.get('kind') or '').strip().lower()
+            if (not record.get('extraction_status') and kind not in {'audio', 'video', 'voice', 'ptt'}
+                    and not is_playable(record)
+                    and (kind in {'image', 'photo', 'document'} or _kind_for(record.get('mime_type'), name) in {'image', 'document'})):
+                try:
+                    record = apply_extraction(record)
+                    if not is_new:
+                        media_cache.remember(record)
+                except Exception:
+                    logging.getLogger(__name__).info('WhatsApp attachment text extraction failed', exc_info=True)
+            if is_new:
+                media_cache.remember(record)
             attachments.append(record)
         except Exception as exc:
             _fail(name, f'Could not attach {name}. The proposal was not pushed. Sync WhatsApp media and retry. ({exc})',

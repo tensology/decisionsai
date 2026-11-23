@@ -166,6 +166,9 @@ class AgentLifecycleMixin:
         """
         if now is None:
             now = time.monotonic()
+        if getattr(self, "_quitting", False):
+            logger.debug("Skipping agent auto-restart during shutdown (%s)", reason)
+            return False
         if getattr(self, "_agent_restart_halted", False) or getattr(self, "_agent_auto_restart_pending", False):
             return False
         window = self._AGENT_RESTART_WINDOW_SECONDS
@@ -212,6 +215,10 @@ class AgentLifecycleMixin:
         generation = self._bump_agent_restart_generation()
 
         def _do_restart():
+            if getattr(self, "_quitting", False):
+                logger.debug("Skipping scheduled agent restart during shutdown (%s)", reason)
+                self._agent_auto_restart_pending = False
+                return
             if getattr(self, "_agent_restart_generation", 0) != generation:
                 logger.info("[HEALTH CHECK] Stale scheduled agent restart (%s) skipped", reason)
                 return
@@ -244,6 +251,8 @@ class AgentLifecycleMixin:
 
     def check_agent_health(self):
         """Check if agent process is alive and reload if dead (capped, with backoff)."""
+        if getattr(self, "_quitting", False):
+            return
         if getattr(self, "_agent_restart_halted", False) or getattr(self, "_agent_auto_restart_pending", False):
             return
         if self.agent_process is None:

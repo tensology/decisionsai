@@ -30,6 +30,8 @@ TENSOLOGY_LIVE_TICKET_STATUSES = (
 )
 TENSOLOGY_LIVE_TICKET_STATUS_SET = frozenset(TENSOLOGY_LIVE_TICKET_STATUSES.split(","))
 _TENSOLOGY_TICKETS: dict[int, dict[str, Any]] = {}
+_ORPHANED_TENSOLOGY_THREADS: dict[int, str] = {}
+_MEDIA_INCOMPLETE_UNREPORTED: set[int] = set()
 _TENSOLOGY_TICKETS_LOCK = threading.Lock()
 _TICKET_PROCESS_LOCK = threading.Lock()
 ATTACHMENT_MAX_BYTES = 15 * 1024 * 1024
@@ -1502,7 +1504,21 @@ def _process_tensology_ticket(client: TensologyClient, ticket: dict[str, Any]) -
     groups = [ticket.get('attachments') or []] + [message.get('attachments') or [] for message in ticket.get('discussion') or [] if isinstance(message, dict)]
     missing = [item.get('name') or item.get('filename') or 'attachment' for group in groups for item in group if isinstance(item, dict) and item.get('download_error')]
     if missing:
+        if chat_id is None:
+            # The execution endpoint rejects updates without a thread_id; do not send one.
+            with _TENSOLOGY_TICKETS_LOCK:
+                first_miss = int(ticket['id']) not in _MEDIA_INCOMPLETE_UNREPORTED
+                _MEDIA_INCOMPLETE_UNREPORTED.add(int(ticket['id']))
+            if first_miss:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Tensology ticket %s has incomplete media and no Development thread; not reporting it remotely.",
+                    ticket.get("reference") or ticket.get("id"),
+                )
+            return False
         client.patch(f"tickets/{int(ticket['id'])}/execution", {
+            'thread_id': str(chat_id),
             'status': 'failed', 'detail': 'Media transfer incomplete: '+', '.join(missing)+'. Restore the files and retry.'
         }, idempotency_key=f"tensology-ticket-{int(ticket['id'])}-media-incomplete")
         return False
@@ -1691,12 +1707,30 @@ def sync_tensology_execution_states(*, force: bool = False) -> int:
         client = None
         changed = 0
         for ticket in claimed:
+            ticket_id = int(ticket["id"])
             try:
                 chat_id = _existing_tensology_thread(ticket)
-                if chat_id is None or str(ticket.get("decisions_thread_id") or "") != str(chat_id):
+                thread_id = str(chat_id)
+                if chat_id is None or str(ticket.get("decisions_thread_id") or "") != thread_id:
                     continue
+                with _TENSOLOGY_TICKETS_LOCK:
+                    if _ORPHANED_TENSOLOGY_THREADS.get(ticket_id) == thread_id:
+                        continue
                 client = client or configured_tensology_client(source="decisionsai-ticket-runner")
-                if _sync_tensology_ticket_state(client, ticket, chat_id):
+                try:
+                    updated = _sync_tensology_ticket_state(client, ticket, chat_id)
+                except LookupError:
+                    with _TENSOLOGY_TICKETS_LOCK:
+                        _ORPHANED_TENSOLOGY_THREADS[ticket_id] = thread_id
+                    log.warning(
+                        "Tensology ticket %s points at missing Development thread %s; "
+                        "skipping its state sync until the ticket is re-linked.",
+                        ticket.get("reference") or ticket_id, chat_id,
+                    )
+                    continue
+                with _TENSOLOGY_TICKETS_LOCK:
+                    _ORPHANED_TENSOLOGY_THREADS.pop(ticket_id, None)
+                if updated:
                     changed += 1
             except (OperationalError, TensologyApiError) as exc:
                 # Keep the live snapshot until this ticket's status is acknowledged.

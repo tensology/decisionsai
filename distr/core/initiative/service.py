@@ -1722,6 +1722,17 @@ class InitiativeService:
                 self._deliver_suggestion(action, settings, tier=tier)
                 return
 
+            resolved_tier = (
+                PermissionTier.NOTIFY if tier is None
+                else PermissionTier(int(getattr(tier, "value", tier)))
+            )
+            if resolved_tier.value < PermissionTier.APPROVE.value:
+                # Allowed routine tasks still need approval; do not create tickets
+                # or start workflows silently.
+                action.requires_confirmation = True
+                self._draft_and_ask(action, settings, tier=PermissionTier.APPROVE)
+                return
+
             runner_type = (action.payload or {}).get("runner_type", "")
             if runner_type == "kanban":
                 self._dispatch_kanban(action, settings, tier=tier)
@@ -2121,6 +2132,7 @@ class InitiativeService:
                     "action": serialize(action),
                 }
                 if action.action_type in (
+                    "routine_task",
                     "ticket_lane_move",
                     "workflow_start",
                     "project_cli_task",

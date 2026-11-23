@@ -8,11 +8,13 @@
         var panel = document.getElementById('software_update_panel');
         if (!panel) return;
         var status = document.getElementById('software_update_status');
-        var check = document.getElementById('software_update_check');
         var apply = document.getElementById('software_update_apply');
-        var release = document.getElementById('software_update_release');
         var checking = false;
         var monitoring = false;
+
+        function showPanel(visible) {
+            panel.hidden = !visible;
+        }
 
         async function request(query, options) {
             var response = await fetch(endpoint + query, {cache: 'no-store', ...options});
@@ -24,29 +26,29 @@
         async function refresh(force, keepMessage) {
             if (checking || monitoring) return;
             checking = true;
-            check.disabled = true;
             apply.disabled = true;
-            if (!keepMessage) status.textContent = 'Checking for updates…';
             try {
                 var data = await request(force ? '?refresh=true' : '');
                 var operation = data.operation || {};
                 if (active.includes(operation.phase)) {
+                    if (!keepMessage && operation.message) status.textContent = operation.message;
+                    showPanel(true);
                     monitor();
                     return;
                 }
-                if (!keepMessage) {
-                    status.textContent = operation.phase === 'failed' && !force
-                        ? operation.message
-                        : data.message;
+                if (data.status === 'available') {
+                    if (!keepMessage) status.textContent = data.message;
+                    apply.hidden = false;
+                    showPanel(true);
+                } else {
+                    apply.hidden = true;
+                    if (!monitoring) showPanel(false);
                 }
-                apply.hidden = data.status !== 'available';
-                release.hidden = data.status !== 'unsupported';
             } catch (error) {
-                if (!keepMessage) status.textContent = 'Could not check for DecisionsAI updates.';
                 apply.hidden = true;
+                if (!monitoring) showPanel(false);
             } finally {
                 checking = false;
-                check.disabled = monitoring;
                 apply.disabled = monitoring;
             }
         }
@@ -55,7 +57,8 @@
             if (monitoring) return;
             monitoring = true;
             apply.hidden = true;
-            check.disabled = true;
+            apply.disabled = true;
+            showPanel(true);
             var deadline = Date.now() + 15 * 60 * 1000;
             while (Date.now() < deadline) {
                 try {
@@ -64,6 +67,12 @@
                     if (operation.message) status.textContent = operation.message;
                     if (operation.phase === 'complete' || operation.phase === 'failed') {
                         monitoring = false;
+                        if (operation.phase === 'failed') {
+                            apply.disabled = false;
+                            apply.hidden = true;
+                            showPanel(true);
+                            return;
+                        }
                         await refresh(false, true);
                         return;
                     }
@@ -73,32 +82,31 @@
                 await new Promise(function(resolve) { setTimeout(resolve, 2000); });
             }
             monitoring = false;
-            check.disabled = false;
+            apply.disabled = false;
             status.textContent = 'Still waiting for DecisionsAI. Check software-update.log for progress.';
         }
 
-        check.addEventListener('click', function() { refresh(true); });
         apply.addEventListener('click', async function() {
             if (monitoring || checking) return;
             checking = true;
-            check.disabled = true;
             apply.disabled = true;
             status.textContent = 'Preparing to close and update DecisionsAI…';
+            showPanel(true);
             try {
                 await request('', {method: 'POST', headers: {'X-Decisions-Update': 'click'}});
                 monitor();
             } catch (error) {
                 status.textContent = error.message;
+                showPanel(true);
             } finally {
                 checking = false;
-                check.disabled = monitoring;
                 apply.disabled = monitoring;
             }
         });
 
         refresh(false);
         setInterval(function() {
-            if (!document.hidden && panel.getClientRects().length) refresh(false);
+            if (!document.hidden) refresh(false);
         }, 300000);
     }
 

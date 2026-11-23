@@ -2356,8 +2356,12 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
 
     @router.delete("/chats/{chat_id}", include_in_schema=False)
     @router.delete("/agent-conversations/{chat_id}", summary="Delete an agent conversation")
-    async def delete_chat(chat_id: int):
-        """Delete a chat and every thread-owned Development relationship."""
+    async def delete_chat(chat_id: int, confirm: Optional[int] = None):
+        """Delete a chat and every thread-owned Development relationship.
+
+        Agent conversations are only deleted when ``confirm`` names this exact
+        conversation id (the UI's own confirm dialog passes it).
+        """
         try:
             with get_session() as session:
                 chat = session.query(Chat).filter(Chat.id == chat_id).first()
@@ -2369,6 +2373,14 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 if primary and primary.main_chat_id == chat_id:
                     raise HTTPException(409, "The primary agent's main conversation cannot be deleted.")
                 _reject_development_lifecycle(session, chat)
+                if confirm is None or int(confirm) != int(chat_id):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Agent conversation {chat_id} was not deleted: deleting an agent "
+                            f"conversation needs explicit confirmation (confirm={chat_id})."
+                        ),
+                    )
                 from distr.core.chat import cleanup_chat_dependencies
 
                 cleanup_chat_dependencies(

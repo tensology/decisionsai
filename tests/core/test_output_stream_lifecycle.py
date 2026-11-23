@@ -1,6 +1,7 @@
 """Speaker hardware is owned only by playback, never an idle agent."""
 
 import asyncio
+import logging
 import threading
 from queue import Queue
 from types import SimpleNamespace
@@ -347,3 +348,60 @@ def test_continuous_audio_keeps_one_stream_until_the_last_chunk_drains(output):
             await finish(output)
 
     asyncio.run(scenario())
+
+
+def test_close_output_stream_already_closed_is_idempotent(output, caplog):
+    class ClosedStream(Stream):
+        def is_active(self):
+            raise OSError("Stream not open")
+
+        def close(self):
+            raise OSError("Stream not open")
+
+    output._out_stream = ClosedStream(output._py_audio.events)
+    caplog.set_level(logging.DEBUG)
+
+    output._close_output_stream()
+
+    assert output._out_stream is None
+    assert not any(record.levelno >= logging.ERROR for record in caplog.records)
+    assert any("Stream not open" in record.getMessage() for record in caplog.records)
+
+
+def test_reopen_output_stream_treats_already_closed_stream_as_benign(output, caplog):
+    class ClosedStream(Stream):
+        def is_active(self):
+            raise OSError("Stream not open")
+
+        def close(self):
+            raise OSError("Stream not open")
+
+    output._sample_rate = 44100
+    output._out_stream = ClosedStream(output._py_audio.events)
+    caplog.set_level(logging.DEBUG)
+
+    assert output._reopen_output_stream(0) is True
+
+    assert output._out_stream is not None
+    assert output._out_stream.is_active()
+    assert not any(record.levelno >= logging.ERROR for record in caplog.records)
+
+
+def test_close_output_stream_still_logs_real_errors(output, caplog):
+    class BrokenStream(Stream):
+        def is_active(self):
+            return False
+
+        def close(self):
+            raise OSError("Device not available")
+
+    output._out_stream = BrokenStream(output._py_audio.events)
+    caplog.set_level(logging.DEBUG)
+
+    output._close_output_stream()
+
+    assert output._out_stream is None
+    assert any(
+        record.levelno >= logging.ERROR and "Device not available" in record.getMessage()
+        for record in caplog.records
+    )

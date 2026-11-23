@@ -413,6 +413,8 @@ export function createSidebar({ context, actions, el }) {
             context.workspaceMode === 'kanban' && actions.getKanbanViewMode() === 'list' && context.selectedBoardKey === boardKey;
         el('board-context-kanban').disabled =
             context.workspaceMode === 'kanban' && actions.getKanbanViewMode() === 'board' && context.selectedBoardKey === boardKey;
+        el('board-context-archived').disabled =
+            context.workspaceMode === 'kanban' && actions.getKanbanViewMode() === 'archived' && context.selectedBoardKey === boardKey;
         el('board-context-refresh').querySelector('.context-menu-label').textContent =
             board?.provider === 'decisions' ? 'Refresh Board' : `Re-sync ${actions.providerName(board?.provider)} Board`;
         el('board-context-activate').classList.toggle('hidden', board?.provider !== 'decisions');
@@ -490,11 +492,36 @@ export function createSidebar({ context, actions, el }) {
             button.dataset.timerAction = button.dataset[`${stateName}Action`];
         });
         el('thread-context-archive').querySelector('.context-menu-label').textContent = chat.archived ? 'Restore thread' : 'Archive thread';
+        setThreadDoneVisibility(chat);
         menu.classList.remove('hidden');
         menu.style.left = `${Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8)}px`;
         menu.style.top = `${Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 8)}px`;
         menu.focus({ preventScroll: true });
         refreshThreadContextTerminalAction(chat);
+        refreshThreadContextDoneAction(chat);
+    }
+
+    function setThreadDoneVisibility(chat) {
+        const show = Boolean(actions.canMarkLinkedTicketDone?.(chat));
+        el('thread-context-done')?.classList.toggle('hidden', !show);
+        el('thread-context-done-heading')?.classList.toggle('hidden', !show);
+    }
+
+    async function refreshThreadContextDoneAction(chat) {
+        if (typeof actions.prepareLinkedTicketDone !== 'function') {
+            setThreadDoneVisibility(chat);
+            return;
+        }
+        await actions.prepareLinkedTicketDone(chat);
+        if (Number(state.contextThreadId) !== Number(chat.id)) return;
+        if (el('thread-context-menu').classList.contains('hidden')) return;
+        setThreadDoneVisibility(chat);
+    }
+
+    async function contextMarkThreadTicketDone() {
+        const chat = context.chats.concat(context.archivedChats).find((item) => Number(item.id) === Number(state.contextThreadId));
+        closeThreadContextMenu();
+        if (chat) await actions.markLinkedTicketDone?.(chat);
     }
 
     function threadBoard(chat) {
@@ -960,6 +987,12 @@ export function createSidebar({ context, actions, el }) {
             if (context.selectedBoardKey !== boardKey || context.workspaceMode !== 'kanban') await actions.openBoardKanban(boardKey);
             actions.setKanbanViewMode('list');
         });
+        el('board-context-archived').addEventListener('click', async () => {
+            const boardKey = state.contextBoardKey;
+            if (!boardKey) return;
+            if (context.selectedBoardKey !== boardKey || context.workspaceMode !== 'kanban') await actions.openBoardKanban(boardKey);
+            actions.setKanbanViewMode('archived');
+        });
         el('board-context-edit').addEventListener('click', () => {
             if (state.contextBoardKey) openBoardLinkDialog(state.contextBoardKey);
         });
@@ -1056,6 +1089,7 @@ export function createSidebar({ context, actions, el }) {
             });
         });
         el('thread-context-terminal-toggle').addEventListener('click', toggleThreadContextTerminals);
+        el('thread-context-done')?.addEventListener('click', contextMarkThreadTicketDone);
         el('thread-context-archive').addEventListener('click', contextArchiveThread);
         el('thread-context-delete').addEventListener('click', () => {
             const chatId = state.contextThreadId;
