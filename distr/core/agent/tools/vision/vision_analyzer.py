@@ -257,18 +257,29 @@ Please provide a detailed analysis of this image. Describe what you see, any tex
                     client = OpenAI(api_key=openai_key)
                     
                     if not vision_model:
-                        vision_model = "gpt-4o"
+                        vision_model = "gpt-5.4-mini"
                     
+                    from distr.core.agent.tools.vision.vision_api import (
+                        openai_token_limit_param,
+                        swap_token_limit_param,
+                    )
+
                     create_kwargs = {
                         "model": vision_model,
                         "messages": vision_messages,
-                        "max_tokens": 2000,
+                        openai_token_limit_param(vision_model): 2000,
                         "timeout": 60.0
                     }
-                    
+
                     logger.info(f"VisionAnalyzer: Calling vision API with model: {vision_model}")
                     try:
-                        vision_response = client.chat.completions.create(**create_kwargs)
+                        try:
+                            vision_response = client.chat.completions.create(**create_kwargs)
+                        except Exception as first_err:
+                            if swap_token_limit_param(create_kwargs, str(first_err)):
+                                vision_response = client.chat.completions.create(**create_kwargs)
+                            else:
+                                raise
                     except Exception as api_error:
                         logger.error(f"VisionAnalyzer: Vision API call failed: {api_error}", exc_info=True)
                         error_msg = str(api_error)
@@ -372,26 +383,43 @@ Please provide a detailed analysis of this image. Describe what you see, any tex
                         logger.error(f"OpenRouter vision API call failed: {error_msg}")
                         return f"Error: {error_msg}"
                     
+                    from distr.core.agent.tools.vision.vision_api import (
+                        openai_token_limit_param,
+                        swap_token_limit_param,
+                    )
+
                     # OpenRouter uses OpenAI-compatible API for vision
+                    or_model = vision_model or "openai/gpt-5.4-mini"
+                    or_payload = {
+                        "model": or_model,
+                        "messages": vision_messages,
+                        openai_token_limit_param(or_model): 2000,
+                    }
                     response = requests.post(
                         "https://openrouter.ai/api/v1/chat/completions",
                         headers={
                             "Authorization": f"Bearer {openrouter_key}",
                             "Content-Type": "application/json"
                         },
-                        json={
-                            "model": vision_model or "openai/gpt-4o",
-                            "messages": vision_messages,
-                            "max_tokens": 2000
-                        },
+                        json=or_payload,
                         timeout=60
                     )
-                    
+                    if response.status_code == 400 and swap_token_limit_param(or_payload, response.text):
+                        response = requests.post(
+                            "https://openrouter.ai/api/v1/chat/completions",
+                            headers={
+                                "Authorization": f"Bearer {openrouter_key}",
+                                "Content-Type": "application/json"
+                            },
+                            json=or_payload,
+                            timeout=60
+                        )
+
                     if response.status_code == 200:
                         result = response.json()
                         if 'choices' in result and len(result['choices']) > 0:
                             vision_result = result['choices'][0]['message']['content']
-                            logger.info(f"OpenRouter vision API call successful: model={vision_model or 'openai/gpt-4o'}")
+                            logger.info(f"OpenRouter vision API call successful: model={or_model}")
                             return vision_result
                         else:
                             error_msg = "OpenRouter vision API returned empty choices"
@@ -501,12 +529,29 @@ Please provide a detailed analysis of this image. Describe what you see, any tex
                         base_url = "https://api.groq.com/openai/v1/chat/completions"
                     if not api_key:
                         return f"Error: {vision_provider_key.title()} API key not configured."
+                    from distr.core.agent.tools.vision.vision_api import (
+                        openai_token_limit_param,
+                        swap_token_limit_param,
+                    )
+                    compat_model = vision_model or "openai/gpt-5.4-mini"
+                    compat_payload = {
+                        "model": compat_model,
+                        "messages": vision_messages,
+                        openai_token_limit_param(compat_model): 2000,
+                    }
                     response = requests.post(
                         base_url,
                         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                        json={"model": vision_model or "openai/gpt-4o", "messages": vision_messages, "max_tokens": 2000},
+                        json=compat_payload,
                         timeout=120,
                     )
+                    if response.status_code == 400 and swap_token_limit_param(compat_payload, response.text):
+                        response = requests.post(
+                            base_url,
+                            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                            json=compat_payload,
+                            timeout=120,
+                        )
                     if response.status_code == 200:
                         data = response.json()
                         choices = data.get('choices', [])

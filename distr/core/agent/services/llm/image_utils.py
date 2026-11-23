@@ -262,10 +262,24 @@ async def analyze_image_with_vision_llm(image_path: str, user_text: str, setting
                 ]}
             ]
 
+            from distr.core.agent.tools.vision.vision_api import (
+                openai_token_limit_param,
+                swap_token_limit_param,
+            )
+
+            create_kwargs = {
+                "model": vision_model,
+                "messages": vision_messages,
+                openai_token_limit_param(vision_model): 1024,
+            }
             try:
-                response = await client.chat.completions.create(
-                    model=vision_model, messages=vision_messages, max_tokens=1024
-                )
+                try:
+                    response = await client.chat.completions.create(**create_kwargs)
+                except Exception as first_err:
+                    if swap_token_limit_param(create_kwargs, str(first_err)):
+                        response = await client.chat.completions.create(**create_kwargs)
+                    else:
+                        raise
             finally:
                 await client.close()
             analysis = (response.choices[0].message.content or "").strip()

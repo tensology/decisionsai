@@ -393,12 +393,30 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
             api_key = settings.get("openai_key", "")
             if not api_key:
                 return None
+            from distr.core.agent.tools.vision.vision_api import (
+                openai_token_limit_param,
+                swap_token_limit_param,
+            )
+
+            model_id = model or "gpt-5.4-mini"
+            req_payload = {
+                "model": model_id,
+                "messages": messages,
+                openai_token_limit_param(model_id): 1000,
+            }
             resp = _requests.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": model or "gpt-4o", "messages": messages, "max_tokens": 1000},
+                json=req_payload,
                 timeout=120,
             )
+            if resp.status_code == 400 and swap_token_limit_param(req_payload, resp.text):
+                resp = _requests.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json=req_payload,
+                    timeout=120,
+                )
             if resp.status_code == 200:
                 choices = resp.json().get("choices", [])
                 if choices:
@@ -445,12 +463,29 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
             api_key = settings.get(key_map[provider], "")
             if not api_key:
                 return None
+            from distr.core.agent.tools.vision.vision_api import (
+                openai_token_limit_param,
+                swap_token_limit_param,
+            )
+            compat_model = model or "openai/gpt-5.4-mini"
+            compat_payload = {
+                "model": compat_model,
+                "messages": messages,
+                openai_token_limit_param(compat_model): 1000,
+            }
             resp = _requests.post(
                 url_map[provider],
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": model or "openai/gpt-4o", "messages": messages, "max_tokens": 1000},
+                json=compat_payload,
                 timeout=120,
             )
+            if resp.status_code == 400 and swap_token_limit_param(compat_payload, resp.text):
+                resp = _requests.post(
+                    url_map[provider],
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json=compat_payload,
+                    timeout=120,
+                )
             if resp.status_code == 200:
                 choices = resp.json().get("choices", [])
                 if choices:

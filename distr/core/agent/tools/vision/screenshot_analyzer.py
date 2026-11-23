@@ -1221,20 +1221,37 @@ class ScreenshotAnalyzerTool(BaseTool):
                 if not api_key:
                     return f"Error: {vision_provider_key.title()} API key not configured. Please set it in settings."
 
+                from distr.core.agent.tools.vision.vision_api import (
+                    openai_token_limit_param,
+                    swap_token_limit_param,
+                )
+
                 logger.info("ScreenshotAnalyzer: Calling %s vision API with model: %s", vision_provider_key, vision_model)
+                model_id = vision_model or "openai/gpt-5.4-mini"
+                req_payload = {
+                    "model": model_id,
+                    "messages": vision_messages,
+                    openai_token_limit_param(model_id): 2000,
+                }
                 resp = _requests.post(
                     base_url,
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": vision_model or "openai/gpt-4o",
-                        "messages": vision_messages,
-                        "max_tokens": 2000,
-                    },
+                    json=req_payload,
                     timeout=120,
                 )
+                if resp.status_code == 400 and swap_token_limit_param(req_payload, resp.text):
+                    resp = _requests.post(
+                        base_url,
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=req_payload,
+                        timeout=120,
+                    )
                 if resp.status_code == 200:
                     data = resp.json()
                     choices = data.get('choices', [])

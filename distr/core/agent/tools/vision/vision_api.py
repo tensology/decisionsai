@@ -90,6 +90,28 @@ def is_vision_model_supported(vision_provider: str, vision_model: str) -> bool:
     return bool(vision_model and vision_model.strip())
 
 
+def openai_token_limit_param(model: str) -> str:
+    """Return 'max_completion_tokens' for OpenAI reasoning/GPT-5 models, else 'max_tokens'."""
+    name = (model or "").strip().lower()
+    if "/" in name:
+        name = name.split("/", 1)[1]
+    if name.startswith(("gpt-5", "o1", "o3", "o4")):
+        return "max_completion_tokens"
+    return "max_tokens"
+
+
+def swap_token_limit_param(payload: dict, error_text: str) -> bool:
+    """Swap max_tokens <-> max_completion_tokens in-place if the error indicates a mismatch."""
+    err = (error_text or "").lower()
+    if "max_tokens" in payload and "max_completion_tokens" in err:
+        payload["max_completion_tokens"] = payload.pop("max_tokens")
+        return True
+    if "max_completion_tokens" in payload and "max_tokens" in err and "unsupported" in err:
+        payload["max_tokens"] = payload.pop("max_completion_tokens")
+        return True
+    return False
+
+
 def call_openai_vision(
     base64_images: list[str],
     enhanced_prompt: str,
@@ -140,19 +162,19 @@ def call_openai_vision(
     vision_messages = [{"role": "user", "content": content_items}]
 
     if not vision_model:
-        vision_model = "gpt-4o"
+        vision_model = "gpt-5.4-mini"
 
     create_kwargs: dict = {
         "model": vision_model,
         "messages": vision_messages,
-        "max_tokens": 2000,
+        openai_token_limit_param(vision_model): 2000,
         "timeout": 60.0,
     }
 
     # Every screenshot prompt builder requests a JSON object, including summary
     # prompts. Enforcing JSON prevents a prose-only capability disclaimer from
     # being accepted as a successful visual analysis.
-    if any(v in vision_model.lower() for v in ['gpt-4o', 'gpt-4-turbo', 'o1', 'o3']):
+    if any(v in vision_model.lower() for v in ['gpt-4o', 'gpt-4-turbo', 'gpt-4.1', 'gpt-5', 'o1', 'o3', 'o4']):
         create_kwargs["response_format"] = {"type": "json_object"}
 
     logger.info(f"ScreenshotAnalyzer: Calling vision API with {len(base64_images)} image(s), model: {vision_model}")
@@ -192,6 +214,9 @@ def call_openai_vision(
         except Exception as retry_err:
             last_err = retry_err
             err_str = str(retry_err).lower()
+            if attempt < max_retries and swap_token_limit_param(create_kwargs, err_str):
+                logger.info("Vision API rejected token limit param; retrying with swapped parameter")
+                continue
             if attempt < max_retries and any(k in err_str for k in [
                 'connection', 'ssl', 'timeout', 'network', 'reset by peer',
                 'bad_record_mac', 'eof occurred',
