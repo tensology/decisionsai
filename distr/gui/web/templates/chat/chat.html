@@ -142,7 +142,6 @@
         </div>
 
         <!-- Input Area -->
-        <!-- Clickable llama (bottom-right, triggers about window) -->
         <section class="group-view" id="groupView" hidden aria-label="Group chat">
             <header class="group-view-header">
                 <h1 class="group-view-title" id="groupViewTitle"></h1>
@@ -199,7 +198,9 @@
             </div>
             <div class="input-footer">
                 <p class="disclaimer">This is a conversational agent. Please understand that most of the responses are read out and created for Text to Speech output.</p>
-                <button id="llamaClickTarget" type="button" class="llama-click-target" title="About DecisionsAI" aria-label="About DecisionsAI"></button>
+                <button id="llamaClickTarget" type="button" class="llama-click-target" title="About DecisionsAI" aria-label="About DecisionsAI">
+                    <span data-assistant-identity aria-hidden="true"></span>
+                </button>
             </div>
         </div>
     </main>

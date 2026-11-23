@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,104 @@ import pytest
 pytest.importorskip("playwright.sync_api")
 
 pytestmark = pytest.mark.integration
+
+
+def test_all_sidebar_rows_reorder_and_viewed_chat_controls_corner_avatar(tmp_path):
+    from playwright.sync_api import expect, sync_playwright
+
+    root = Path(__file__).resolve().parents[2]
+    web = root / "distr/gui/web"
+    template = (web / "templates/chat/chat.html").read_text(encoding="utf-8")
+    template = re.sub(r"<script\b[^>]*>.*?</script>|<link\b[^>]*>", "", template, flags=re.S)
+    template = re.sub(r"\{%.*?%\}|\{\{.*?\}\}", "", template, flags=re.S)
+    html = template + """
+        <link rel="stylesheet" href="/chat.css">
+        <script src="/identity.js"></script><script src="/chat.js"></script>
+    """
+    rows = [
+        {"id": 11, "agent_id": 1, "agent_rank": 0, "agent_name": "First", "skin_name": "oracle"},
+        {"id": 22, "agent_id": 2, "agent_rank": 1, "agent_name": "Second", "skin_name": "oracle", "oracle_background": "scene.svg", "is_primary": True},
+        {"id": 33, "agent_id": 3, "agent_rank": 2, "agent_name": "Third", "skin_name": "oracle"},
+        {"id": 44, "voice_name": "Hayley", "skin_name": "hayley"},
+    ]
+    saved_order = [11, 22, 33, 44]
+    writes = []
+    loads = []
+    files = {
+        "/chat.css": web / "static/chat/css/chat.css",
+        "/identity.js": web / "static/shared/js/assistant_identity.js",
+        "/chat.js": web / "static/chat/js/chat.js",
+    }
+    # Use independent browser sessions and a deterministic roster. The route
+    # tests cover database persistence, while this test drives the real UI.
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900}, reduced_motion="reduce")
+            page.add_init_script("""
+                window.WebSocket = class { static OPEN = 1; readyState = 1; addEventListener() {} close() {} send() {} };
+            """)
+
+            def routes(route):
+                path = route.request.url.split("?", 1)[0].removeprefix("http://decisions.test")
+                if path == "/chat/":
+                    return route.fulfill(content_type="text/html", body=html)
+                if path in files:
+                    return route.fulfill(path=str(files[path]))
+                if path == "/api/skins/hayley/preview/idle.webp":
+                    return route.fulfill(content_type="image/webp", path=str(root / "assets/avatars/hayley/idle.webp"))
+                if path == "/api/skins/oracle/preview/scene.svg":
+                    return route.fulfill(content_type="image/svg+xml", body='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="#e88932"/><circle cx="32" cy="32" r="18" fill="none" stroke="white" stroke-width="4"/></svg>')
+                if path == "/api/skins":
+                    return route.fulfill(json={"selected_skin": "oracle", "skins": [
+                        {"folder_name": "oracle", "name": "Oracle", "type": "oracle", "idle_animation": "fallback.svg"},
+                        {"folder_name": "hayley", "name": "Hayley", "type": "avatar", "preview_image": "idle.webp", "chroma_key": [0, 255, 0]},
+                    ]})
+                if path == "/api/chats/sidebar/order":
+                    saved_order[:] = route.request.post_data_json["chat_ids"]
+                    writes.append(saved_order.copy())
+                    return route.fulfill(json={"chat_ids": saved_order})
+                if path == "/api/chats":
+                    return route.fulfill(json={"chats": [
+                        dict(row, sidebar_rank=saved_order.index(row["id"])) for row in rows
+                    ], "last_chat_id": 44, "agent_current_chat_id": 22})
+                if path.endswith("/load-in-agent"):
+                    loads.append(path)
+                if re.fullmatch(r"/api/chats/\d+", path):
+                    record = next(row for row in rows if row["id"] == int(path.rsplit("/", 1)[1]))
+                    return route.fulfill(json=dict(record, messages=[], title="Test conversation"))
+                return route.fulfill(json={})
+
+            page.route("http://decisions.test/**", routes)
+            page.goto("http://decisions.test/chat/")
+            page.evaluate("async () => { await loadChats(); await selectChat(44); }")
+            corner = page.locator("#llamaClickTarget .assistant-avatar-image")
+            expect(corner).to_have_attribute("data-skin-name", "Hayley")
+            row = lambda chat_id: page.locator(f'.chat-item[data-chat-id="{chat_id}"]')
+            order = lambda: page.locator(".chat-item").evaluate_all("rows => rows.map(row => Number(row.dataset.chatId))")
+            expect(row(44)).to_have_attribute("aria-selected", "true")
+            with page.expect_response("**/api/chats/sidebar/order"):
+                row(44).locator(".chat-thread-avatar").drag_to(row(11), target_position={"x": 90, "y": 5})
+            assert writes[-1] == [44, 11, 22, 33]
+            expect(row(44)).to_have_attribute("aria-selected", "true")
+            expect(row(22)).to_have_class(re.compile(r"\bloaded\b"))
+            page.wait_for_function("!sidebarOrderSaving")
+            with page.expect_response("**/api/chats/sidebar/order"):
+                row(33).drag_to(row(11), target_position={"x": 90, "y": 5})
+            assert writes[-1] == [44, 33, 11, 22]
+            page.reload()
+            page.evaluate("async () => { await loadChats(); await selectChat(44); }")
+            expect(corner).to_have_attribute("data-skin-name", "Hayley")
+            assert order() == [44, 33, 11, 22]
+            page.screenshot(path=str(tmp_path / "chat-hayley-reordered.png"))
+            row(22).click()
+            expect(corner).to_have_attribute("data-skin-name", "Oracle")
+            expect(corner).to_have_attribute("src", "/api/skins/oracle/preview/scene.svg")
+            assert order() == [44, 33, 11, 22]
+            assert not loads
+            page.screenshot(path=str(tmp_path / "chat-oracle-reordered.png"))
+        finally:
+            browser.close()
 
 
 def test_playwright_chromium_launches_and_evals():
@@ -118,11 +217,14 @@ def test_conversation_history_uses_selected_oracle_avatar(tmp_path):
                 page.set_viewport_size({"width": width, "height": height})
                 page.locator(".app-container").screenshot(path=str(tmp_path / f"chat-oracle-{width}x{height}.png"))
             page.set_viewport_size({"width": 390, "height": 844})
-            assert page.locator("#chatMessages").evaluate("node => getComputedStyle(node).backgroundSize").startswith("112px")
+            assert page.locator("#chatMessages").evaluate("node => getComputedStyle(node).backgroundImage") == "none"
             assert page.locator("#llamaClickTarget").evaluate("node => Math.round(node.getBoundingClientRect().width)") == 44
+            corner_avatar = page.locator("#llamaClickTarget .assistant-avatar-image")
+            assert corner_avatar.get_attribute("data-skin-name") == "Oracle"
 
             page.evaluate("viewedChatSkin = 'hayley'; loadAssistantAvatarSkin(true)")
             assert history_avatar.get_attribute('data-skin-name') == 'Hayley'
+            assert corner_avatar.get_attribute("src").endswith("/api/skins/hayley/preview/idle.webp")
             assert page.locator('#chatMessages .message.assistant .assistant-avatar-image.avatar').count() == 2
             page.evaluate('viewedChatSkin = null')
 

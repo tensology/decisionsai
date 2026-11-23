@@ -298,8 +298,6 @@
 
 .tts-player-card[hidden] { display: none; }
 
-.main-content:has(> .tts-player-card:not([hidden])) .chat-messages { background-image: none; }
-
 /* :has() rather than a sibling combinator: a 280px absolutely positioned About
    target in the input footer covers the player's close button while the player
    is open. Shrink it into the footer and ignore pointer events for the duration. */
@@ -316,9 +314,6 @@
     flex-shrink: 0;
     width: 44px;
     height: 44px;
-    border: 0;
-    background: url('/assets/img/llama.png') center / contain no-repeat;
-    opacity: 1;
     pointer-events: none;
 }
 
@@ -484,14 +479,28 @@
     position: absolute;
     bottom: 100%;
     right: 0;
-    width: 280px;
-    height: 280px;
+    width: min(280px, 24%);
+    aspect-ratio: 1;
+    padding: 0;
+    border: 0;
+    background: transparent;
     cursor: pointer;
     z-index: 5;
-    opacity: 0;
 }
-.llama-click-target:hover {
-    opacity: 0;
+
+.llama-click-target > span {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+.llama-click-target > span:has(.oracle) {
+    border-radius: 50%;
+}
+
+.llama-click-target .assistant-avatar-fallback {
+    display: none;
 }
 
 /* Empty State */
@@ -501,10 +510,6 @@
     align-items: center;
     justify-content: center;
     padding: 20px;
-    background-image: url('/assets/img/llama.png');
-    background-repeat: no-repeat;
-    background-position: bottom right;
-    background-size: 280px auto;
 }
 
 .empty-state-content {
@@ -861,10 +866,6 @@
     gap: 24px;
     background: rgba(13, 22, 66, 0.35);
     contain: layout;
-    background-image: url('/assets/img/llama.png');
-    background-repeat: no-repeat;
-    background-position: bottom right;
-    background-size: 280px auto;
 }
 
 /* ponytail: overflow:hidden on .turn-panel zeroes min-height:auto, so a
@@ -2141,11 +2142,6 @@
     .turn-panel-ack { white-space: normal; }
     .turn-panel-state { flex-direction: column; align-items: flex-end; gap: 2px; }
     .turn-stop-button span { display: none; }
-    /* Keep the decorative avatar tappable without laying an invisible
-       280px square over messages and turn controls on a phone. */
-    .llama-click-target { width: 88px; height: 112px; }
-    .chat-messages,
-    .empty-state { background-size: 112px auto; }
 }
 .speaker-toggle[aria-pressed="false"] {
     color: #8e8ea0;
@@ -2981,17 +2977,16 @@
 .chat-message-image img { max-width: 240px; max-height: 240px; border-radius: 8px; display: block; }
 
 @media (max-width: 1023px) {
-    .chat-messages, .empty-state { background-image: none; }
     .input-footer { display: flex; align-items: center; gap: 12px; }
     .input-footer .disclaimer { flex: 1; }
-    .input-footer .llama-click-target { position: static; flex-shrink: 0; width: 44px; height: 44px; border: 0; background: url('/assets/img/llama.png') center / contain no-repeat; opacity: 1; }
+    .input-footer .llama-click-target { position: static; flex-shrink: 0; width: 44px; height: 44px; }
     .input-footer .llama-click-target:hover { opacity: 0.85; }
     .chat-settings-title-wrap--marquee { mask-image: none; }
     .chat-settings-title--marquee { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; animation: none; transform: none; }
 }
 @media (max-width: 759px) {
     .input-container.view-only :is(.chat-attach-button, .speaker-toggle, .send-button) { display: none; }
-    .empty-state { padding: 16px; min-height: 0; overflow-y: auto; align-items: flex-start; background-image: none; }
+    .empty-state { padding: 16px; min-height: 0; overflow-y: auto; align-items: flex-start; }
     .empty-state-content { padding: 0; }
     .empty-state-form { padding: 16px; }
     .empty-state-section-header { flex-wrap: wrap; }

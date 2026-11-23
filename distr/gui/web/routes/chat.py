@@ -161,7 +161,7 @@ def publish_chat_event_threadsafe(payload: Dict[str, Any]):
 
 from distr.core.db import get_session, Chat
 from distr.core.chat import ChatService, record_chat_audit_event
-from distr.core.chat_sidebar import chat_appearance, chat_skin, set_chat_skin, sidebar_state, validate_chat_skin
+from distr.core.chat_sidebar import chat_appearance, chat_skin, set_chat_sidebar_rank, set_chat_skin, sidebar_state, validate_chat_skin
 from distr.core.chat_agents import agent_identity
 from distr.core.settings import load_settings_from_db
 from distr.core.agent.service_factory import resolve_voice_to_display_name
@@ -925,6 +925,10 @@ class ReadChatRequest(ChatRequestModel):
     reply_id: int = Field(ge=0)
 
 
+class ChatSidebarOrderRequest(ChatRequestModel):
+    chat_ids: list[int] = Field(min_length=1)
+
+
 class PrimaryAvatarRequest(ChatRequestModel):
     skin_name: str = Field(min_length=1, max_length=128)
 
@@ -1147,6 +1151,31 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid body")
         delivered = await broadcast_chat_event(body)
         return JSONResponse({"ok": True, "delivered": delivered})
+
+    @router.put("/chats/sidebar/order")
+    async def update_chat_sidebar_order(body: ChatSidebarOrderRequest):
+        """Save the visible chat rows in manual order, including older agentless chats."""
+        from distr.core.agent_groups import group_chat_ids
+
+        ids = body.chat_ids
+        if len(set(ids)) != len(ids):
+            raise HTTPException(status_code=422, detail="Duplicate chat in sidebar order.")
+        with get_session() as session:
+            groups = group_chat_ids(session)
+            rows = session.query(Chat).filter(
+                Chat.id.in_(ids), Chat.parent_id.is_(None),
+                Chat.is_hidden.is_(False), Chat.is_archived.is_(False),
+            )
+            chats = {
+                chat.id: chat for chat in rows
+                if chat.id not in groups and not is_plan_chat(chat) and not is_development_thread(session, chat)
+            }
+            if len(chats) != len(ids):
+                raise HTTPException(status_code=422, detail="Unknown chat in sidebar order.")
+            for rank, chat_id in enumerate(ids):
+                set_chat_sidebar_rank(chats[chat_id], rank)
+            session.commit()
+        return {"chat_ids": ids}
 
     @router.get("/chats")
     async def get_chats(include_archived: bool = False, surface: str = "chat"):

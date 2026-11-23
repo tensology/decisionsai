@@ -16,6 +16,12 @@ def set_chat_skin(chat, skin):
     chat.additional_context = json.dumps(context, ensure_ascii=False)
 
 
+def set_chat_sidebar_rank(chat, rank):
+    context = _chat_additional_context(chat.additional_context)
+    context["sidebar_rank"] = rank
+    chat.additional_context = json.dumps(context, ensure_ascii=False)
+
+
 def chat_appearance(session, chat, default="oracle"):
     from distr.core.chat_agents import agent_for_conversation
 
@@ -53,6 +59,7 @@ def sidebar_state(session, chat, settings, *, mark_read=None):
     from distr.core.chat_agents import agent_identity
 
     return {**agent_identity(session, chat.id), **chat_appearance(session, chat), "latest_message": latest_message,
+            "sidebar_rank": context.get("sidebar_rank"),
             "latest_reply_id": latest_reply_id,
             "unread": latest_reply_id > context["last_read_reply_id"]}
 

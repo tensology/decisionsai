@@ -564,10 +564,9 @@ document.addEventListener('DOMContentLoaded', () => {
     loadDefaultSettings();
     loadAssistantAvatarSkin();
 
-    // Llama click → show about window + play splash sound
-    const llamaEl = document.getElementById('llamaClickTarget');
-    if (llamaEl) {
-        llamaEl.addEventListener('click', () => {
+    const cornerAvatar = document.getElementById('llamaClickTarget');
+    if (cornerAvatar) {
+        cornerAvatar.addEventListener('click', () => {
             fetch('/api/about/show', { method: 'POST' }).catch(() => {});
         });
     }
@@ -2470,14 +2469,15 @@ function getAdjacentChatIdAfterDelete(chatId) {
     return null;
 }
 
-// Agents in their saved manual order (agent_rank); chats without an agent follow, newest first.
+// The sidebar order covers both agent conversations and older standalone chats.
 function sortAgentChats(chats) {
-    const rank = chat => (chat.agent_rank == null ? Number.MAX_SAFE_INTEGER : chat.agent_rank);
-    return [...chats].sort((a, b) => rank(a) - rank(b));
+    const rank = (chat, field) => chat[field] ?? Number.MAX_SAFE_INTEGER;
+    return [...chats].sort((a, b) => rank(a, 'sidebar_rank') - rank(b, 'sidebar_rank')
+        || rank(a, 'agent_rank') - rank(b, 'agent_rank'));
 }
 
 function renderChatList(chats) {
-    if (agentDragState) return; // never rebuild under an active drag
+    if (agentDragState || sidebarOrderSaving) return;
     
     if (chats.length === 0) {
         chatList.innerHTML = '<div style="padding: 12px; color: #8e8ea0; text-align: center; font-size: 14px;">No agents yet</div>';
@@ -2536,9 +2536,9 @@ function createChatItem(chat) {
             if (!chat.is_primary) makeAgentPrimary(chat.agent_id, chat.id);
         });
         star.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); });
-        bindAgentDrag(div);
     }
 
+    bindAgentDrag(div);
     updateChatItem(div, chat);
     let clickTimer = null;
     div.addEventListener('click', (e) => {
@@ -2588,6 +2588,7 @@ function updateChatItem(row, chat) {
         const media = primaryAvatarMedia(chat.skin_name, chat.oracle_background, name);
         avatar.replaceChildren(fallback);
         if (media.matches('img, video')) {
+            media.draggable = false;
             media.addEventListener('error', () => media.remove());
             avatar.append(media);
         }
@@ -7115,6 +7116,7 @@ document.addEventListener('keydown', event => {
 // per-agent memory. Group chats live in chat-groups.js.
 // ---------------------------------------------------------------------------
 let agentDragState = null;
+let sidebarOrderSaving = false;
 let _agentAdvancedBaseline = null;
 
 function agentIdForChat(chatId) {
@@ -7145,11 +7147,24 @@ async function loadAgentChat(chatId) {
 
 function bindAgentDrag(row) {
     row.draggable = true;
+    row.setAttribute('aria-keyshortcuts', 'Alt+ArrowUp Alt+ArrowDown');
+    row.addEventListener('keydown', (e) => {
+        if (e.target !== row || !e.altKey || !['ArrowUp', 'ArrowDown'].includes(e.key)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const after = e.key === 'ArrowDown';
+        const target = after ? row.nextElementSibling : row.previousElementSibling;
+        if (target?.matches('.chat-item')) void moveSidebarChat(row, target, after);
+    });
     row.addEventListener('dragstart', (e) => {
-        agentDragState = { id: row.dataset.agentId };
+        if (sidebarOrderSaving || e.target.closest('button')) {
+            e.preventDefault();
+            return;
+        }
+        agentDragState = row;
         row.classList.add('agent-dragging');
         e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', row.dataset.agentId);
+        e.dataTransfer.setData('application/x-decisions-chat-id', row.dataset.chatId);
     });
     row.addEventListener('dragend', () => {
         row.classList.remove('agent-dragging');
@@ -7157,33 +7172,53 @@ function bindAgentDrag(row) {
         agentDragState = null;
     });
     row.addEventListener('dragover', (e) => {
-        if (!agentDragState || row.dataset.agentId === agentDragState.id) return;
+        if (!agentDragState || row === agentDragState) return;
         e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
         const rect = row.getBoundingClientRect();
         const after = e.clientY > rect.top + rect.height / 2;
         chatList.querySelectorAll('.drop-before, .drop-after').forEach(el => el.classList.remove('drop-before', 'drop-after'));
         row.classList.add(after ? 'drop-after' : 'drop-before');
     });
-    row.addEventListener('drop', async (e) => {
+    row.addEventListener('drop', (e) => {
         if (!agentDragState) return;
         e.preventDefault();
-        const dragged = chatList.querySelector(`.chat-item[data-agent-id="${agentDragState.id}"]`);
-        const after = row.classList.contains('drop-after');
-        row.classList.remove('drop-before', 'drop-after');
-        if (!dragged || dragged === row) return;
-        row.parentNode.insertBefore(dragged, after ? row.nextSibling : row);
-        const order = Array.from(chatList.querySelectorAll('.chat-item[data-agent-id]')).map(el => Number(el.dataset.agentId));
+        const dragged = agentDragState;
+        const rect = row.getBoundingClientRect();
+        const after = e.clientY > rect.top + rect.height / 2;
         agentDragState = null;
-        try {
-            const res = await fetch(`${API_BASE}/agents/order`, {
-                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent_ids: order })
-            });
-            if (!res.ok) throw new Error('Could not save the order');
-        } catch (error) {
-            showChatSnackbar(error.message, 'error');
-        }
-        await loadChats();
+        dragged.classList.remove('agent-dragging');
+        chatList.querySelectorAll('.drop-before, .drop-after').forEach(el => el.classList.remove('drop-before', 'drop-after'));
+        void moveSidebarChat(dragged, row, after);
     });
+}
+
+async function moveSidebarChat(dragged, target, after) {
+    if (sidebarOrderSaving || dragged === target) return;
+    const insertionPoint = after ? target.nextElementSibling : target;
+    if (dragged === insertionPoint || dragged.nextElementSibling === insertionPoint) return;
+    const previous = [...chatList.children];
+    const keepFocus = document.activeElement === dragged;
+    sidebarOrderSaving = true;
+    ++sidebarLoadSequence;
+    chatList.insertBefore(dragged, insertionPoint);
+    if (keepFocus) dragged.focus();
+    const chatIds = [...chatList.querySelectorAll(':scope > .chat-item')].map(row => Number(row.dataset.chatId));
+    try {
+        const response = await fetch(`${API_BASE}/chats/sidebar/order`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_ids: chatIds }),
+        });
+        if (!response.ok) throw new Error('Could not save the order');
+    } catch (error) {
+        chatList.append(...previous);
+        if (keepFocus) dragged.focus();
+        showChatSnackbar(error.message, 'error');
+    } finally {
+        sidebarOrderSaving = false;
+        await loadChats();
+    }
 }
 
 async function deleteAgent(agentId) {

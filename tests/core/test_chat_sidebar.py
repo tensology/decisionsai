@@ -85,15 +85,24 @@ def test_chat_api_lists_identity_marks_read_and_does_not_restore_skin_on_view(mo
     with get_session() as session:
         chat = Chat(title="API sidebar test", voice_provider="fish", voice_model="hayley", provider="OpenAI", model_name="test")
         set_chat_skin(chat, "saved-character")
-        session.add(chat); session.commit(); chat_id = chat.id
+        other_chat = Chat(title="Other sidebar chat")
+        session.add_all([chat, other_chat]); session.commit()
+        chat_id, other_id = chat.id, other_chat.id
     app = FastAPI(); app.include_router(routes.create_routes(Path(__file__).parents[2] / "distr/gui/web/templates"), prefix="/api")
     client = TestClient(app)
     rows = client.get('/api/chats').json()['chats']
     row = next(r for r in rows if r['id'] == chat_id)
     assert (row['voice_name'], row['skin_name'], row['latest_message'], row['unread']) == ('Hayley Williams', 'saved-character', '', False)
+    assert client.put('/api/chats/sidebar/order', json={'chat_ids': [other_id, chat_id]}).status_code == 200
+    rows = client.get('/api/chats').json()['chats']
+    assert {row['id']: row['sidebar_rank'] for row in rows if row['id'] in (chat_id, other_id)} == {
+        other_id: 0, chat_id: 1,
+    }
+    assert client.put('/api/chats/sidebar/order', json={'chat_ids': [chat_id, chat_id]}).status_code == 422
     with get_session() as session:
         reply = Chat(parent_id=chat_id, input="Question", response="A new reply")
         session.add(reply); session.commit(); reply_id = reply.id
+    assert client.put('/api/chats/sidebar/order', json={'chat_ids': [chat_id, reply_id]}).status_code == 422
     row = next(r for r in client.get('/api/chats').json()['chats'] if r['id'] == chat_id)
     assert row['unread'] is True
     signal = Mock()
