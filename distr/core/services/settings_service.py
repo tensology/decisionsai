@@ -716,18 +716,12 @@ def active_oracle_background():
 
 
 def update_oracle_background(filename: str) -> None:
-    import json
-    from pathlib import Path
     from distr.core.chat_agents import appearance_owner
-    from distr.core.chat_title_auto import _chat_additional_context
+    from distr.core.chat_sidebar import set_chat_oracle_background, validate_oracle_background
     from distr.core.db import Settings, get_session
-    from distr.core.paths import AVATARS_DIR
     from distr.core.skin_migration import migrate_selected_oracle
 
-    directory = Path(AVATARS_DIR) / "oracle"
-    file = Path(filename)
-    if file.name != filename or file.suffix.lower() not in {".webm", ".gif"} or not (directory / file).is_file():
-        raise ValueError("Choose an installed Oracle background")
+    validate_oracle_background(filename)
 
     with get_session() as session:
         settings = session.query(Settings).first()
@@ -736,9 +730,7 @@ def update_oracle_background(filename: str) -> None:
         if owner:
             owner.oracle_background = filename
         elif chat:
-            context = _chat_additional_context(chat.additional_context)
-            context["oracle_background"] = filename
-            chat.additional_context = json.dumps(context, ensure_ascii=False)
+            set_chat_oracle_background(chat, filename)
         else:
             if settings is None:
                 settings = Settings()

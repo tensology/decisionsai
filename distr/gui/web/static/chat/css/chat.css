@@ -3016,6 +3016,17 @@
     .header-icon-btn, .context-ring, .modal-close, .modal .btn { min-width: 44px; min-height: 44px; }
     .modal-row { flex-direction: column; }
     .modal-row .form-group { width: 100%; }
+    .chat-config-appearance { flex-direction: row; gap: 8px; }
+    .chat-config-appearance .form-group { min-width: 0; }
+    .chat-config-appearance .form-group + .form-group { flex: 1.5; }
+    .chat-config-appearance .form-control-select { padding-right: 28px; background-position: right 6px center; }
+}
+@media (max-width: 359px) {
+    .chat-config-appearance .form-group + .form-group { flex: 1.8; }
+    .chat-config-appearance .form-control-select { padding-inline: 8px 24px; background-position: right 4px center; }
+    #chatConfigModal .modal-footer { flex-wrap: wrap; gap: 8px; }
+    #chatConfigModal .modal-footer-note { flex-basis: 100%; }
+    #chatConfigModal .modal-footer-actions { margin-left: auto; }
 }
 
 /* Agent creation keeps identity fields visible and advanced defaults together. */

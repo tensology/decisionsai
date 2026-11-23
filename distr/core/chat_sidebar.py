@@ -16,6 +16,25 @@ def set_chat_skin(chat, skin):
     chat.additional_context = json.dumps(context, ensure_ascii=False)
 
 
+def set_chat_oracle_background(chat, filename):
+    context = _chat_additional_context(chat.additional_context)
+    if filename is None:
+        context.pop("oracle_background", None)
+    else:
+        context["oracle_background"] = filename
+    chat.additional_context = json.dumps(context, ensure_ascii=False)
+
+
+def validate_oracle_background(filename):
+    from pathlib import Path
+
+    from distr.core.paths import AVATARS_DIR
+
+    file = Path(filename)
+    if file.name != filename or file.suffix.lower() not in {".webm", ".gif"} or not (Path(AVATARS_DIR) / "oracle" / file).is_file():
+        raise ValueError("Choose an installed Oracle background")
+
+
 def set_chat_sidebar_rank(chat, rank):
     context = _chat_additional_context(chat.additional_context)
     context["sidebar_rank"] = rank

@@ -150,6 +150,35 @@ def test_oracle_background_is_saved_per_agent_and_survives_skin_changes(primary_
     assert config.read_bytes() == original
 
 
+def test_chat_config_background_updates_only_its_appearance_owner(primary_app):
+    from distr.core.db import Chat
+
+    client, sessions, _, _, first, second = primary_app
+    first_background = client.get(f'/api/chats/{first}').json()['oracle_background']
+    assert client.patch(f'/api/chats/{second}', json={
+        'skin_name': 'oracle', 'oracle_background': '../1.webm',
+    }).status_code == 422
+    assert client.get(f'/api/chats/{second}').json()['skin_name'] == 'hayley'
+    saved = client.patch(f'/api/chats/{second}', json={
+        'skin_name': 'oracle', 'oracle_background': '1.webm',
+    })
+    assert saved.status_code == 200
+    assert saved.json()['oracle_background'] == '1.webm'
+    assert client.get(f'/api/chats/{first}').json()['oracle_background'] == first_background
+    assert client.patch(f'/api/chats/{second}', json={'skin_name': 'hayley'}).status_code == 200
+    assert client.get(f'/api/chats/{second}').json()['oracle_background'] == '1.webm'
+    assert client.patch(f'/api/chats/{second}', json={'oracle_background': None}).status_code == 200
+    assert client.get(f'/api/chats/{second}').json()['oracle_background'] is None
+
+    with sessions() as session:
+        legacy = Chat(title='Standalone')
+        session.add(legacy)
+        session.flush()
+        legacy_id = legacy.id
+    assert client.patch(f'/api/chats/{legacy_id}', json={'oracle_background': '2.webm'}).status_code == 200
+    assert client.get(f'/api/chats/{legacy_id}').json()['oracle_background'] == '2.webm'
+
+
 @pytest.mark.parametrize('width', [390,768,1280,1440])
 def test_primary_star_roster_and_switching(width, primary_app, tmp_path):
     """The primary lives in the agent list with a star; the old card stays hidden.

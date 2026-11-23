@@ -177,6 +177,10 @@ def test_conversation_history_uses_selected_oracle_avatar(tmp_path):
                 lambda route: route.fulfill(status=200, content_type="image/webp", path=str(root / "assets/avatars/hayley/idle.webp")),
             )
             page.route(
+                "http://decisions.test/api/skins/hayley/preview/idle.webm",
+                lambda route: route.fulfill(status=200, content_type="video/webm", path=str(root / "assets/avatars/hayley/idle.webm")),
+            )
+            page.route(
                 "http://decisions.test/assets/img/llama.png",
                 lambda route: route.fulfill(status=200, content_type="image/png", path=str(root / "assets/img/llama.png")),
             )

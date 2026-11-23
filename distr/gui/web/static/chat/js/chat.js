@@ -678,6 +678,7 @@ function setupEventListeners() {
     if (chatConfigClose) chatConfigClose.addEventListener('click', hideChatConfigModal);
     if (chatConfigCancel) chatConfigCancel.addEventListener('click', hideChatConfigModal);
     if (chatConfigSave) chatConfigSave.addEventListener('click', saveChatConfig);
+    document.getElementById('chatConfigSkin')?.addEventListener('change', updateChatConfigOracleVisibility);
     if (chatConfigLlmProvider) {
         chatConfigLlmProvider.addEventListener('change', () => {
             loadLlmModelsInto(chatConfigLlmModel, chatConfigLlmProvider.value);
@@ -5835,13 +5836,40 @@ function providerIdFromDisplay(value) {
     return map[lower] || lower;
 }
 
+function updateChatConfigOracleVisibility() {
+    const field = document.getElementById('chatConfigOracleBackgroundField');
+    if (field) field.hidden = document.getElementById('chatConfigSkin')?.value !== 'oracle';
+}
+
+async function loadChatConfigOracleBackgrounds(saved) {
+    const select = document.getElementById('chatConfigOracleBackground');
+    if (!select) return;
+    try {
+        const response = await fetch('/api/skins/oracle/files');
+        if (!response.ok) throw new Error('Could not load Oracle backgrounds');
+        const { files = [] } = await response.json();
+        const backgrounds = files.filter(file => /^\d+\.(webm|gif)$/i.test(file)).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+        select.replaceChildren(new Option('Default', ''), ...backgrounds.map((file, index) => new Option(`Background ${index + 1}`, file)));
+        if (saved && files.includes(saved) && !backgrounds.includes(saved)) select.add(new Option(saved, saved));
+        select.value = Array.from(select.options).some(option => option.value === saved) ? saved : '';
+        select.disabled = select.options.length === 1;
+    } catch (error) {
+        console.warn('Could not load Oracle backgrounds:', error);
+        select.replaceChildren(new Option('Backgrounds unavailable', ''));
+        select.disabled = true;
+    }
+}
+
 function selectedChatConfigValues() {
+    const skin = document.getElementById('chatConfigSkin')?.value || '';
+    const background = document.getElementById('chatConfigOracleBackground');
     return {
         provider: chatConfigLlmProvider ? chatConfigLlmProvider.value.trim() : '',
         model_name: chatConfigLlmModel ? chatConfigLlmModel.value.trim() : '',
         voice_provider: chatConfigVoiceProvider ? chatConfigVoiceProvider.value.trim() : '',
         voice_model: chatConfigVoiceModel ? chatConfigVoiceModel.value.trim() : '',
-        skin_name: document.getElementById('chatConfigSkin')?.value || ''
+        skin_name: skin,
+        ...(skin === 'oracle' && background && !background.disabled ? { oracle_background: background.value || null } : {})
     };
 }
 
@@ -5859,6 +5887,7 @@ async function openChatConfigModal(chatId) {
     const targetId = chatId || currentChatId;
     if (!targetId || !chatConfigModal) return;
     stopAllChatVoicePreviews();
+    document.getElementById('chatConfigOracleBackgroundField')?.setAttribute('hidden', '');
     if (chatConfigStatus) chatConfigStatus.textContent = '';
     chatConfigModal.style.display = 'flex';
     if (chatConfigSave) chatConfigSave.disabled = true;
@@ -5910,6 +5939,8 @@ async function openChatConfigModal(chatId) {
             const skinData = await skinsResponse.json();
             skinSelect.innerHTML = (skinData.skins || []).map(skin => `<option value="${escapeHtml(skin.folder_name)}">${escapeHtml(skin.name)}</option>`).join('');
             skinSelect.value = chatData.skin_name || skinData.selected_skin || 'oracle';
+            await loadChatConfigOracleBackgrounds(chatData.oracle_background);
+            updateChatConfigOracleVisibility();
         }
         _chatConfigBaseline = selectedChatConfigValues();
         fillAgentAdvanced(chatData);
@@ -6207,17 +6238,13 @@ async function saveChatConfig() {
     if (!currentChatId || !chatConfigSave) return;
     const selected = selectedChatConfigValues();
     const patch = changedChatConfigFields(_chatConfigBaseline, selected);
-    // Only validate the model/voice pickers when they are being changed, so an
-    // Advanced-only edit (name, scope, orchestrator) always saves.
-    if (Object.keys(patch).length) {
-        if (!selected.provider || !selected.model_name) {
-            if (chatConfigStatus) chatConfigStatus.textContent = 'Choose an LLM provider and model.';
-            return;
-        }
-        if (!selected.voice_provider || !selected.voice_model) {
-            if (chatConfigStatus) chatConfigStatus.textContent = 'Choose a voice provider and voice.';
-            return;
-        }
+    if (('provider' in patch || 'model_name' in patch) && (!selected.provider || !selected.model_name)) {
+        if (chatConfigStatus) chatConfigStatus.textContent = 'Choose an LLM provider and model.';
+        return;
+    }
+    if (('voice_provider' in patch || 'voice_model' in patch) && (!selected.voice_provider || !selected.voice_model)) {
+        if (chatConfigStatus) chatConfigStatus.textContent = 'Choose a voice provider and voice.';
+        return;
     }
     const agentSaved = await saveAgentAdvanced();
     if (agentSaved === false) return;

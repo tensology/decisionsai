@@ -161,7 +161,10 @@ def publish_chat_event_threadsafe(payload: Dict[str, Any]):
 
 from distr.core.db import get_session, Chat
 from distr.core.chat import ChatService, record_chat_audit_event
-from distr.core.chat_sidebar import chat_appearance, chat_skin, set_chat_sidebar_rank, set_chat_skin, sidebar_state, validate_chat_skin
+from distr.core.chat_sidebar import (
+    chat_appearance, chat_skin, set_chat_oracle_background, set_chat_sidebar_rank,
+    set_chat_skin, sidebar_state, validate_chat_skin, validate_oracle_background,
+)
 from distr.core.chat_agents import agent_identity
 from distr.core.settings import load_settings_from_db
 from distr.core.agent.service_factory import resolve_voice_to_display_name
@@ -910,6 +913,7 @@ class UpdateChatRequest(ChatRequestModel):
     """Request to update chat. All fields optional; only provided fields are updated."""
 
     skin_name: Optional[str] = None
+    oracle_background: Optional[str] = Field(default=None, min_length=1, max_length=255)
     title: Optional[str] = None
     provider: Optional[str] = None
     model_name: Optional[str] = None
@@ -1828,18 +1832,28 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     "voice_model": chat.voice_model,
                 }
                 updated = False
-                if request_data.skin_name is not None:
-                    try:
-                        skin_name = validate_chat_skin(request_data.skin_name)
-                    except ValueError as exc:
-                        raise HTTPException(422, str(exc))
+                background_provided = "oracle_background" in request_data.model_fields_set
+                if request_data.skin_name is not None or background_provided:
                     from distr.core.chat_agents import agent_for_conversation, set_agent_skin
 
+                    try:
+                        skin_name = validate_chat_skin(request_data.skin_name) if request_data.skin_name is not None else None
+                        if background_provided and request_data.oracle_background is not None:
+                            validate_oracle_background(request_data.oracle_background)
+                    except ValueError as exc:
+                        raise HTTPException(422, str(exc)) from exc
+
                     owner = agent_for_conversation(session, chat.id)
-                    if owner:
-                        set_agent_skin(session, owner, skin_name)
-                    else:
-                        set_chat_skin(chat, skin_name)
+                    if skin_name is not None:
+                        if owner:
+                            set_agent_skin(session, owner, skin_name)
+                        else:
+                            set_chat_skin(chat, skin_name)
+                    if background_provided:
+                        if owner:
+                            owner.oracle_background = request_data.oracle_background
+                        else:
+                            set_chat_oracle_background(chat, request_data.oracle_background)
                     updated = True
                     settings_fields_touched = True
                 if request_data.title is not None:

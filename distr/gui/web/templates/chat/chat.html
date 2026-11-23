@@ -4,7 +4,7 @@
 {% block title %}Chat{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-20261123-idle">
+<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-20261123-oracle-picker">
 <link rel="stylesheet" href="/static/shared/css/mermaid_viewer.css?v=20261028-responsive">
 {% endblock %}
 
@@ -242,9 +242,15 @@
                 </div>
             </div>
             {{ voice_select_fields('chatConfig') }}
-            <div class="form-group">
-                <label for="chatConfigSkin">Skin</label>
-                <select id="chatConfigSkin" class="form-control form-control-select chat-config-select"></select>
+            <div class="modal-row chat-config-appearance">
+                <div class="form-group">
+                    <label for="chatConfigSkin">Skin</label>
+                    <select id="chatConfigSkin" class="form-control form-control-select chat-config-select"></select>
+                </div>
+                <div class="form-group" id="chatConfigOracleBackgroundField" hidden>
+                    <label for="chatConfigOracleBackground">Oracle background</label>
+                    <select id="chatConfigOracleBackground" class="form-control form-control-select chat-config-select" disabled></select>
+                </div>
             </div>
             <details class="agent-configuration" id="chatConfigAgent" hidden>
                 <summary>Advanced</summary>
