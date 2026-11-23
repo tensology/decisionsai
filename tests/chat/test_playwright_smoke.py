@@ -22,7 +22,7 @@ def test_all_sidebar_rows_reorder_and_viewed_chat_controls_corner_avatar(tmp_pat
     template = re.sub(r"\{%.*?%\}|\{\{.*?\}\}", "", template, flags=re.S)
     html = template + """
         <link rel="stylesheet" href="/chat.css">
-        <script src="/identity.js"></script><script src="/chat.js"></script>
+        <script src="/skin-preview.js"></script><script src="/identity.js"></script><script src="/chat.js"></script>
     """
     rows = [
         {"id": 11, "agent_id": 1, "agent_rank": 0, "agent_name": "First", "skin_name": "oracle"},
@@ -35,6 +35,7 @@ def test_all_sidebar_rows_reorder_and_viewed_chat_controls_corner_avatar(tmp_pat
     loads = []
     files = {
         "/chat.css": web / "static/chat/css/chat.css",
+        "/skin-preview.js": web / "static/shared/js/skin_video_preview.js",
         "/identity.js": web / "static/shared/js/assistant_identity.js",
         "/chat.js": web / "static/chat/js/chat.js",
     }
@@ -54,6 +55,8 @@ def test_all_sidebar_rows_reorder_and_viewed_chat_controls_corner_avatar(tmp_pat
                     return route.fulfill(content_type="text/html", body=html)
                 if path in files:
                     return route.fulfill(path=str(files[path]))
+                if path == "/api/skins/hayley/preview/idle.webm":
+                    return route.fulfill(content_type="video/webm", path=str(root / "assets/avatars/hayley/idle.webm"))
                 if path == "/api/skins/hayley/preview/idle.webp":
                     return route.fulfill(content_type="image/webp", path=str(root / "assets/avatars/hayley/idle.webp"))
                 if path == "/api/skins/oracle/preview/scene.svg":
@@ -61,7 +64,7 @@ def test_all_sidebar_rows_reorder_and_viewed_chat_controls_corner_avatar(tmp_pat
                 if path == "/api/skins":
                     return route.fulfill(json={"selected_skin": "oracle", "skins": [
                         {"folder_name": "oracle", "name": "Oracle", "type": "oracle", "idle_animation": "fallback.svg"},
-                        {"folder_name": "hayley", "name": "Hayley", "type": "avatar", "preview_image": "idle.webp", "chroma_key": [0, 255, 0]},
+                        {"folder_name": "hayley", "name": "Hayley", "type": "avatar", "idle_animation": "idle.webm", "preview_image": "idle.webp", "chroma_key": [0, 255, 0]},
                     ]})
                 if path == "/api/chats/sidebar/order":
                     saved_order[:] = route.request.post_data_json["chat_ids"]
@@ -83,6 +86,17 @@ def test_all_sidebar_rows_reorder_and_viewed_chat_controls_corner_avatar(tmp_pat
             page.evaluate("async () => { await loadChats(); await selectChat(44); }")
             corner = page.locator("#llamaClickTarget .assistant-avatar-image")
             expect(corner).to_have_attribute("data-skin-name", "Hayley")
+            corner_button = page.locator("#llamaClickTarget")
+            avatar_width = corner_button.bounding_box()["width"]
+            expect(corner.locator("video")).to_have_attribute("src", "/api/skins/hayley/preview/idle.webm")
+            page.wait_for_function("""() => {
+                const video = document.querySelector('#llamaClickTarget video');
+                const canvas = document.querySelector('#llamaClickTarget canvas');
+                if (!video || video.currentTime <= 0 || !canvas) return false;
+                const context = canvas.getContext('2d');
+                return context.getImageData(0, 0, 1, 1).data[3] === 0
+                    && context.getImageData(canvas.width >> 1, canvas.height >> 1, 1, 1).data[3] > 0;
+            }""")
             row = lambda chat_id: page.locator(f'.chat-item[data-chat-id="{chat_id}"]')
             order = lambda: page.locator(".chat-item").evaluate_all("rows => rows.map(row => Number(row.dataset.chatId))")
             expect(row(44)).to_have_attribute("aria-selected", "true")
@@ -103,6 +117,9 @@ def test_all_sidebar_rows_reorder_and_viewed_chat_controls_corner_avatar(tmp_pat
             row(22).click()
             expect(corner).to_have_attribute("data-skin-name", "Oracle")
             expect(corner).to_have_attribute("src", "/api/skins/oracle/preview/scene.svg")
+            oracle_width = corner_button.bounding_box()["width"]
+            assert 44 < oracle_width <= 136
+            assert oracle_width < avatar_width
             assert order() == [44, 33, 11, 22]
             assert not loads
             page.screenshot(path=str(tmp_path / "chat-oracle-reordered.png"))
@@ -181,6 +198,7 @@ def test_conversation_history_uses_selected_oracle_avatar(tmp_path):
             )
             page.add_style_tag(content="*,*::before,*::after{box-sizing:border-box}")
             page.add_style_tag(path=str(style_path))
+            page.add_script_tag(path=str(identity_script_path.with_name("skin_video_preview.js")))
             page.add_script_tag(path=str(identity_script_path))
             page.add_script_tag(path=str(script_path))
             page.evaluate(
@@ -224,7 +242,7 @@ def test_conversation_history_uses_selected_oracle_avatar(tmp_path):
 
             page.evaluate("viewedChatSkin = 'hayley'; loadAssistantAvatarSkin(true)")
             assert history_avatar.get_attribute('data-skin-name') == 'Hayley'
-            assert corner_avatar.get_attribute("src").endswith("/api/skins/hayley/preview/idle.webp")
+            assert corner_avatar.locator("video").get_attribute("src").endswith("/api/skins/hayley/preview/idle.webm")
             assert page.locator('#chatMessages .message.assistant .assistant-avatar-image.avatar').count() == 2
             page.evaluate('viewedChatSkin = null')
 

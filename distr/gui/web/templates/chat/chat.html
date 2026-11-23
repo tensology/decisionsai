@@ -4,7 +4,7 @@
 {% block title %}Chat{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-ttsclose20261120">
+<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-20261123-idle">
 <link rel="stylesheet" href="/static/shared/css/mermaid_viewer.css?v=20261028-responsive">
 {% endblock %}
 
@@ -199,7 +199,7 @@
             <div class="input-footer">
                 <p class="disclaimer">This is a conversational agent. Please understand that most of the responses are read out and created for Text to Speech output.</p>
                 <button id="llamaClickTarget" type="button" class="llama-click-target" title="About DecisionsAI" aria-label="About DecisionsAI">
-                    <span data-assistant-identity aria-hidden="true"></span>
+                    <span data-assistant-identity data-assistant-idle aria-hidden="true"></span>
                 </button>
             </div>
         </div>
@@ -539,7 +539,8 @@
 
 {% block body_scripts %}
 <script src="/static/shared/js/mermaid_viewer.js?v=20261028-contained-render"></script>
-<script src="/static/shared/js/assistant_identity.js?v={{ app_version or 'dev' }}-20261115"></script>
+<script src="/static/shared/js/skin_video_preview.js?v=20261123"></script>
+<script src="/static/shared/js/assistant_identity.js?v={{ app_version or 'dev' }}-20261123-idle"></script>
 <script src="/static/shared/js/notification_sound.js?v=20261030-crossroads"></script>
 <script src="/settings/static/js/s2s_locks.js"></script>
 <script src="/settings/static/js/llms.js"></script>

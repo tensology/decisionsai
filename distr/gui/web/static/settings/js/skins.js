@@ -163,129 +163,6 @@ function _applyPingPongToVideo(vid, isPingPong) {
     vid.playbackRate = 1;
 }
 
-function _disposeSkinVideoPreview(element) {
-    if (!element) return;
-    var video = element._skinPreviewVideo;
-    if (!video) return;
-    if (video._skinFrameId && video.cancelVideoFrameCallback) {
-        video.cancelVideoFrameCallback(video._skinFrameId);
-    }
-    if (video._skinRafId) cancelAnimationFrame(video._skinRafId);
-    video.pause();
-    video.removeAttribute('src');
-    video.load();
-}
-
-function _createSkinVideoPreview(url, chromaKey, chromaThreshold, cssText) {
-    var video = document.createElement('video');
-    video.src = url;
-    video.autoplay = true;
-    video.muted = true;
-    video.loop = true;
-    video.setAttribute('playsinline', '');
-
-    if (!Array.isArray(chromaKey) || chromaKey.length !== 3) {
-        video.style.cssText = cssText;
-        return video;
-    }
-
-    var wrapper = document.createElement('div');
-    wrapper.dataset.skinVideoPreview = 'true';
-    wrapper.style.cssText = cssText + '; position:relative; overflow:hidden;';
-
-    var canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 256;
-    // object-fit keeps the frame's own aspect ratio. Without it a non-square
-    // container stretched the square canvas and the skin looked squashed.
-    canvas.style.cssText = 'display:block; width:100%; height:100%; object-fit:contain;';
-    wrapper.appendChild(canvas);
-
-    // Match the backing store to the source video's aspect ratio, so the
-    // letterbox maths below is a no-op and the chroma key samples real corners.
-    function syncCanvasAspect() {
-        var vw = video.videoWidth;
-        var vh = video.videoHeight;
-        if (!vw || !vh) return;
-        var cap = 256;
-        var factor = Math.min(cap / vw, cap / vh, 1);
-        var nextWidth = Math.max(1, Math.round(vw * factor));
-        var nextHeight = Math.max(1, Math.round(vh * factor));
-        if (nextWidth !== canvas.width || nextHeight !== canvas.height) {
-            canvas.width = nextWidth;
-            canvas.height = nextHeight;
-        }
-    }
-    video.addEventListener('loadedmetadata', syncCanvasAspect);
-    video.addEventListener('loadeddata', syncCanvasAspect);
-
-    // Keep the source video in the document so Safari continues decoding it,
-    // but never expose its green source frame to the user.
-    video.style.cssText = 'position:absolute; width:1px; height:1px; opacity:0; pointer-events:none;';
-    wrapper.appendChild(video);
-    wrapper._skinPreviewVideo = video;
-
-    var context = canvas.getContext('2d', { willReadFrequently: true });
-    var threshold = Math.max(0, Number(chromaThreshold) || 30);
-    var softEdge = Math.max(1, threshold * 0.6);
-    var thresholdSquared = threshold * threshold;
-    var softLimit = threshold + softEdge;
-    var softLimitSquared = softLimit * softLimit;
-    var keyR = Number(chromaKey[0]) || 0;
-    var keyG = Number(chromaKey[1]) || 0;
-    var keyB = Number(chromaKey[2]) || 0;
-    var sampledDecodedKey = false;
-
-    function drawFrame() {
-        if (!wrapper.isConnected) return;
-        if (video.readyState >= 2) {
-            syncCanvasAspect();
-            context.clearRect(0, 0, canvas.width, canvas.height);
-            var sourceWidth = video.videoWidth || canvas.width;
-            var sourceHeight = video.videoHeight || canvas.height;
-            var scale = Math.min(canvas.width / sourceWidth, canvas.height / sourceHeight);
-            var drawWidth = sourceWidth * scale;
-            var drawHeight = sourceHeight * scale;
-            var drawX = (canvas.width - drawWidth) / 2;
-            var drawY = (canvas.height - drawHeight) / 2;
-            context.drawImage(video, drawX, drawY, drawWidth, drawHeight);
-            var frame = context.getImageData(0, 0, canvas.width, canvas.height);
-            var pixels = frame.data;
-            if (!sampledDecodedKey) {
-                var lastPixel = (canvas.width * canvas.height - 1) * 4;
-                var bottomLeft = canvas.width * (canvas.height - 1) * 4;
-                var topRight = (canvas.width - 1) * 4;
-                keyR = Math.round((pixels[0] + pixels[topRight] + pixels[bottomLeft] + pixels[lastPixel]) / 4);
-                keyG = Math.round((pixels[1] + pixels[topRight + 1] + pixels[bottomLeft + 1] + pixels[lastPixel + 1]) / 4);
-                keyB = Math.round((pixels[2] + pixels[topRight + 2] + pixels[bottomLeft + 2] + pixels[lastPixel + 2]) / 4);
-                sampledDecodedKey = true;
-            }
-            for (var i = 0; i < pixels.length; i += 4) {
-                var dr = pixels[i] - keyR;
-                var dg = pixels[i + 1] - keyG;
-                var db = pixels[i + 2] - keyB;
-                var distanceSquared = dr * dr + dg * dg + db * db;
-                if (distanceSquared <= thresholdSquared) {
-                    pixels[i + 3] = 0;
-                } else if (distanceSquared <= softLimitSquared) {
-                    var distance = Math.sqrt(distanceSquared);
-                    pixels[i + 3] = Math.round(255 * (distance - threshold) / softEdge);
-                }
-            }
-            context.putImageData(frame, 0, 0);
-        }
-        if (video.requestVideoFrameCallback) {
-            video._skinFrameId = video.requestVideoFrameCallback(drawFrame);
-        } else {
-            video._skinRafId = requestAnimationFrame(drawFrame);
-        }
-    }
-
-    video.addEventListener('loadeddata', drawFrame, { once: true });
-    video.play().catch(function() {});
-    return wrapper;
-}
-
 async function loadSkinsSettings() {
     try {
         var responses = await Promise.all([
@@ -530,7 +407,7 @@ async function exportCurrentSkin() {
 function renderSkinsGrid() {
     var grid = document.getElementById('skins_grid');
     if (!grid) return;
-    Array.prototype.forEach.call(grid.querySelectorAll('[data-skin-video-preview]'), _disposeSkinVideoPreview);
+    Array.prototype.forEach.call(grid.querySelectorAll('[data-skin-video-preview]'), window.DecisionsSkinVideo.dispose);
     grid.innerHTML = '';
     _skinsList.forEach(function(skin) {
         var sel = skin.folder_name === _selectedSkin;
@@ -552,7 +429,7 @@ function renderSkinsGrid() {
             var scale = (Number(skin.image_scale) || 1) * 100 + '%';
             var previewStyle = 'width:' + scale + '; height:' + scale + '; object-fit:cover; border-radius:50%';
             if (isVideo) {
-                previewEl = _createSkinVideoPreview(
+                previewEl = window.DecisionsSkinVideo.create(
                     previewUrl, skin.chroma_key, skin.chroma_threshold,
                     previewStyle
                 );
@@ -564,7 +441,7 @@ function renderSkinsGrid() {
             }
             if (!isVideo) previewEl.style.cssText = previewStyle;
         } else if (isVideo) {
-            previewEl = _createSkinVideoPreview(
+            previewEl = window.DecisionsSkinVideo.create(
                 previewUrl, skin.chroma_key, skin.chroma_threshold,
                 'width:100%; height:100%; aspect-ratio:1; object-fit:contain'
             );
@@ -905,7 +782,7 @@ function previewOracleGif(filename) {
     var oldKeyedPreview = container.querySelector('[data-skin-video-preview]');
     if (oldImg) oldImg.remove();
     if (oldKeyedPreview) {
-        _disposeSkinVideoPreview(oldKeyedPreview);
+        window.DecisionsSkinVideo.dispose(oldKeyedPreview);
         oldKeyedPreview.remove();
         oldVid = null;
     }
@@ -932,7 +809,7 @@ function previewOracleGif(filename) {
 
     if (ext === 'webm') {
         var rendering = (_editingSkinConfig && _editingSkinConfig.rendering) || {};
-        var keyedPreview = _createSkinVideoPreview(
+        var keyedPreview = window.DecisionsSkinVideo.create(
             url, rendering.chroma_key, rendering.chroma_threshold,
             'width:155%; height:155%; object-fit:cover; border-radius:50%'
         );
@@ -1078,7 +955,7 @@ function previewAnimation(filename) {
     if (oldImg) oldImg.remove();
     var oldKeyedPreview = container ? container.querySelector('[data-skin-video-preview]') : null;
     if (oldKeyedPreview) {
-        _disposeSkinVideoPreview(oldKeyedPreview);
+        window.DecisionsSkinVideo.dispose(oldKeyedPreview);
         oldKeyedPreview.remove();
     }
     var url = '/api/skins/' + encodeURIComponent(_editingSkin) + '/preview/' + encodeURIComponent(filename);
@@ -1089,7 +966,7 @@ function previewAnimation(filename) {
         var rendering = (_editingSkinConfig && _editingSkinConfig.rendering) || {};
         if (Array.isArray(rendering.chroma_key) && rendering.chroma_key.length === 3) {
             video.pause(); video.removeAttribute('src'); video.style.display = 'none';
-            var keyedPreview = _createSkinVideoPreview(
+            var keyedPreview = window.DecisionsSkinVideo.create(
                 url, rendering.chroma_key, rendering.chroma_threshold,
                 'width:100%; height:100%; object-fit:contain'
             );
@@ -1119,7 +996,7 @@ function clearPreview() {
         var i = c.querySelector('img'); if (i) i.remove();
         var keyedPreview = c.querySelector('[data-skin-video-preview]');
         if (keyedPreview) {
-            _disposeSkinVideoPreview(keyedPreview);
+            window.DecisionsSkinVideo.dispose(keyedPreview);
             keyedPreview.remove();
         }
     }

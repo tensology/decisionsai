@@ -467,6 +467,7 @@
 
 /* Main Content */
 .chat-shell .main-content {
+    --chat-corner-avatar-width: min(264px, 24%);
     flex: 1;
     min-height: 0;
     min-width: 0;
@@ -475,11 +476,15 @@
     position: relative;
 }
 
+.main-content:has([data-assistant-idle] > .oracle) {
+    --chat-corner-avatar-width: min(136px, 15%);
+}
+
 .llama-click-target {
     position: absolute;
-    bottom: 100%;
-    right: 0;
-    width: min(280px, 24%);
+    bottom: calc(100% + 16px);
+    right: 16px;
+    width: var(--chat-corner-avatar-width);
     aspect-ratio: 1;
     padding: 0;
     border: 0;
@@ -866,6 +871,12 @@
     gap: 24px;
     background: rgba(13, 22, 66, 0.35);
     contain: layout;
+}
+
+@media (min-width: 1024px) {
+    .main-content:has([data-assistant-idle] > .assistant-avatar-image):not(:has(> .tts-player-card:not([hidden]))) > :is(.chat-messages, .empty-state) {
+        padding-right: calc(var(--chat-corner-avatar-width) + 32px);
+    }
 }
 
 /* ponytail: overflow:hidden on .turn-panel zeroes min-height:auto, so a

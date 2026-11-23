@@ -204,7 +204,8 @@ def test_input_band_stacks_above_llama_click_target():
     assert "position: relative;" in input_block
     assert "z-index: 10;" in input_block
     assert "z-index: 5;" in llama_block
-    assert "bottom: 100%;" in llama_block
+    assert "bottom: calc(100% + 16px);" in llama_block
+    assert "right: 16px;" in llama_block
 
 
 def test_chat_message_rows_do_not_flex_shrink_into_footer_lines():
