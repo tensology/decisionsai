@@ -170,13 +170,16 @@ export function createSidebar({ context, actions, el }) {
     }
     function renderSectionToggle(toggleId, contentId, expanded) {
         const toggle = el(toggleId);
-        toggle.setAttribute('aria-expanded', String(expanded));
-        toggle.querySelector('.chevron').textContent = expanded ? '▼' : '▶';
-        el(contentId).classList.toggle('hidden', !expanded);
+        if (toggle) {
+            toggle.setAttribute('aria-expanded', String(expanded));
+            toggle.querySelector('.chevron').textContent = expanded ? '▼' : '▶';
+        }
+        el(contentId)?.classList.toggle('hidden', !expanded);
     }
     function sectionItems(id, items, limit, isActive) {
         const expanded = state.expandedSections.has(id);
         const button = el(id + '-show-more');
+        if (!button) return items;
         button.classList.toggle('hidden', items.length <= limit);
         button.setAttribute('aria-expanded', String(expanded && items.length > limit));
         button.textContent = expanded ? 'Show less' : 'Show more';
@@ -191,7 +194,9 @@ export function createSidebar({ context, actions, el }) {
             ['automation-threads', 'automation-thread-group', automations, state.automationsExpanded]
         ];
         for (const [id, listId, rows, expanded] of sections) {
-            el(id + '-section').classList.toggle('hidden', !rows.length);
+            const section = el(id + '-section');
+            if (!section) continue;
+            section.classList.toggle('hidden', !rows.length);
             el(id + '-count').textContent = String(rows.length);
             renderSectionToggle(id + '-toggle', id + '-content', expanded);
             setHtml(el(listId), sectionItems(id, rows, 5, isThreadActive)
@@ -237,6 +242,8 @@ export function createSidebar({ context, actions, el }) {
             ? boardGroupHtml(item) : threadRowHtml(item, isThreadActive(item), true)).join(''));
         el('pinned-board-section').classList.toggle('hidden', !pinnedItems.length);
         renderSectionToggle('pinned-section-toggle', 'pinned-board-content', !state.pinnedSectionCollapsed);
+        el('boards-toggle').classList.remove('hidden');
+        el('boards-label')?.classList.add('hidden');
         renderSectionToggle('boards-toggle', 'boards-content', !state.boardsCollapsed);
         const groupedBoards = ['jira', 'trello', 'decisions']
             .map((provider) => ({
@@ -1025,7 +1032,7 @@ export function createSidebar({ context, actions, el }) {
         });
         for (const id of ['running-automations', 'recents', 'automation-threads', 'pinned-board', 'boards']) {
             const button = el(id + '-show-more');
-            button.addEventListener('click', () => {
+            button?.addEventListener('click', () => {
                 if (!state.expandedSections.delete(id)) state.expandedSections.add(id);
                 renderSidebar();
                 if (!state.expandedSections.has(id)) button.scrollIntoView({ block: 'nearest' });
@@ -1039,7 +1046,7 @@ export function createSidebar({ context, actions, el }) {
             ['boards-toggle', 'boardsCollapsed', 'decisions-development-boards-collapsed']
         ];
         for (const [id, key, storageKey] of sectionStates) {
-            el(id).addEventListener('click', () => {
+            el(id)?.addEventListener('click', () => {
                 state[key] = !state[key];
                 if (storageKey) {
                     try { window.localStorage.setItem(storageKey, String(state[key])); } catch (_) { /* Keep this session's preference. */ }

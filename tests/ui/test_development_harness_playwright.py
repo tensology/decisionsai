@@ -1169,6 +1169,27 @@ def _install_api(
     page.route("**/api/**", handler)
 
 
+def test_development_thread_renders_when_cached_sidebar_markup_lacks_new_controls(page: Page):
+    _install_api(page, [], current_board_linked=True)
+
+    def legacy_markup(route):
+        response = route.fetch()
+        html = response.text()
+        for section in ("running-automations", "automation-threads"):
+            html = re.sub(rf'<section\b[^>]*id="{section}-section"[\s\S]*?</section>', "", html, count=1)
+        for button in ("pinned-section-toggle", "pinned-board-show-more"):
+            html = re.sub(rf'<button\b[^>]*id="{button}"[\s\S]*?</button>', "", html, count=1)
+        html = html.replace('id="pinned-board-content"', "")
+        route.fulfill(response=response, body=html)
+
+    page.route(URL, legacy_markup)
+    page.goto(URL)
+
+    expect(page.locator("#conversation")).to_contain_text("Implement DEV-42")
+    expect(page.locator("#boards-toggle")).to_be_visible()
+    expect(page.get_by_text("Cannot read properties of null", exact=False)).to_have_count(0)
+
+
 def test_recent_section_is_collapsed_by_default_with_project_threads(page: Page):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests, current_board_linked=True)
