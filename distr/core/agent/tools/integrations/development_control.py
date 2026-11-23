@@ -7,12 +7,15 @@ requires a Development thread id, and each list response declares its surface.
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import time
 from typing import Any, Optional
 
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 _DELETE_CONFIRMATIONS: dict[str, tuple[float, str, str, bool]] = {}
@@ -285,9 +288,59 @@ class DevelopmentControlTool(BaseTool):
                         break
                 if named_project is not None:
                     project_id = named_project
+                # A thread created to run an existing ticket (e.g. the agent
+                # just made ticket #330, then opened a thread titled the same)
+                # must adopt that ticket, or it sits in Backlog forever while the
+                # thread does the work.
+                matched_ticket_id = None
+                try:
+                    from distr.core.db import get_session as _gs, Chat as _Chat
+                    from distr.core.db.kanban import (
+                        KanbanBoard as _KB, KanbanLane as _KL, KanbanTicket as _KT,
+                    )
+                    from distr.core.db.projects import Project as _P
+                    from distr.core.workflow.development_threads import is_development_thread as _is_dev
+
+                    _want = str(title or "").strip().lower()
+                    if project_id and _want:
+                        with _gs() as _db:
+                            _proj = _db.get(_P, int(project_id))
+                            _board = None
+                            if _proj is not None and _proj.kanban_board_id:
+                                _board = _db.get(_KB, int(_proj.kanban_board_id))
+                            if _board is None:
+                                _board = (
+                                    _db.query(_KB)
+                                    .filter(_KB.default_project_id == int(project_id), _KB.source == "database")
+                                    .first()
+                                )
+                            if _board is not None:
+                                for _t in (
+                                    _db.query(_KT).join(_KL)
+                                    .filter(_KL.board_id == int(_board.id))
+                                    .all()
+                                ):
+                                    if str(_t.title or "").strip().lower() != _want:
+                                        continue
+                                    _owner = _t.source_chat_id
+                                    if _owner is None:
+                                        matched_ticket_id = int(_t.id)
+                                        break
+                                    _owner_chat = _db.get(_Chat, int(_owner))
+                                    # Owned by a plain chat (the agent chat), not a
+                                    # Development thread: hand it to the new thread.
+                                    if _owner_chat is not None and not _is_dev(_db, _owner_chat):
+                                        _t.source_chat_id = None
+                                        _db.flush()
+                                        matched_ticket_id = int(_t.id)
+                                        break
+                except Exception:
+                    logger.debug("create_thread: ticket match lookup failed", exc_info=True)
+
                 created = ensure_development_thread(
                     title=str(title or "Development work").strip(),
                     project_id=project_id,
+                    ticket_id=matched_ticket_id,
                     # When starting, the instruction becomes the first user turn via
                     # send_instruction_to_thread; seeding it here too would make the
                     # duplicate-input guard swallow the dispatch.

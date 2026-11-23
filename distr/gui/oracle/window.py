@@ -1019,6 +1019,16 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         dictation-time restore so a later stale restore signal cannot light the
         Oracle back up unexpectedly.
         """
+        import traceback as _tb
+
+        _caller = next(
+            (f"{fr.filename.rsplit('/', 1)[-1]}:{fr.lineno}:{fr.name}" for fr in reversed(_tb.extract_stack()[:-1])),
+            "unknown",
+        )
+        logging.warning(
+            "[ORACLE] disable_hands_free (notify_agent=%s persist=%s clear_pending_restore=%s) from %s",
+            notify_agent, persist, clear_pending_restore, _caller,
+        )
         self.is_hands_free = False
         self._sync_hands_free_menu_state()
         # Revert the hands-free hook now that the mode is off
