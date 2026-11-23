@@ -240,6 +240,7 @@ class SdApmInputTransport(FrameProcessor):
         if self._started:
             return
         self._started = True
+        self._configure_vad()
         t = self._transport
         loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue(maxsize=100)
@@ -283,6 +284,14 @@ class SdApmInputTransport(FrameProcessor):
             actual_sr,
             _APM_RATE,
         )
+
+    def _configure_vad(self):
+        """Pipecat's BaseInputTransport normally sets this; custom transports must too."""
+        if self._vad is not None:
+            try:
+                self._vad.set_sample_rate(self._transport._pipeline_sample_rate)
+            except Exception as exc:
+                logger.warning("sounddevice APM: could not set VAD sample rate: %s", exc)
 
     async def _pump(self):
         t = self._transport

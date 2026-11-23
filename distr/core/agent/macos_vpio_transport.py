@@ -196,8 +196,17 @@ class MacOsVpioInputTransport(FrameProcessor):
         if self._started:
             return
         self._started = True
+        self._configure_vad()
         await self._transport._ensure_helper_started()
         self._task = asyncio.create_task(self._pump())
+
+    def _configure_vad(self):
+        """Pipecat's BaseInputTransport normally sets this; custom transports must too."""
+        if self._vad is not None:
+            try:
+                self._vad.set_sample_rate(self._transport._pipeline_sample_rate)
+            except Exception as exc:
+                logger.warning("MacOS VPIO: could not set VAD sample rate: %s", exc)
 
     def get_input_health(self) -> dict:
         proc = self._transport._proc

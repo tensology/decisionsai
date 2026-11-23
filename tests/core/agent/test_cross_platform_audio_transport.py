@@ -22,6 +22,7 @@ import pytest
 
 from distr.core.agent.libs import (
     AudioRawFrame,
+    InputAudioRawFrame,
     InterruptionFrame,
     LLMFullResponseStartFrame,
     StartFrame,
@@ -232,6 +233,102 @@ def test_macos_vpio_output_protocol_and_instant_flush(tmp_path):
         assert len(sent_packets) == before_count
 
     asyncio.run(scenario())
+
+
+def test_custom_transports_configure_vad_sample_rate():
+    """Regression: custom FrameProcessor transports must set the VAD sample rate.
+
+    Pipecat's BaseInputTransport.start() normally calls set_sample_rate(); the
+    bespoke VPIO/sdapm transports do not inherit it, so the VAD silently returned
+    0 confidence and continuous mode went deaf (PTT still worked).
+    """
+    from pipecat.audio.vad.silero import SileroVADAnalyzer
+
+    from distr.core.agent.macos_vpio_transport import MacOsVpioInputTransport
+    from distr.core.agent.mediadevices_transport import MediaDevicesInputTransport
+    from distr.core.agent.sd_apm_transport import SdApmInputTransport
+
+    class _Stub:
+        _pipeline_sample_rate = 16000
+        _input_sample_rate = 16000
+        _vad_analyzer = None
+
+    for factory in (MacOsVpioInputTransport, SdApmInputTransport, MediaDevicesInputTransport):
+        vad = SileroVADAnalyzer()
+        assert vad.sample_rate == 0
+        inp = factory(_Stub())
+        inp._vad = vad
+        inp._configure_vad()
+        assert vad.sample_rate == 16000
+
+        # The VAD must now accept real frames without the sample-rate error.
+        frame = np.zeros(512, dtype=np.int16).tobytes()
+        confidence = float(np.asarray(vad.voice_confidence(frame)).reshape(-1)[0])
+        assert np.isfinite(confidence)
+        assert 0.0 <= confidence <= 1.0
+
+
+def test_macos_vpio_input_emits_frames_and_configured_vad(tmp_path):
+    """End-to-end: helper subprocess -> 16 kHz frames -> VAD at 16 kHz."""
+    fake_bin = tmp_path / "fake_vpio"
+    fake_bin.write_text("#!/bin/sh\nexit 0\n")
+    fake_bin.chmod(0o755)
+
+    from pipecat.audio.vad.silero import SileroVADAnalyzer
+
+    vad = SileroVADAnalyzer()
+    transport = MacOsVpioAudioTransport(
+        pipeline_sample_rate=16000,
+        output_sample_rate=44100,
+        vad_enabled=True,
+        vad_analyzer=vad,
+        helper_binary=str(fake_bin),
+    )
+    captured = []
+
+    class FakeStdout:
+        def __init__(self):
+            self._chunks = []
+            body = np.zeros(320, dtype=np.int16).tobytes()
+            self._chunks.append(struct.pack("<BI", 0x01, len(body)) + body)
+
+        async def readexactly(self, n):
+            if not self._chunks:
+                raise asyncio.IncompleteReadError(b"", n)
+            chunk = self._chunks[0]
+            if len(chunk) >= n:
+                out, self._chunks[0] = chunk[:n], chunk[n:]
+                if not self._chunks[0]:
+                    self._chunks.pop(0)
+                return out
+            raise asyncio.IncompleteReadError(chunk, n)
+
+    transport._proc = SimpleNamespace(
+        stdin=None, stdout=FakeStdout(), stderr=None, returncode=None, pid=1234
+    )
+    inp = transport.input()
+    inp._started = True
+
+    async def scenario():
+        async def capture(frame, direction=None):
+            captured.append(frame)
+
+        inp.push_frame = capture
+        inp._configure_vad()
+        assert vad.sample_rate == 16000
+        task = asyncio.create_task(inp._pump())
+        await asyncio.sleep(0.1)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(scenario())
+    audio_frames = [f for f in captured if isinstance(f, InputAudioRawFrame)]
+    assert audio_frames
+    assert audio_frames[0].sample_rate == 16000
+    assert audio_frames[0].num_channels == 1
 
 
 def test_livekit_aec_cursor_does_not_drift_during_silence():
