@@ -84,14 +84,14 @@ def test_all_sidebar_rows_reorder_and_viewed_chat_controls_corner_avatar(tmp_pat
             page.route("http://decisions.test/**", routes)
             page.goto("http://decisions.test/chat/")
             page.evaluate("async () => { await loadChats(); await selectChat(44); }")
-            corner = page.locator("#llamaClickTarget .assistant-avatar-image")
+            corner = page.locator("#chatBackgroundAvatar .assistant-avatar-image")
             expect(corner).to_have_attribute("data-skin-name", "Hayley")
-            corner_button = page.locator("#llamaClickTarget")
-            avatar_width = corner_button.bounding_box()["width"]
+            background = page.locator("#chatBackgroundAvatar")
+            avatar_width = background.bounding_box()["width"]
             expect(corner.locator("video")).to_have_attribute("src", "/api/skins/hayley/preview/idle.webm")
             page.wait_for_function("""() => {
-                const video = document.querySelector('#llamaClickTarget video');
-                const canvas = document.querySelector('#llamaClickTarget canvas');
+                const video = document.querySelector('#chatBackgroundAvatar video');
+                const canvas = document.querySelector('#chatBackgroundAvatar canvas');
                 if (!video || video.currentTime <= 0 || !canvas) return false;
                 const context = canvas.getContext('2d');
                 return context.getImageData(0, 0, 1, 1).data[3] === 0
@@ -117,7 +117,7 @@ def test_all_sidebar_rows_reorder_and_viewed_chat_controls_corner_avatar(tmp_pat
             row(22).click()
             expect(corner).to_have_attribute("data-skin-name", "Oracle")
             expect(corner).to_have_attribute("src", "/api/skins/oracle/preview/scene.svg")
-            oracle_box = corner_button.bounding_box()
+            oracle_box = background.bounding_box()
             oracle_width = oracle_box["width"]
             assert 44 < oracle_width <= 136
             assert oracle_width < avatar_width
@@ -244,11 +244,21 @@ def test_conversation_history_uses_selected_oracle_avatar(tmp_path):
                 page.locator(".app-container").screenshot(path=str(tmp_path / f"chat-oracle-{width}x{height}.png"))
             page.set_viewport_size({"width": 390, "height": 844})
             assert page.locator("#chatMessages").evaluate("node => getComputedStyle(node).backgroundImage") == "none"
-            assert page.locator("#llamaClickTarget").evaluate("node => Math.round(node.getBoundingClientRect().width)") == 44
-            corner_avatar = page.locator("#llamaClickTarget .assistant-avatar-image")
+            assert 0 < page.locator("#chatBackgroundAvatar").bounding_box()["width"] <= 84
+            corner_avatar = page.locator("#chatBackgroundAvatar .assistant-avatar-image")
             assert corner_avatar.get_attribute("data-skin-name") == "Oracle"
 
-            page.evaluate("viewedChatSkin = 'hayley'; loadAssistantAvatarSkin(true)")
+            for width in (390, 1440):
+                page.set_viewport_size({"width": width, "height": 900})
+                page.evaluate("viewedChatSkin = 'oracle'; loadAssistantAvatarSkin(true)")
+                layout_nodes = [page.locator("#chatMessages"), page.locator("#inputContainer"),
+                                page.locator("#chatMessages .message.assistant").first]
+                layout = [node.bounding_box() for node in layout_nodes]
+                page.evaluate("viewedChatSkin = 'hayley'; loadAssistantAvatarSkin(true)")
+                assert [node.bounding_box() for node in layout_nodes] == layout
+                assert page.locator("#chatBackgroundAvatar").evaluate(
+                    "node => getComputedStyle(node).pointerEvents"
+                ) == "none"
             assert history_avatar.get_attribute('data-skin-name') == 'Hayley'
             assert corner_avatar.locator("video").get_attribute("src").endswith("/api/skins/hayley/preview/idle.webm")
             assert page.locator('#chatMessages .message.assistant .assistant-avatar-image.avatar').count() == 2

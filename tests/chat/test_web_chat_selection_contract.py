@@ -196,16 +196,16 @@ def test_view_only_visual_state_is_on_header_and_input_band():
     assert ".chat-shell .chat-settings-header.view-only" in css
 
 
-def test_input_band_stacks_above_llama_click_target():
+def test_chat_avatar_is_a_noninteractive_background_layer():
     css = _chat_css_source()
-    input_block = css.split(".input-container {", 1)[1].split("}", 1)[0]
-    llama_block = css.split("\n.llama-click-target {", 1)[1].split("}", 1)[0]
+    avatar = css.split("\n.chat-background-avatar {", 1)[1].split("}", 1)[0]
+    stage = css.split("\n.chat-stage {", 1)[1].split("}", 1)[0]
+    content = css.split(".chat-stage > :is(.empty-state, .chat-messages) {", 1)[1].split("}", 1)[0]
 
-    assert "position: relative;" in input_block
-    assert "z-index: 10;" in input_block
-    assert "z-index: 5;" in llama_block
-    assert "bottom: calc(100% + var(--chat-corner-avatar-bottom));" in llama_block
-    assert "right: var(--chat-corner-avatar-right);" in llama_block
+    assert "position: absolute;" in avatar
+    assert "pointer-events: none;" in avatar
+    assert "isolation: isolate;" in stage
+    assert "z-index: 1;" in content
 
 
 def test_chat_message_rows_do_not_flex_shrink_into_footer_lines():

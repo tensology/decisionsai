@@ -565,13 +565,6 @@ document.addEventListener('DOMContentLoaded', () => {
     loadDefaultSettings();
     loadAssistantAvatarSkin();
 
-    const cornerAvatar = document.getElementById('llamaClickTarget');
-    if (cornerAvatar) {
-        cornerAvatar.addEventListener('click', () => {
-            fetch('/api/about/show', { method: 'POST' }).catch(() => {});
-        });
-    }
-
     loadChats().then(async (data) => {
         const params = new URLSearchParams(window.location.search);
         const idParam = params.get('id');

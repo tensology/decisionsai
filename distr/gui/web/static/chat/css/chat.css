@@ -298,25 +298,6 @@
 
 .tts-player-card[hidden] { display: none; }
 
-/* :has() rather than a sibling combinator: a 280px absolutely positioned About
-   target in the input footer covers the player's close button while the player
-   is open. Shrink it into the footer and ignore pointer events for the duration. */
-.main-content:has(> .tts-player-card:not([hidden])) .input-container .input-footer {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.main-content:has(> .tts-player-card:not([hidden])) .input-container .disclaimer { flex: 1; }
-
-.main-content:has(> .tts-player-card:not([hidden])) .input-container .llama-click-target {
-    position: static;
-    flex-shrink: 0;
-    width: 44px;
-    height: 44px;
-    pointer-events: none;
-}
-
 .tts-player-card:focus-within {
     border-color: rgba(249, 115, 22, 0.5);
     box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.2);
@@ -484,32 +465,40 @@
     --chat-corner-avatar-bottom: 24px;
 }
 
-.llama-click-target {
-    position: absolute;
-    bottom: calc(100% + var(--chat-corner-avatar-bottom));
-    right: var(--chat-corner-avatar-right);
-    width: var(--chat-corner-avatar-width);
-    aspect-ratio: 1;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    cursor: pointer;
-    z-index: 5;
-}
-
-.llama-click-target > span {
-    display: block;
-    width: 100%;
-    height: 100%;
+.chat-stage {
+    position: relative;
+    isolation: isolate;
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
     overflow: hidden;
 }
 
-.llama-click-target > span:has(.oracle) {
-    border-radius: 50%;
+.group-mode .chat-stage { display: none; }
+
+.chat-background-avatar {
+    position: absolute;
+    bottom: var(--chat-corner-avatar-bottom);
+    right: var(--chat-corner-avatar-right);
+    width: var(--chat-corner-avatar-width);
+    aspect-ratio: 1;
+    max-height: 100%;
+    pointer-events: none;
+    overflow: hidden;
 }
 
-.llama-click-target .assistant-avatar-fallback {
-    display: none;
+.chat-background-avatar:has(.oracle) { border-radius: 50%; }
+.chat-background-avatar .assistant-avatar-fallback { display: none; }
+
+.chat-stage > :is(.empty-state, .chat-messages) {
+    position: relative;
+    z-index: 1;
+}
+
+@media (max-width: 1023px) {
+    .chat-background-avatar { width: min(160px, 38%); right: 12px; bottom: 12px; opacity: 0.55; }
+    .chat-background-avatar:has(.oracle) { width: min(84px, 22%); }
 }
 
 /* Empty State */
@@ -875,12 +864,6 @@
     gap: 24px;
     background: rgba(13, 22, 66, 0.35);
     contain: layout;
-}
-
-@media (min-width: 1024px) {
-    .main-content:has([data-assistant-idle] > .assistant-avatar-image):not(:has(> .tts-player-card:not([hidden]))) > :is(.chat-messages, .empty-state) {
-        padding-right: calc(var(--chat-corner-avatar-width) + var(--chat-corner-avatar-right) + 16px);
-    }
 }
 
 /* ponytail: overflow:hidden on .turn-panel zeroes min-height:auto, so a
@@ -3022,10 +3005,6 @@
 .chat-message-image img { max-width: 240px; max-height: 240px; border-radius: 8px; display: block; }
 
 @media (max-width: 1023px) {
-    .input-footer { display: flex; align-items: center; gap: 12px; }
-    .input-footer .disclaimer { flex: 1; }
-    .input-footer .llama-click-target { position: static; flex-shrink: 0; width: 44px; height: 44px; }
-    .input-footer .llama-click-target:hover { opacity: 0.85; }
     .chat-settings-title-wrap--marquee { mask-image: none; }
     .chat-settings-title--marquee { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; animation: none; transform: none; }
 }

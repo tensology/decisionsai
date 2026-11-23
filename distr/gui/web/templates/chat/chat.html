@@ -4,7 +4,7 @@
 {% block title %}Chat{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-20261123-config-tabs">
+<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-20261123-chat-background">
 <link rel="stylesheet" href="/static/shared/css/mermaid_viewer.css?v=20261028-responsive">
 {% endblock %}
 
@@ -84,29 +84,32 @@
             </div>
         </div>
 
-        <!-- Empty State: same configure fields as New chat modal (shared partial); sidebar opens the modal for parity -->
-        <div class="empty-state" id="emptyState">
-            <div class="empty-state-content" id="emptyStateSetup">
-                <p class="empty-state-kicker">Chat</p>
-                <h2 class="empty-state-setup-title">Chat settings</h2>
-                <div id="emptyStateLoader" class="empty-state-loader">
-                    <svg class="empty-state-loader-spin" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.2"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
-                    <p class="empty-state-loader-text">Loading chat settings...</p>
+        <div class="chat-stage">
+            <div class="chat-background-avatar" id="chatBackgroundAvatar" data-assistant-identity data-assistant-idle aria-hidden="true"></div>
+            <!-- Empty State: same configure fields as New chat modal (shared partial); sidebar opens the modal for parity -->
+            <div class="empty-state" id="emptyState">
+                <div class="empty-state-content" id="emptyStateSetup">
+                    <p class="empty-state-kicker">Chat</p>
+                    <h2 class="empty-state-setup-title">Chat settings</h2>
+                    <div id="emptyStateLoader" class="empty-state-loader">
+                        <svg class="empty-state-loader-spin" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.2"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
+                        <p class="empty-state-loader-text">Loading chat settings...</p>
+                    </div>
+                    <div class="empty-state-form" id="emptyStateForm" style="display:none;">
+                        {{ configure_chat_fields('empty') }}
+                    </div>
+                    <p class="empty-state-prompt" id="emptyStatePrompt" style="display:none;">How can I help you today?</p>
                 </div>
-                <div class="empty-state-form" id="emptyStateForm" style="display:none;">
-                    {{ configure_chat_fields('empty') }}
+                <div class="empty-state-agent-loading" id="emptyStateAgentLoading" style="display: none;">
+                    <p class="empty-state-agent-loading-text">Starting chat...</p>
+                    <div class="empty-state-agent-loading-spinner" aria-hidden="true"></div>
                 </div>
-                <p class="empty-state-prompt" id="emptyStatePrompt" style="display:none;">How can I help you today?</p>
             </div>
-            <div class="empty-state-agent-loading" id="emptyStateAgentLoading" style="display: none;">
-                <p class="empty-state-agent-loading-text">Starting chat...</p>
-                <div class="empty-state-agent-loading-spinner" aria-hidden="true"></div>
-            </div>
-        </div>
 
-        <!-- Chat Messages -->
-        <div class="chat-messages" id="chatMessages" style="display: none;">
-            <!-- Messages will be populated here -->
+            <!-- Chat Messages -->
+            <div class="chat-messages" id="chatMessages" style="display: none;">
+                <!-- Messages will be populated here -->
+            </div>
         </div>
 
         <div class="tts-player-card" id="ttsPlayerCard" role="group" aria-labelledby="ttsPlayerTitle" tabindex="-1" hidden>
@@ -198,9 +201,6 @@
             </div>
             <div class="input-footer">
                 <p class="disclaimer">This is a conversational agent. Please understand that most of the responses are read out and created for Text to Speech output.</p>
-                <button id="llamaClickTarget" type="button" class="llama-click-target" title="About DecisionsAI" aria-label="About DecisionsAI">
-                    <span data-assistant-identity data-assistant-idle aria-hidden="true"></span>
-                </button>
             </div>
         </div>
     </main>

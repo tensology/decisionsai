@@ -186,9 +186,9 @@ def test_secondary_pages(secondary_page, width):
     expect(page.locator('#chatMessages')).to_contain_text('The tables and editors')
     capture(page, 'chat-conversation', width)
     if width < 1024:
-        about = page.locator('#llamaClickTarget').bounding_box()
-        footer = page.locator('.input-footer').bounding_box()
-        assert about['y'] >= footer['y']
+        background = page.locator('#chatBackgroundAvatar').bounding_box()
+        composer = page.locator('#inputContainer').bounding_box()
+        assert background['y'] + background['height'] <= composer['y']
         assert page.locator('#chatTitle').evaluate('(node) => getComputedStyle(node).textOverflow') == 'ellipsis'
     page.locator('#configureChatButton').click()
     expect(page.locator('#chatConfigModal')).to_be_visible()
