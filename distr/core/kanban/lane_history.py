@@ -83,6 +83,19 @@ def record_lane_change(
     )
     session.add(row)
     _sync_work_item_lane(session, int(ticket_id), to_lane)
+    # Push the move to any open board/list/thread page immediately.
+    try:
+        from distr.core.kanban.realtime import publish_kanban_changed
+
+        publish_kanban_changed(
+            ticket_id=int(ticket_id),
+            event="ticket_lane_move",
+            from_lane=from_lane,
+            to_lane=to_lane,
+            reason=str(reason or ""),
+        )
+    except Exception:
+        pass
     return row
 
 

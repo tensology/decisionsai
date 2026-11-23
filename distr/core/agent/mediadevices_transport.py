@@ -41,6 +41,10 @@ from distr.core.agent.libs import (
 
 logger = logging.getLogger(__name__)
 
+# Playback end-of-reply tuning (seconds); see macos_vpio_transport for rationale.
+_FINISH_GRACE_SECS = 0.4
+_REPLY_IDLE_FALLBACK_SECS = 20.0
+
 try:
     from pipecat.audio.vad.vad_analyzer import VADParams, VADState
 except Exception:  # pragma: no cover
@@ -168,6 +172,12 @@ class MediaDevicesOutputTransport(FrameProcessor):
         self._total_out_secs = 0.0
         self._wall_at_last_audio = 0.0
         self._scheduled_finish = None
+        # Playback ends once per reply, not per sentence.
+        self._in_reply = False
+        self._active = False
+        # Monotonic time at which all written audio should have played,
+        # accounting for gaps between sentences.
+        self._play_watermark = 0.0
 
     # -- compatibility surface used by session/STT/LLM ------------------
     def set_volume(self, volume: float):
@@ -184,13 +194,45 @@ class MediaDevicesOutputTransport(FrameProcessor):
         # Mid-session device hot-swap is not supported in MediaDevices mode.
         return None
 
+    def _remaining_playback_secs(self) -> float:
+        return max(0.0, self._play_watermark - time.monotonic())
+
     async def wait_for_playback_idle(self, timeout: float = 10.0):
         end = time.monotonic() + max(0.0, timeout)
         while time.monotonic() < end:
-            remaining = (self._wall_at_last_audio + self._total_out_secs) - time.monotonic()
+            remaining = self._remaining_playback_secs()
             if remaining <= 0:
                 return
             await asyncio.sleep(min(remaining, 0.05))
+
+    def _cancel_scheduled_finish(self):
+        if self._scheduled_finish is not None and not self._scheduled_finish.done():
+            self._scheduled_finish.cancel()
+        self._scheduled_finish = None
+
+    async def _abort_output_stream_async(self):
+        """Immediately stop speaker audio (Stop/PTT)."""
+        md = self._transport
+        was_active = self._active
+        self._force_silence = True
+        self._cancel_scheduled_finish()
+        try:
+            md._player._buffer.clear()
+        except Exception:
+            pass
+        if md._ref_buf is not None:
+            md._ref_buf.set_active(False)
+        self._reset_playback()
+        if was_active:
+            self._emit("playback_finished", {"playback_id": md._playback_id})
+
+    def _reset_playback(self):
+        self._total_out_secs = 0.0
+        self._wall_at_last_audio = 0.0
+        self._play_watermark = 0.0
+        self._first_audio_at = None
+        self._in_reply = False
+        self._active = False
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
@@ -199,34 +241,50 @@ class MediaDevicesOutputTransport(FrameProcessor):
         if isinstance(frame, StartFrame):
             await self._ensure_started()
 
-        if isinstance(frame, LLMFullResponseStartFrame):
-            self._response_started_at = time.monotonic()
-            self._first_audio_at = None
-            self._total_out_secs = 0.0
-            self._transport.new_playback_id()
+        if isinstance(frame, (LLMFullResponseStartFrame, TTSStartedFrame)):
+            self._force_silence = False
+            self._cancel_scheduled_finish()
+            if isinstance(frame, LLMFullResponseStartFrame):
+                self._response_started_at = time.monotonic()
+                self._in_reply = True
+            if not self._active:
+                # One playback id per reply: only mint a new one when nothing
+                # is currently playing.
+                self._first_audio_at = None
+                self._total_out_secs = 0.0
+                self._active = True
+                self._transport.new_playback_id()
 
         if isinstance(frame, AudioRawFrame) and isinstance(frame.audio, (bytes, bytearray)) and frame.audio:
-            await self._write(frame)
+            if not self._force_silence:
+                await self._write(frame)
             await self.push_frame(frame, direction)
             return
 
         if isinstance(frame, InterruptionFrame):
             # Drop queued audio immediately and stop counting it.
+            was_active = self._active
+            self._force_silence = True
+            self._cancel_scheduled_finish()
             try:
                 md._player._buffer.clear()
             except Exception:
                 pass
             if md._ref_buf is not None:
                 md._ref_buf.set_active(False)
-            self._total_out_secs = 0.0
-            self._wall_at_last_audio = 0.0
-            self._first_audio_at = None
-            self._emit("playback_finished", {"playback_id": self._transport._playback_id})
+            self._reset_playback()
+            if was_active:
+                self._emit("playback_finished", {"playback_id": self._transport._playback_id})
             await self.push_frame(frame, direction)
             return
 
-        if isinstance(frame, (LLMFullResponseEndFrame, EndFrame, TTSStoppedFrame)):
-            self._schedule_finish()
+        if isinstance(frame, (LLMFullResponseEndFrame, EndFrame)):
+            self._in_reply = False
+            if self._active:
+                self._schedule_finish()
+        elif isinstance(frame, TTSStoppedFrame) and self._active:
+            # Per-sentence stop inside a reply only arms a safety net.
+            self._schedule_finish(_REPLY_IDLE_FALLBACK_SECS if self._in_reply else 0.0)
 
         await self.push_frame(frame, direction)
 
@@ -253,28 +311,51 @@ class MediaDevicesOutputTransport(FrameProcessor):
         except Exception as exc:
             logger.debug("MediaDevices output write failed: %s", exc)
             return
+        if not self._active:
+            self._active = True
+            md.new_playback_id()
         secs = (len(pcm) // 2) / md._output_sample_rate
         self._total_out_secs += secs
-        self._wall_at_last_audio = time.monotonic()
+        now = time.monotonic()
+        self._wall_at_last_audio = now
+        self._play_watermark = max(self._play_watermark, now) + secs
         if self._first_audio_at is None:
             self._first_audio_at = time.monotonic()
             if md._ref_buf is not None:
                 md._ref_buf.set_active(True)
             self._emit("tts_started", {"source": "transport", "backend": "mediadevices", "playback_id": md._playback_id})
 
-    def _schedule_finish(self):
-        if self._scheduled_finish is not None and not self._scheduled_finish.done():
-            return
-        remaining = (self._wall_at_last_audio + self._total_out_secs) - time.monotonic()
-        self._scheduled_finish = asyncio.create_task(self._finish_after(max(0.0, remaining)))
+    def _schedule_finish(self, idle_timeout: float = 0.0):
+        self._cancel_scheduled_finish()
+        self._scheduled_finish = asyncio.create_task(self._finish_after(idle_timeout))
 
-    async def _finish_after(self, delay):
+    async def _finish_after(self, idle_timeout: float = 0.0):
+        """Finish once written audio has played and stayed quiet for the grace
+        period (end of reply) or ``idle_timeout`` (in-reply safety net)."""
         try:
-            if delay > 0:
-                await asyncio.sleep(delay)
+            needed = max(_FINISH_GRACE_SECS, float(idle_timeout or 0.0))
+            drained_at = None
+            while True:
+                now = time.monotonic()
+                rem = self._remaining_playback_secs()
+                if rem > 0.02:
+                    drained_at = None
+                    await asyncio.sleep(min(rem, 0.05))
+                    continue
+                if drained_at is None or self._wall_at_last_audio > drained_at:
+                    drained_at = now
+                quiet = now - drained_at
+                if quiet >= needed:
+                    break
+                await asyncio.sleep(min(needed - quiet, 0.1))
+            self._scheduled_finish = None
             if self._transport._ref_buf is not None:
                 self._transport._ref_buf.set_active(False)
-            self._emit("playback_finished", {"playback_id": self._transport._playback_id})
+            playback_id = self._transport._playback_id
+            in_reply = self._in_reply
+            self._reset_playback()
+            self._in_reply = in_reply
+            self._emit("playback_finished", {"playback_id": playback_id})
         except asyncio.CancelledError:
             pass
 

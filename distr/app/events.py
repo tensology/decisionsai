@@ -457,20 +457,11 @@ class EventHandlerMixin:
             # while transport playback is active. Do not put it in the
             # deduplication cache: a real interruption may arrive immediately
             # afterwards and must still close the player.
-            #
-            # A tts_started that just fired (e.g. the TTS service's direct_desktop
-            # event landing before the transport's) can also leave
-            # _tts_active_sessions at 0 for a moment; treat a recent start as
-            # active so the player is not closed the instant it opens.
-            recent_start = (
-                time.time() - float(getattr(self, 'last_tts_start_time', 0.0) or 0.0)
-            ) < 2.0
-            if duration <= 0.0 and not interrupted and (self._tts_active_sessions > 0 or recent_start):
+            if duration <= 0.0 and not interrupted and self._tts_active_sessions > 0:
                 logger.warning(
                     "[EVENT QUEUE] Ignoring zero-duration tts_stopped while playback is active "
-                    "(active_sessions=%d recent_start=%s). Waiting for playback_finished or safety fallback.",
+                    "(active_sessions=%d). Waiting for playback_finished or safety fallback.",
                     self._tts_active_sessions,
-                    recent_start,
                 )
                 return
 

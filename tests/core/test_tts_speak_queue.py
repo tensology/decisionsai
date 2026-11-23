@@ -63,10 +63,13 @@ def test_speak_queue_is_bounded():
 
 def test_a_long_reply_drops_stale_lines_and_keeps_the_newest():
     surviving = []
+    total = mixin.SPEAK_QUEUE_MAX + 12
 
     async def scenario():
         stub = _Stub()
-        for index in range(12):
+        # Overfill past the cap (SPEAK_QUEUE_MAX is 64 since 08cc237e) so the
+        # drop-oldest path actually runs.
+        for index in range(total):
             await stub._enqueue_sentence(f"sentence {index}", None)
         surviving.extend(_drain(stub._speak_queue))
         stub.gate.set()
@@ -82,7 +85,7 @@ def test_a_long_reply_drops_stale_lines_and_keeps_the_newest():
     stub = asyncio.run(scenario())
 
     assert len(surviving) <= mixin.SPEAK_QUEUE_MAX
-    assert "sentence 11" in surviving
+    assert f"sentence {total - 1}" in surviving
     # The earliest lines were the ones dropped, not the newest.
     assert "sentence 0" not in surviving
     assert "sentence 1" not in surviving

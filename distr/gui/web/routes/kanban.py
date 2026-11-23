@@ -4694,6 +4694,12 @@ def create_routes():
             from distr.core.chat import remove_chat_transcript_audit_events
 
             remove_chat_transcript_audit_events(deleted_thread_id)
+        try:
+            from distr.core.kanban.realtime import publish_kanban_changed
+
+            publish_kanban_changed(ticket_id=int(ticket_id), event="ticket_deleted")
+        except Exception:
+            pass
         return JSONResponse({"success": True, "deleted_thread_id": deleted_thread_id})
 
     # ── Ticket Files ──

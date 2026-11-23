@@ -55,6 +55,10 @@ except Exception:  # pragma: no cover
 _APM_RATE = 16000
 _APM_FRAME_SAMPLES = 160  # 10 ms @ 16 kHz (required by WebRTC APM)
 _CALLBACK_BLOCK_SECS = 0.02  # 20 ms low-latency callbacks
+# Playback end-of-reply tuning (seconds); see macos_vpio_transport for rationale.
+_FINISH_GRACE_SECS = 0.4
+_REPLY_IDLE_FALLBACK_SECS = 20.0
+_FINISH_HARD_CAP_SECS = 5.0
 
 
 class _OutputBuffer:
@@ -379,6 +383,10 @@ class SdApmOutputTransport(FrameProcessor):
         self._finish_task: Optional[asyncio.Task] = None
         self._out_resampler = LinearStreamResampler()
         self._out_resampler_src_rate = 0
+        # Playback ends once per reply (LLMFullResponseEndFrame), not per sentence.
+        self._in_reply = False
+        self._wall_at_last_audio = 0.0
+        self._play_watermark = 0.0
 
     def set_volume(self, volume: float):
         self._volume = max(0.0, min(1.0, float(volume)))
@@ -413,7 +421,11 @@ class SdApmOutputTransport(FrameProcessor):
     def _remaining_playback_secs(self) -> float:
         t = self._transport
         sr = max(1, int(t._actual_output_rate or t._output_sample_rate))
-        return len(t._out_buf) / (2.0 * sr)
+        # int16 mono bytes -> seconds at the device rate. Never below the
+        # local wall-clock estimate of what has been written.
+        buffered = len(t._out_buf) / (2.0 * sr)
+        local = max(0.0, self._play_watermark - time.monotonic())
+        return max(buffered, local)
 
     async def wait_for_playback_idle(self, timeout: float = 10.0):
         end = time.monotonic() + max(0.0, timeout)
@@ -426,8 +438,11 @@ class SdApmOutputTransport(FrameProcessor):
             await asyncio.sleep(min(max(rem, 0.02), 0.06))
 
     async def _abort_output_stream_async(self):
+        was_active = self._state != AudioPlaybackState.IDLE
         self._force_silence = True
         self._flush_now()
+        if was_active:
+            self._emit("playback_finished", {"playback_id": self._transport._playback_id})
 
     def _flush_now(self):
         t = self._transport
@@ -438,6 +453,9 @@ class SdApmOutputTransport(FrameProcessor):
         if t._ref_buf is not None:
             t._ref_buf.set_active(False)
         self._first_audio_at = None
+        self._wall_at_last_audio = 0.0
+        self._play_watermark = 0.0
+        self._in_reply = False
         self._state = AudioPlaybackState.IDLE
 
     async def process_frame(self, frame, direction):
@@ -446,6 +464,9 @@ class SdApmOutputTransport(FrameProcessor):
 
         if isinstance(frame, StartFrame):
             await self._ensure_started()
+
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._in_reply = True
 
         if isinstance(frame, (LLMFullResponseStartFrame, TTSStartedFrame)):
             self._force_silence = False
@@ -473,8 +494,19 @@ class SdApmOutputTransport(FrameProcessor):
             await self.push_frame(frame, direction)
             return
 
-        if isinstance(frame, (LLMFullResponseEndFrame, EndFrame, TTSStoppedFrame)):
+        if isinstance(frame, (LLMFullResponseEndFrame, EndFrame)):
+            # True end of the reply (or of the stream): drain once, then finish.
+            self._in_reply = False
             if self._state in (AudioPlaybackState.SYNTHESIZING, AudioPlaybackState.PLAYING):
+                self._state = AudioPlaybackState.DRAINING
+                self._schedule_finish()
+        elif isinstance(frame, TTSStoppedFrame):
+            if self._in_reply:
+                # Per-sentence stop inside a reply: keep the same playback id
+                # and AEC reference; only a safety net if the end never comes.
+                if self._state in (AudioPlaybackState.SYNTHESIZING, AudioPlaybackState.PLAYING):
+                    self._schedule_finish(idle_timeout=_REPLY_IDLE_FALLBACK_SECS)
+            elif self._state in (AudioPlaybackState.SYNTHESIZING, AudioPlaybackState.PLAYING):
                 self._state = AudioPlaybackState.DRAINING
                 self._schedule_finish()
 
@@ -524,7 +556,13 @@ class SdApmOutputTransport(FrameProcessor):
         pcm = np.clip(data * 32767.0, -32768, 32767).astype(np.int16).tobytes()
         if not pcm:
             return
+        if self._state == AudioPlaybackState.IDLE:
+            t.new_playback_id()
         t._out_buf.extend(pcm)
+        now = time.monotonic()
+        secs = (len(pcm) // 2) / float(max(1, dst_rate))
+        self._wall_at_last_audio = now
+        self._play_watermark = max(self._play_watermark, now) + secs
         self._state = AudioPlaybackState.PLAYING
         if self._first_audio_at is None:
             self._first_audio_at = time.monotonic()
@@ -532,24 +570,37 @@ class SdApmOutputTransport(FrameProcessor):
                 t._ref_buf.set_active(True)
             self._emit("tts_started", {"source": "transport", "backend": "sdapm", "playback_id": t._playback_id})
 
-    def _schedule_finish(self):
+    def _schedule_finish(self, idle_timeout: float = 0.0):
         if self._finish_task is not None and not self._finish_task.done():
             self._finish_task.cancel()
-        self._finish_task = asyncio.create_task(self._wait_and_finish())
+        self._finish_task = asyncio.create_task(self._wait_and_finish(idle_timeout))
 
-    async def _wait_and_finish(self):
+    async def _wait_and_finish(self, idle_timeout: float = 0.0):
+        """Finish after the buffer drains and stays quiet for the grace period
+        (end of reply) or for ``idle_timeout`` (in-reply safety net)."""
         try:
-            deadline = time.monotonic() + max(1.0, self._remaining_playback_secs() + 1.5)
-            while time.monotonic() < deadline:
+            needed = max(_FINISH_GRACE_SECS, float(idle_timeout or 0.0))
+            drained_at: Optional[float] = None
+            while True:
+                now = time.monotonic()
                 rem = self._remaining_playback_secs()
-                if rem <= 0.02:
+                if rem > 0.02:
+                    drained_at = None
+                    if now > self._play_watermark + _FINISH_HARD_CAP_SECS + needed:
+                        break
+                    await asyncio.sleep(min(max(rem, 0.02), 0.04))
+                    continue
+                if drained_at is None or self._wall_at_last_audio > drained_at:
+                    drained_at = now
+                quiet = now - drained_at
+                if quiet >= needed:
                     break
-                await asyncio.sleep(min(rem, 0.04))
-            # Brief acoustic tail for speaker-to-mic propagation (~60 ms)
-            await asyncio.sleep(0.06)
+                await asyncio.sleep(min(needed - quiet, 0.1))
+            self._finish_task = None
             if self._transport._ref_buf is not None:
                 self._transport._ref_buf.set_active(False)
             self._first_audio_at = None
+            self._play_watermark = 0.0
             self._state = AudioPlaybackState.IDLE
             self._emit("playback_finished", {"playback_id": self._transport._playback_id})
         except asyncio.CancelledError:

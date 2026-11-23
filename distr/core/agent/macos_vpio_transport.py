@@ -74,6 +74,19 @@ _MSG_STATS = 0x03
 _MSG_VOL = 0x03
 _MSG_QUIT = 0x04
 
+# Playback end-of-reply tuning (seconds).
+# Quiet time after the speaker buffer drains before playback_finished is sent,
+# so a slightly late or under-reported tail is not cut off.
+_FINISH_GRACE_SECS = 0.4
+# A helper STATS report only counts if it was received at least this long after
+# the last audio write (the helper may not have ingested that write yet).
+_STATS_AFTER_WRITE_MARGIN_SECS = 0.15
+# Inside an open reply, a per-sentence TTSStoppedFrame never ends playback; this
+# is only a safety net for a reply whose end frame never arrives.
+_REPLY_IDLE_FALLBACK_SECS = 20.0
+# Hard cap past the local playback estimate, in case helper reports stay stuck.
+_FINISH_HARD_CAP_SECS = 5.0
+
 
 def _vpio_source_path() -> Path:
     return Path(__file__).resolve().parent.parent / "audio" / "native" / "macos_vpio_helper.c"
@@ -338,6 +351,12 @@ class MacOsVpioOutputTransport(FrameProcessor):
         self._finish_task: Optional[asyncio.Task] = None
         self._out_resampler = LinearStreamResampler()
         self._out_resampler_src_rate = 0
+        # True between LLMFullResponseStartFrame and LLMFullResponseEndFrame:
+        # playback ends once per reply, not once per sentence.
+        self._in_reply = False
+        # Monotonic time at which everything written so far should have played,
+        # accounting for underruns (gaps between sentences).
+        self._play_watermark = 0.0
 
     def set_volume(self, volume: float):
         self._volume = max(0.0, min(1.0, float(volume)))
@@ -377,13 +396,31 @@ class MacOsVpioOutputTransport(FrameProcessor):
             "buffered_ms": round(self._transport._buffered_ms, 1),
         }
 
+    def _local_remaining_secs(self, now: Optional[float] = None) -> float:
+        now = time.monotonic() if now is None else now
+        return max(0.0, self._play_watermark - now)
+
     def _remaining_playback_secs(self) -> float:
+        """Conservative estimate of audio still to play.
+
+        The helper's STATS report is only trusted when it is fresh and was
+        received after the last write reached the helper; otherwise it can
+        describe the ring buffer *before* the newest audio and report "empty"
+        while a whole sentence is still queued. The result is never below the
+        local wall-clock estimate.
+        """
         t = self._transport
-        if t._last_stats_at and (time.monotonic() - t._last_stats_at) < 0.5:
-            return max(0.0, t._buffered_ms / 1000.0)
-        if self._first_audio_at is None:
-            return 0.0
-        return max(0.0, (self._first_audio_at + self._total_out_secs) - time.monotonic())
+        now = time.monotonic()
+        local = self._local_remaining_secs(now)
+        helper = 0.0
+        stats_at = t._last_stats_at
+        if (
+            stats_at
+            and (now - stats_at) < 0.5
+            and stats_at >= self._wall_at_last_audio + _STATS_AFTER_WRITE_MARGIN_SECS
+        ):
+            helper = max(0.0, t._buffered_ms / 1000.0)
+        return max(helper, local)
 
     async def wait_for_playback_idle(self, timeout: float = 10.0):
         end = time.monotonic() + max(0.0, timeout)
@@ -397,8 +434,11 @@ class MacOsVpioOutputTransport(FrameProcessor):
 
     async def _abort_output_stream_async(self):
         """Immediately stop speaker audio (called from command_handler on Stop/PTT)."""
+        was_active = self._state != AudioPlaybackState.IDLE
         self._force_silence = True
         self._flush_now()
+        if was_active:
+            self._emit("playback_finished", {"playback_id": self._transport._playback_id})
 
     def _flush_now(self):
         t = self._transport
@@ -411,7 +451,9 @@ class MacOsVpioOutputTransport(FrameProcessor):
             t._ref_buf.set_active(False)
         self._total_out_secs = 0.0
         self._wall_at_last_audio = 0.0
+        self._play_watermark = 0.0
         self._first_audio_at = None
+        self._in_reply = False
         self._state = AudioPlaybackState.IDLE
 
     async def process_frame(self, frame, direction):
@@ -420,6 +462,9 @@ class MacOsVpioOutputTransport(FrameProcessor):
 
         if isinstance(frame, StartFrame):
             await self._ensure_started()
+
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._in_reply = True
 
         if isinstance(frame, (LLMFullResponseStartFrame, TTSStartedFrame)):
             self._force_silence = False
@@ -448,8 +493,21 @@ class MacOsVpioOutputTransport(FrameProcessor):
             await self.push_frame(frame, direction)
             return
 
-        if isinstance(frame, (LLMFullResponseEndFrame, EndFrame, TTSStoppedFrame)):
+        if isinstance(frame, (LLMFullResponseEndFrame, EndFrame)):
+            # True end of the reply (or of the stream): drain once, then finish.
+            self._in_reply = False
             if self._state in (AudioPlaybackState.SYNTHESIZING, AudioPlaybackState.PLAYING):
+                self._state = AudioPlaybackState.DRAINING
+                self._schedule_finish()
+        elif isinstance(frame, TTSStoppedFrame):
+            if self._in_reply:
+                # Per-sentence stop marker inside a reply: keep playing (same
+                # playback id, AEC reference stays active). Only a safety net
+                # finishes if the reply goes silent and its end never arrives.
+                if self._state in (AudioPlaybackState.SYNTHESIZING, AudioPlaybackState.PLAYING):
+                    self._schedule_finish(idle_timeout=_REPLY_IDLE_FALLBACK_SECS)
+            elif self._state in (AudioPlaybackState.SYNTHESIZING, AudioPlaybackState.PLAYING):
+                # Standalone utterance with no reply wrapper: its stop is the end.
                 self._state = AudioPlaybackState.DRAINING
                 self._schedule_finish()
 
@@ -483,10 +541,16 @@ class MacOsVpioOutputTransport(FrameProcessor):
         if not pcm:
             return
 
+        if self._state == AudioPlaybackState.IDLE:
+            # Audio with no start marker (or after a safety-net finish): give
+            # it its own playback id so the desktop does not treat it as stale.
+            t.new_playback_id()
         await t._send_audio(pcm)
         secs = (len(pcm) // 2) / VPIO_SAMPLE_RATE
         self._total_out_secs += secs
-        self._wall_at_last_audio = time.monotonic()
+        now = time.monotonic()
+        self._wall_at_last_audio = now
+        self._play_watermark = max(self._play_watermark, now) + secs
         self._state = AudioPlaybackState.PLAYING
         if self._first_audio_at is None:
             self._first_audio_at = time.monotonic()
@@ -494,24 +558,44 @@ class MacOsVpioOutputTransport(FrameProcessor):
                 t._ref_buf.set_active(True)
             self._emit("tts_started", {"source": "transport", "backend": "macos_vpio", "playback_id": t._playback_id})
 
-    def _schedule_finish(self):
+    def _schedule_finish(self, idle_timeout: float = 0.0):
         if self._finish_task is not None and not self._finish_task.done():
             self._finish_task.cancel()
-        self._finish_task = asyncio.create_task(self._wait_and_finish())
+        self._finish_task = asyncio.create_task(self._wait_and_finish(idle_timeout))
 
-    async def _wait_and_finish(self):
+    async def _wait_and_finish(self, idle_timeout: float = 0.0):
+        """Finish playback once the speaker has been quiet long enough.
+
+        ``idle_timeout`` 0 means end-of-reply: wait for the buffer to drain plus
+        a short grace. A positive value is the in-reply safety net: only finish
+        if no further audio arrives for that long after the buffer drained.
+        """
         try:
-            # Wait until the helper's actual playback ring buffer drains.
-            deadline = time.monotonic() + max(1.0, self._remaining_playback_secs() + 2.0)
-            while time.monotonic() < deadline:
+            needed = max(_FINISH_GRACE_SECS, float(idle_timeout or 0.0))
+            drained_at: Optional[float] = None
+            while True:
+                now = time.monotonic()
                 rem = self._remaining_playback_secs()
-                if rem <= 0.03:
+                if rem > 0.03:
+                    drained_at = None
+                    if now > self._play_watermark + _FINISH_HARD_CAP_SECS + needed:
+                        # Helper reports stuck non-empty well past the local
+                        # estimate; do not leave the UI "speaking" forever.
+                        break
+                    await asyncio.sleep(min(max(rem, 0.02), 0.05))
+                    continue
+                if drained_at is None or self._wall_at_last_audio > drained_at:
+                    drained_at = now
+                quiet = now - drained_at
+                if quiet >= needed:
                     break
-                await asyncio.sleep(min(rem, 0.05))
+                await asyncio.sleep(min(needed - quiet, 0.1))
+            self._finish_task = None
             if self._transport._ref_buf is not None:
                 self._transport._ref_buf.set_active(False)
             self._first_audio_at = None
             self._total_out_secs = 0.0
+            self._play_watermark = 0.0
             self._state = AudioPlaybackState.IDLE
             self._emit("playback_finished", {"playback_id": self._transport._playback_id})
         except asyncio.CancelledError:

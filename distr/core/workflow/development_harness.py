@@ -2690,6 +2690,14 @@ async def _run_execution(
             from distr.core.kanban.thread_lane_tracking import track_work_started
 
             track_work_started(chat_id)
+            # Start the thread timer for a real run so the board reflects effort
+            # without the user having to press Play. The run-finish paths pause it.
+            try:
+                from distr.core.workflow.development_control import resume_thread_time
+
+                resume_thread_time(chat_id)
+            except Exception:
+                logger.debug("Could not auto-start thread timer for chat %s", chat_id, exc_info=True)
         result = await execute_turn(
             request,
             on_event=on_event,
