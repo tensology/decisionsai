@@ -266,22 +266,24 @@ class VoiceDictationMixin:
                 logger.debug("Dictation: context note event emit failed", exc_info=True)
         logger.info("Dictation: injected context (%d characters), no reply", len(note))
 
-    def _start_dictation(self, one_shot: bool = False, output_mode: str = "plain"):
+    def _start_dictation(self, one_shot: bool = False, output_mode: str = "plain", *, worker_controls_audio: bool = False):
         """Start dictation mode.
 
         Args:
             one_shot: When True, exit dictation after the next transcript is typed.
                 Hold-to-dictate hotkeys use the physical release event instead.
         """
-        if self._is_dictating:
+        if self._is_dictating and not getattr(self, "_dictation_release_pending", False):
             if one_shot:
                 self._dictation_one_shot = True
                 self._one_shot_dictation_armed = True
             self._dictation_output_mode = self._normalize_dictation_output_mode(output_mode)
             self._dictation_ticket_rewrite = output_mode == "ticket"
+            self._dictation_worker_controls_audio = worker_controls_audio
             return
 
-        self._hands_free_before_dictation = self._is_hands_free
+        if not self._is_dictating:
+            self._hands_free_before_dictation = self._is_hands_free
 
         if self._is_hands_free:
             logger.info("Dictation: Disabling hands-free mode for dictation")
@@ -293,11 +295,11 @@ class VoiceDictationMixin:
                     logger.debug("Error emitting hands_free_mode_changed: %s", e)
 
         self._is_dictating = True
+        self._dictation_worker_controls_audio = worker_controls_audio
         self._dictation_one_shot = bool(one_shot)
         self._dictation_release_pending = False
         self._dictation_ui_stop_sent = False
-        if one_shot:
-            self._one_shot_dictation_armed = True
+        self._one_shot_dictation_armed = bool(one_shot)
         self._dictation_output_mode = self._normalize_dictation_output_mode(output_mode)
         self._dictation_ticket_rewrite = output_mode == "ticket"
         logger.info(
@@ -308,7 +310,8 @@ class VoiceDictationMixin:
 
         if self.event_queue:
             try:
-                self.event_queue.put(('set_dictating', {'enabled': True}), block=False)
+                if not worker_controls_audio:
+                    self.event_queue.put(('set_dictating', {'enabled': True}), block=False)
             except Exception as e:
                 logger.debug("Error emitting set_dictating: %s", e)
             try:
@@ -328,7 +331,8 @@ class VoiceDictationMixin:
 
         if self.event_queue:
             try:
-                self.event_queue.put(('set_dictating', {'enabled': False}), block=False)
+                if not getattr(self, "_dictation_worker_controls_audio", False):
+                    self.event_queue.put(('set_dictating', {'enabled': False}), block=False)
             except Exception as e:
                 logger.debug("Error emitting set_dictating: %s", e)
             try:
@@ -359,7 +363,8 @@ class VoiceDictationMixin:
 
         if self.event_queue and not ui_stop_already_sent:
             try:
-                self.event_queue.put(('set_dictating', {'enabled': False}), block=False)
+                if not getattr(self, "_dictation_worker_controls_audio", False):
+                    self.event_queue.put(('set_dictating', {'enabled': False}), block=False)
             except Exception as e:
                 logger.debug("Error emitting set_dictating: %s", e)
 

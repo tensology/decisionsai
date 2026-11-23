@@ -688,14 +688,16 @@ function setupEventListeners() {
     });
     document.querySelectorAll('.chat-config-tabs').forEach(tabList => {
         const tabs = [...tabList.querySelectorAll('[role="tab"]')];
-        tabs.forEach((tab, index) => {
+        tabs.forEach(tab => {
             tab.addEventListener('click', () => selectChatConfigTab(tab));
             tab.addEventListener('keydown', event => {
+                const visibleTabs = tabs.filter(candidate => !candidate.hidden);
+                const index = visibleTabs.indexOf(tab);
                 const next = {
-                    ArrowLeft: tabs[(index - 1 + tabs.length) % tabs.length],
-                    ArrowRight: tabs[(index + 1) % tabs.length],
-                    Home: tabs[0],
-                    End: tabs.at(-1),
+                    ArrowLeft: visibleTabs[(index - 1 + visibleTabs.length) % visibleTabs.length],
+                    ArrowRight: visibleTabs[(index + 1) % visibleTabs.length],
+                    Home: visibleTabs[0],
+                    End: visibleTabs.at(-1),
                 }[event.key];
                 if (!next) return;
                 event.preventDefault();
@@ -708,7 +710,6 @@ function setupEventListeners() {
         const agentId = document.getElementById('chatConfigAgent').dataset.agentId;
         if (agentId && await deleteAgent(Number(agentId))) hideChatConfigModal();
     });
-    document.getElementById('chatConfigSkin')?.addEventListener('change', updateChatConfigOracleVisibility);
     if (chatConfigLlmProvider) {
         chatConfigLlmProvider.addEventListener('change', () => {
             loadLlmModelsInto(chatConfigLlmModel, chatConfigLlmProvider.value);
@@ -3142,49 +3143,10 @@ async function loadEmptyStateSkins() {
         const res = await fetch('/api/skins');
         if (!res.ok) return;
         const data = await res.json();
-        const skins = data.skins || [];
-        const selected = data.selected_skin || 'oracle';
-        _emptyStateSkinSelection = selected;
-        grid.innerHTML = '';
-        skins.forEach(function(skin) {
-            const isSel = skin.folder_name === selected;
-            const card = document.createElement('div');
-            card.className = 'empty-state-skin-card' + (isSel ? ' selected' : '');
-            card.dataset.folder = skin.folder_name;
-            const idleFile = skin.idle_animation || 'idle.webm';
-            const previewFile = skin.preview_image || idleFile;
-            const previewUrl = '/api/skins/' + encodeURIComponent(skin.folder_name) + '/preview/' + encodeURIComponent(previewFile);
-            const ext = previewFile.split('.').pop().toLowerCase();
-            const isOracle = skin.type === 'oracle';
-            const previewWrap = document.createElement('div');
-            previewWrap.className = 'empty-state-skin-preview' + (isOracle ? '' : ' avatar-preview');
-            let previewEl;
-            if (ext === 'webm') {
-                previewEl = document.createElement('video');
-                previewEl.src = previewUrl;
-                previewEl.autoplay = true;
-                previewEl.muted = true;
-                previewEl.loop = true;
-                previewEl.setAttribute('playsinline', '');
-            } else {
-                previewEl = document.createElement('img');
-                previewEl.src = previewUrl;
-                previewEl.onerror = function() { this.style.display = 'none'; };
-            }
-            previewWrap.appendChild(previewEl);
-            card.appendChild(previewWrap);
-            const nameEl = document.createElement('span');
-            nameEl.className = 'empty-state-skin-name';
-            nameEl.textContent = skin.name || skin.folder_name;
-            card.appendChild(nameEl);
-            card.addEventListener('click', function() {
-                _emptyStateSkinSelection = skin.folder_name;
-                grid.querySelectorAll('.empty-state-skin-card').forEach(function(c) {
-                    c.classList.toggle('selected', c.dataset.folder === skin.folder_name);
-                });
-            });
-            grid.appendChild(card);
-        });
+        _emptyStateSkinSelection = data.selected_skin || 'oracle';
+        await renderSkinCards(grid, data.skins || [], _emptyStateSkinSelection, skin => {
+            _emptyStateSkinSelection = skin;
+        }, document.getElementById('emptyStateOracleBackground'));
     } catch (e) {
         console.error('Error loading skins for empty state:', e);
     }
@@ -3288,49 +3250,61 @@ async function loadModalSkins() {
         const skins = data.skins || [];
         const selected = data.selected_skin || 'oracle';
         _modalSkinSelection = selected;
-        grid.innerHTML = '';
-        skins.forEach(function(skin) {
-            const isSel = skin.folder_name === selected;
-            const card = document.createElement('button');
-            card.type = 'button';
-            card.setAttribute('aria-label', skin.name || skin.folder_name);
-            card.setAttribute('aria-pressed', isSel ? 'true' : 'false');
-            card.className = 'empty-state-skin-card' + (isSel ? ' selected' : '');
-            card.dataset.folder = skin.folder_name;
-            const idleFile = skin.idle_animation || 'idle.webm';
-            const previewFile = skin.preview_image || idleFile;
-            const previewUrl = '/api/skins/' + encodeURIComponent(skin.folder_name) + '/preview/' + encodeURIComponent(previewFile);
-            const ext = previewFile.split('.').pop().toLowerCase();
-            const isOracle = skin.type === 'oracle';
-            const previewWrap = document.createElement('div');
-            previewWrap.className = 'empty-state-skin-preview' + (isOracle ? '' : ' avatar-preview');
-            let previewEl;
-            if (ext === 'webm') {
-                previewEl = document.createElement('video');
-                previewEl.src = previewUrl;
-                previewEl.autoplay = true; previewEl.muted = true; previewEl.loop = true;
-                previewEl.setAttribute('playsinline', '');
-            } else {
-                previewEl = document.createElement('img');
-                previewEl.src = previewUrl;
-            }
-            previewWrap.appendChild(previewEl);
-            card.appendChild(previewWrap);
-            const nameEl = document.createElement('span');
-            nameEl.className = 'empty-state-skin-name';
-            nameEl.textContent = skin.name || skin.folder_name;
-            card.appendChild(nameEl);
-            card.addEventListener('click', function() {
-                _modalSkinSelection = skin.folder_name;
-                grid.querySelectorAll('.empty-state-skin-card').forEach(function(c) {
-                    c.classList.toggle('selected', c.dataset.folder === skin.folder_name);
-                    c.setAttribute('aria-pressed', c.dataset.folder === skin.folder_name ? 'true' : 'false');
-                });
-            });
-            grid.appendChild(card);
-        });
+        await renderSkinCards(grid, skins, selected, skin => {
+            _modalSkinSelection = skin;
+        }, document.getElementById('modalOracleBackground'));
     } catch (e) {
         console.error('Error loading modal skins:', e);
+    }
+}
+
+async function renderSkinCards(grid, skins, selected, onSelect, background, saved = '') {
+    grid.replaceChildren();
+    background.onchange = null;
+    background.parentElement.hidden = selected !== 'oracle';
+    await loadOracleBackgrounds(background, saved);
+    for (const skin of skins) {
+        const isSelected = skin.folder_name === selected;
+        const isOracle = skin.folder_name === 'oracle';
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'empty-state-skin-card' + (isSelected ? ' selected' : '');
+        card.setAttribute('aria-pressed', String(isSelected));
+        card.dataset.folder = skin.folder_name;
+        const preview = document.createElement('div');
+        preview.className = 'empty-state-skin-preview' + (skin.type === 'oracle' ? '' : ' avatar-preview');
+        const updatePreview = () => {
+            const file = (isOracle && (background.value || (background.disabled && saved)))
+                || (isOracle && skin.idle_animation) || skin.preview_image || skin.idle_animation || 'idle.webm';
+            const video = /\.webm$/i.test(file);
+            const media = document.createElement(video ? 'video' : 'img');
+            if (video) {
+                media.autoplay = true;
+                media.muted = true;
+                media.loop = true;
+                media.playsInline = true;
+            } else {
+                media.alt = '';
+            }
+            media.src = '/api/skins/' + encodeURIComponent(skin.folder_name) + '/preview/' + encodeURIComponent(file);
+            preview.replaceChildren(media);
+        };
+        if (isOracle) background.onchange = updatePreview;
+        updatePreview();
+        const name = document.createElement('span');
+        name.className = 'empty-state-skin-name';
+        name.textContent = skin.name || skin.folder_name;
+        card.append(preview, name);
+        card.addEventListener('click', () => {
+            onSelect(skin.folder_name);
+            background.parentElement.hidden = !isOracle;
+            for (const option of grid.children) {
+                const active = option === card;
+                option.classList.toggle('selected', active);
+                option.setAttribute('aria-pressed', String(active));
+            }
+        });
+        grid.append(card);
     }
 }
 
@@ -4736,15 +4710,16 @@ async function sendMessage() {
         if (!provider || !modelName) {
             isStreaming = false;
             sendButton.disabled = !messageInput.value.trim();
-            alert('Please select an LLM provider and model in Chat settings, or set defaults in Settings > LLMs.');
+            alert('Please select an LLM provider and model in Configure agent, or set defaults in Settings > LLMs.');
             return;
         }
         if (!voiceProvider || !voiceModel) {
             isStreaming = false;
             sendButton.disabled = !messageInput.value.trim();
-            alert('Please select a voice provider and voice in Chat settings, or set defaults in Settings > General.');
+            alert('Please select a voice provider and voice in Configure agent, or set defaults in Settings > General.');
             return;
         }
+        const background = document.getElementById('emptyStateOracleBackground');
         showEmptyStateAgentLoading();
         const savedPlaceholder = messageInput.placeholder;
         messageInput.placeholder = 'Starting chat...';
@@ -4759,6 +4734,8 @@ async function sendMessage() {
                 body: JSON.stringify({
                     title: null,
                     skin_name: _emptyStateSkinSelection,
+                    ...(_emptyStateSkinSelection === 'oracle' && !background.disabled
+                        ? { oracle_background: background.value || null } : {}),
                     provider,
                     model_name: modelName,
                     voice_provider: voiceProvider,
@@ -5440,7 +5417,7 @@ async function loadLlmModels(provider) {
     await loadLlmModelsInto(llmModelSelect, provider);
 }
 
-// Voice sample playback — shared by new-chat modal, empty state, and Configure Chat modal.
+// Voice sample playback — shared by new-chat modal, empty state, and Configure agent dialog.
 const _CHAT_VOICE_CONTEXTS = {
     emptyState: { prefix: 'emptyState', providerId: 'emptyStateVoiceProvider', modelId: 'emptyStateVoiceModel' },
     modal: { prefix: 'modal', providerId: 'voiceProvider', modelId: 'voiceModel' },
@@ -5702,6 +5679,11 @@ async function showNewChatModal() {
     const modalForm = document.getElementById('modalFormContent');
     if (modalLoader) modalLoader.style.display = '';
     if (modalForm) modalForm.style.display = 'none';
+    _modalSkinSelection = null;
+    const background = document.getElementById('modalOracleBackground');
+    background.disabled = true;
+    background.parentElement.hidden = true;
+    document.getElementById('modalSkinGrid').replaceChildren();
     // Disable create button if agent is currently streaming a response
     if (modalCreate) modalCreate.disabled = false;
     const revealModal = () => {
@@ -5790,11 +5772,14 @@ async function createNewChatWithSettings() {
     document.getElementById('modalFormContent').disabled = true;
     modalClose.disabled = true;
     modalCancel.disabled = true;
+    const background = document.getElementById('modalOracleBackground');
     try {
         const response = await fetch(`${API_BASE}/chats`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({agent_name: name, agent_role: roleEl.value.trim(), title: name,
                 skin_name: _modalSkinSelection, provider, model_name: model,
+                ...(_modalSkinSelection === 'oracle' && !background.disabled
+                    ? { oracle_background: background.value || null } : {}),
                 voice_provider: voiceProvider, voice_model: voiceModel, speak: false})
         });
         if (!response.ok) {
@@ -5866,14 +5851,9 @@ function providerIdFromDisplay(value) {
     return map[lower] || lower;
 }
 
-function updateChatConfigOracleVisibility() {
-    const field = document.getElementById('chatConfigOracleBackgroundField');
-    if (field) field.hidden = document.getElementById('chatConfigSkin')?.value !== 'oracle';
-}
-
-async function loadChatConfigOracleBackgrounds(saved) {
-    const select = document.getElementById('chatConfigOracleBackground');
-    if (!select) return;
+async function loadOracleBackgrounds(select, saved) {
+    select.replaceChildren(new Option('Loading backgrounds…', ''));
+    select.disabled = true;
     try {
         const response = await fetch('/api/skins/oracle/files');
         if (!response.ok) throw new Error('Could not load Oracle backgrounds');
@@ -5930,7 +5910,12 @@ async function openChatConfigModal(chatId) {
     stopAllChatVoicePreviews();
     fillAgentAdvanced(null);
     selectChatConfigTab(document.getElementById('chatConfigMainTab'));
-    document.getElementById('chatConfigOracleBackgroundField')?.setAttribute('hidden', '');
+    const skinInput = document.getElementById('chatConfigSkin');
+    const skinGrid = document.getElementById('chatConfigSkinGrid');
+    skinInput.value = '';
+    skinGrid.replaceChildren();
+    const background = document.getElementById('chatConfigOracleBackground');
+    background.parentElement.hidden = true;
     if (chatConfigStatus) chatConfigStatus.textContent = '';
     chatConfigReturnFocus = document.activeElement;
     chatConfigModal.style.display = 'flex';
@@ -5977,17 +5962,17 @@ async function openChatConfigModal(chatId) {
             chatConfigVoiceModel.value = rawVoice;
         }
         updateChatVoiceButtons('chatConfig');
-        const skinSelect = document.getElementById('chatConfigSkin');
-        if (skinSelect) {
-            const skinsResponse = await fetch('/api/skins');
-            if (!skinsResponse.ok) throw new Error('Could not load skins');
-            const skinData = await skinsResponse.json();
-            skinSelect.innerHTML = (skinData.skins || []).map(skin => `<option value="${escapeHtml(skin.folder_name)}">${escapeHtml(skin.name)}</option>`).join('');
-            skinSelect.value = chatData.skin_name || skinData.selected_skin || 'oracle';
-            await loadChatConfigOracleBackgrounds(chatData.oracle_background);
-            updateChatConfigOracleVisibility();
-        }
+        const skinsResponse = await fetch('/api/skins');
+        if (!skinsResponse.ok) throw new Error('Could not load skins');
+        const skinData = await skinsResponse.json();
+        const skins = skinData.skins || [];
+        const selected = chatData.skin_name || skinData.selected_skin || 'oracle';
+        skinInput.value = skins.some(skin => skin.folder_name === selected) ? selected : '';
+        await renderSkinCards(skinGrid, skins, skinInput.value, skin => {
+            skinInput.value = skin;
+        }, background, chatData.oracle_background);
         _chatConfigBaseline = selectedChatConfigValues();
+        if (!background.disabled) _chatConfigBaseline.oracle_background = background.value || null;
         fillAgentAdvanced(chatData);
     } catch (e) {
         console.error('Open chat config failed:', e);
@@ -6267,7 +6252,7 @@ async function persistChatSettingsPatch(body, { fromModal = true } = {}) {
             compact_checkpoint: refreshed.compact_checkpoint
         });
         if (fromModal) hideChatConfigModal();
-        showChatSnackbar('Chat settings saved', 'success');
+        showChatSnackbar('Agent settings saved', 'success');
         await loadChats();
         return refreshed;
     } catch (e) {
@@ -6331,10 +6316,8 @@ async function maybeAutoCompactChat(settings) {
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.detail || data.error || 'Auto-compact failed');
         _lastAutoCompactKey = autoCompactKey;
-        if (currentChatId === chatId) {
+        if (currentChatId === chatId && !isStreaming) {
             await selectChat(chatId);
-            if (loadedChatId === chatId) loadedChatId = chatId;
-            showChatView(loadedChatId === chatId);
         }
         await loadChats();
     } catch (e) {
@@ -6351,23 +6334,18 @@ async function compactCurrentChat(chatId) {
         const response = await fetch(`${API_BASE}/chats/${targetId}/compact`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                provider: currentChatSettings?.provider || '',
-                model_name: currentChatSettings?.model_name || '',
-                reason: 'manual'
-            })
+            body: JSON.stringify({ reason: 'manual' })
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.detail || data.error || 'Compaction failed');
         if (currentChatId === targetId) {
-            await loadChat(targetId);
+            if (!isStreaming) await selectChat(targetId);
             await refreshChatHeaderStats({ checkTitle: true });
         }
         await loadChats();
     } catch (e) {
         console.error('Compact chat failed:', e);
         alert(e.message || 'Could not compact chat.');
-    } finally {
     }
 }
 
@@ -6510,7 +6488,7 @@ let _chatCvRecordLevelRAF = null;
 let _chatCvPlaybackAudio = null;
 const _CHAT_CV_MAX_SECS = 12;
 
-// Show/hide custom voice buttons (modal, empty-state, and Configure Chat forms)
+// Show/hide custom voice buttons (modal, empty-state, and Configure agent forms)
 function updateChatVoiceButtons(context) {
     const providerEl = getChatVoiceProviderEl(context);
     const voiceEl = getChatVoiceModelEl(context);
@@ -7336,7 +7314,7 @@ function fillAgentAdvanced(chatData) {
     if (!box) return;
     const agentId = chatData && chatData.agent_id != null ? Number(chatData.agent_id) : null;
     box.dataset.agentId = agentId == null ? '' : String(agentId);
-    document.getElementById('chatConfigTabs').hidden = agentId == null;
+    document.getElementById('chatConfigAdvancedTab').hidden = agentId == null;
     const del = document.getElementById('chatConfigDeleteAgent');
     del.hidden = agentId == null;
     del.disabled = true;

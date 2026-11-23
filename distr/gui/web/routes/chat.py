@@ -584,15 +584,17 @@ def _effective_context_messages(
         return messages
     try:
         checkpoint_row_id = int(checkpoint.get("chat_row_id") or 0)
+        covered_row_id = int(checkpoint.get("covered_row_id", checkpoint_row_id) or 0)
     except (TypeError, ValueError):
         checkpoint_row_id = 0
+        covered_row_id = 0
     effective = [{"role": "system", "content": str(checkpoint.get("summary") or "")}]
     for msg in messages:
         try:
             row_id = int(msg.get("chat_row_id") or 0)
         except (TypeError, ValueError):
             row_id = 0
-        if row_id and checkpoint_row_id and row_id <= checkpoint_row_id:
+        if row_id and (row_id <= covered_row_id or row_id == checkpoint_row_id):
             continue
         effective.append(msg)
     return effective
@@ -892,6 +894,7 @@ class CreateChatRequest(ChatRequestModel):
     """Request to create a new chat (used by web UI and empty-state / starting form)."""
 
     skin_name: Optional[str] = None
+    oracle_background: Optional[str] = Field(default=None, min_length=1, max_length=255)
     agent_name: Optional[str] = Field(default=None, max_length=80)
     agent_role: str = Field(default="", max_length=4000)
     title: Optional[str] = None
@@ -1619,6 +1622,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             settings = load_settings_from_db()
             try:
                 skin_name = validate_chat_skin(request_data.skin_name or settings.get("selected_oracle") or "oracle")
+                if request_data.oracle_background is not None:
+                    validate_oracle_background(request_data.oracle_background)
             except ValueError as exc:
                 raise HTTPException(422, str(exc))
             # Get provider with fallback priority: request -> conversational settings -> agent settings -> default
@@ -1720,6 +1725,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 autonomy_level=request_data.autonomy_level,
                 agent_name=request_data.agent_name,
                 agent_role=request_data.agent_role,
+                oracle_background=(request_data.oracle_background or "")
+                if "oracle_background" in request_data.model_fields_set else None,
                 activate=request_data.agent_name is None,
             )
 
@@ -2084,12 +2091,25 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     or settings.get("conversational_llm_model")
                     or ""
                 )
-                summary, summary_source = _summarize_chat_with_model(
-                    messages,
-                    provider=provider,
-                    model_name=model_name,
-                    settings=settings,
-                )
+                covered_row_id = max(int(row.id) for row in rows)
+                previous_checkpoint = _chat_additional_context(root.additional_context).get("compact_checkpoint")
+
+            summary, summary_source = await asyncio.to_thread(
+                _summarize_chat_with_model,
+                messages, provider=provider, model_name=model_name, settings=settings,
+            )
+            with get_session() as session:
+                root = session.get(Chat, chat_id)
+                if not root:
+                    raise HTTPException(status_code=404, detail="Chat not found")
+                _reject_development_lifecycle(session, root)
+                context = _chat_additional_context(root.additional_context)
+                if context.get("compact_checkpoint") != previous_checkpoint:
+                    raise HTTPException(status_code=409, detail="This chat was already compacted.")
+                latest_rows = _thread_rows_for_compaction(session, chat_id)
+                covered_rows = [row for row in latest_rows if int(row.id) <= covered_row_id]
+                if _messages_from_rows(covered_rows) != messages:
+                    raise HTTPException(status_code=409, detail="Chat history changed during compaction. Retry to include those changes.")
                 stats = _context_stats(messages, provider, model_name)
                 compact_reason = (request_data.reason or "manual").strip() or "manual"
                 notice = (
@@ -2128,6 +2148,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     "provider": provider,
                     "model_name": model_name,
                     "chat_row_id": int(checkpoint_row.id),
+                    "covered_row_id": covered_row_id,
                     "message_count": stats["message_count"],
                     "estimated_tokens": stats["estimated_tokens"],
                     "context_window": stats["context_window"],
@@ -2135,12 +2156,11 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     "created_at": datetime.utcnow().isoformat(),
                     "reason": compact_reason,
                 }
-                context = _chat_additional_context(root.additional_context)
                 context["compact_checkpoint"] = checkpoint
                 root.additional_context = json.dumps(context, ensure_ascii=False, default=str)
                 root.modified_date = datetime.utcnow()
                 checkpoint_row_id = int(checkpoint_row.id)
-                refreshed_messages = _messages_from_rows(sorted(rows, key=lambda row: row.id)) + [
+                refreshed_messages = _messages_from_rows(sorted(latest_rows, key=lambda row: row.id)) + [
                     {"role": "assistant", "content": notice, "chat_row_id": checkpoint_row_id}
                 ]
                 _maybe_refresh_chat_title(
@@ -2174,9 +2194,10 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             try:
                 from distr.core.signals import signal_manager
 
-                signal_manager.web_load_chat_in_agent_requested.emit(chat_id)
+                signal_manager.web_chat_compacted.emit(chat_id)
+                signal_manager.chat_updated.emit(chat_id)
             except Exception:
-                logger.debug("Compact hot-swap signal failed", exc_info=True)
+                logger.debug("Compact context refresh signal failed", exc_info=True)
             return JSONResponse({"ok": True, "checkpoint": checkpoint})
         except HTTPException:
             raise

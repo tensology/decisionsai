@@ -1989,7 +1989,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
     #  System prompt building                                             #
     # ------------------------------------------------------------------ #
 
-    def _build_system_prompt_template(self, chat_id=None, include_tools_description=True):
+    def _build_system_prompt_template(self, chat_id=None, include_tools_description=True, *, include_live_context=True):
         """Build the formatted system prompt template with folder paths and dropped files.
 
         Caches the result and skips the expensive rebuild when dropped-files
@@ -1998,24 +1998,26 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         from distr.core.settings import get_system_folder_paths
         from distr.core.agent.services.llm.prompt import build_tools_description
 
-        dropped_files_context = self._get_dropped_files_context(chat_id=chat_id)
+        dropped_files_context = ""
         developer_context_text = ""
-        try:
-            from distr.core.developer_context import build_developer_context
-
-            developer_context_text = build_developer_context(chat_id=chat_id).to_sectioned_prompt_text(max_chars=6000)
-        except Exception:
-            logger.warning("Could not build developer workflow context", exc_info=True)
-
         desktop_inject = ""
-        try:
-            from distr.core.desktop_awareness import get_desktop_inject_block
+        if include_live_context:
+            dropped_files_context = self._get_dropped_files_context(chat_id=chat_id)
+            try:
+                from distr.core.developer_context import build_developer_context
 
-            desktop_inject = get_desktop_inject_block(mark_injected=True) or ""
-        except Exception:
-            desktop_inject = ""
+                developer_context_text = build_developer_context(chat_id=chat_id).to_sectioned_prompt_text(max_chars=6000)
+            except Exception:
+                logger.warning("Could not build developer workflow context", exc_info=True)
+            try:
+                from distr.core.desktop_awareness import get_desktop_inject_block
 
-        ctx_hash = hash((dropped_files_context, developer_context_text, desktop_inject, include_tools_description))
+                desktop_inject = get_desktop_inject_block(mark_injected=True) or ""
+            except Exception:
+                pass
+
+        ctx_hash = hash((self._agent_name, include_live_context, dropped_files_context,
+                         developer_context_text, desktop_inject, include_tools_description))
 
         if (hasattr(self, '_cached_template_hash')
                 and self._cached_template_hash == ctx_hash
@@ -2043,13 +2045,15 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             dropped_files_context=dropped_files_context,
         )
 
-        try:
-            from distr.core.agent.services.rag.project import get_active_project_context
-            project_context = get_active_project_context()
-            if project_context:
-                template += f"\n\n{project_context}"
-        except Exception as e:
-            logger.warning("Could not inject project context: %s", e)
+        if include_live_context:
+            try:
+                from distr.core.agent.services.rag.project import get_active_project_context
+
+                project_context = get_active_project_context()
+                if project_context:
+                    template += f"\n\n{project_context}"
+            except Exception as e:
+                logger.warning("Could not inject project context: %s", e)
 
         if developer_context_text:
             template += f"\n\n{developer_context_text}"
@@ -2066,14 +2070,17 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         self._cached_template_hash = ctx_hash
         return template
 
-    def _build_system_message(self, chat_id=None, include_tools_description=True):
+    def _build_system_message(self, chat_id=None, include_tools_description=True, *, include_live_context=True):
         """Build the full system message dict (persona + template)."""
         # Ollama receives tool schemas via the API — skip embedding them in the prompt
         provider = self._get_provider_name().lower() if hasattr(self, '_get_provider_name') else ''
         if provider == 'ollama':
             include_tools_description = False
 
-        template = self._build_system_prompt_template(chat_id=chat_id, include_tools_description=include_tools_description)
+        template = self._build_system_prompt_template(
+            chat_id=chat_id, include_tools_description=include_tools_description,
+            include_live_context=include_live_context,
+        )
         self.default_template = template
 
         # Condense for local models (Ollama) to reduce token count
@@ -2092,18 +2099,19 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             content = (
                 f"{persona}\n\n{owner_block}\n\n{template}" if persona else f"{owner_block}\n\n{template}"
             )
-        try:
-            from distr.core.agent.memory_capture import memory_prompt_block, remembered_entries
+        if include_live_context:
+            try:
+                from distr.core.agent.memory_capture import memory_prompt_block, remembered_entries
 
-            remembered = remembered_entries()
-            memory_block = memory_prompt_block(remembered)
-        except Exception:
-            remembered, memory_block = [], ""
-        if memory_block:
-            content = f"{content}\n\n{memory_block}"
-            if len(remembered) != getattr(self, "_last_memory_entry_count", None):
-                logger.info("Memory in prompt: %d remembered entries", len(remembered))
-                self._last_memory_entry_count = len(remembered)
+                remembered = remembered_entries()
+                memory_block = memory_prompt_block(remembered)
+            except Exception:
+                remembered, memory_block = [], ""
+            if memory_block:
+                content = f"{content}\n\n{memory_block}"
+                if len(remembered) != getattr(self, "_last_memory_entry_count", None):
+                    logger.info("Memory in prompt: %d remembered entries", len(remembered))
+                    self._last_memory_entry_count = len(remembered)
 
         # Append recent tool reflection context so the LLM is aware of prior
         # tool outcomes (failures, loop patterns) when composing its response.
@@ -2211,7 +2219,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             return
 
         self._build_system_prompt_template(
-            chat_id=self.chat_manager.get_current_chat() if self.chat_manager else None
+            chat_id=self.chat_manager.get_current_chat() if self.chat_manager else None,
+            include_live_context=False,
         )
         logger.info(f"LLM agent name updated: '{old_name}' -> '{agent_name}'")
 
@@ -2279,7 +2288,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         self._persona = system_prompt if system_prompt else None
 
         system_msg = self._build_system_message(
-            chat_id=self.chat_manager.get_current_chat() if self.chat_manager else None
+            chat_id=self.chat_manager.get_current_chat() if self.chat_manager else None,
+            include_live_context=False,
         )
         self._messages = [system_msg]
 
@@ -2306,7 +2316,9 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         self._injected_context_notes = None
 
         try:
-            system_prompt = self._build_system_message(chat_id=chat_id)
+            # The command worker also handles microphone presses and releases.
+            # Load history and the checkpoint now, and gather live context on generation.
+            system_prompt = self._build_system_message(chat_id=chat_id, include_live_context=False)
         except Exception as e:
             logger.warning("%s: Failed to rebuild system prompt: %s", self._get_provider_name(), e)
             system_prompt = self._messages[0] if self._messages else {"role": "system", "content": getattr(self, 'default_template', '')}
@@ -2616,6 +2628,9 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         from distr.core.agent.tools.base import fast_tool_matcher
 
         self._pipeline_direction = direction
+        capture = getattr(frame, "metadata", {}).get("ptt_capture")
+        if capture is not None and not capture["valid"]:
+            return
 
         if isinstance(frame, StartFrame):
             await super().process_frame(frame, direction)

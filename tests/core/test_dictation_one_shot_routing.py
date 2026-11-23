@@ -37,14 +37,17 @@ class _DummyLLM(LLMSharedMixin):
         raise AssertionError("empty dictation transcript should not be pushed downstream")
 
 
-def test_empty_dictation_capture_queues_stop_dictation():
+def test_empty_dictation_capture_schedules_a_terminal_frame():
     queue = MagicMock()
     stt = _DummySTT(event_queue=queue)
+    stt._ptt_active = True
     stt._is_dictating = True
+    stt._schedule_empty_ptt_transcription_feedback = MagicMock()
 
-    stt._schedule_dictation_empty_transcription_unblock()
+    stt.set_ptt_active(False)
 
-    queue.put.assert_called_once_with(("stop_dictation", {}), block=False)
+    stt._schedule_empty_ptt_transcription_feedback.assert_called_once_with()
+    queue.put.assert_called_once_with(("stt_capture_stopped", {}), block=False)
 
 
 def test_disabling_last_continuous_mode_clears_stale_audio():
@@ -70,12 +73,30 @@ def test_dictation_hotkey_starts_hold_mode_before_capture():
         "def _cmd_ticket_dictation_hotkey_pressed", 1
     )[0]
     assert '_cmd_set_dictating(session, {"enabled": True})' in block
-    assert '_start_dictation(one_shot=False, output_mode="context")' in block
+    assert '_start_dictation(one_shot=False, output_mode="context", worker_controls_audio=True)' in block
     assert "_one_shot_dictation_armed = True" not in block
     assert "_start_dictation(one_shot=True)" not in block
     assert "for_dictation" in block
     assert block.index("_cmd_set_dictating") < block.index("_cmd_push_to_talk_start")
     assert block.index("_start_dictation") < block.index("_cmd_push_to_talk_start")
+
+
+def test_repress_before_transcript_rearms_dictation_without_echoing_audio_mode():
+    queue = MagicMock()
+    llm = _DummyLLM()
+    llm.event_queue = queue
+    llm._is_dictating = False
+    llm._start_dictation(output_mode="context", worker_controls_audio=True)
+    llm._finish_dictation_after_pending_transcript()
+    assert llm._dictation_release_pending
+
+    llm._start_dictation(output_mode="context", worker_controls_audio=True)
+
+    assert llm._is_dictating and not llm._dictation_release_pending
+    assert not llm._one_shot_dictation_armed
+    assert [call.args[0][0] for call in queue.put.call_args_list] == [
+        "dictation_started", "dictation_stopped", "dictation_started",
+    ]
 
 
 def test_dictation_hotkey_release_stops_without_one_shot_watchdog():
@@ -99,7 +120,7 @@ def test_ticket_dictation_hotkey_keeps_ticket_mode_without_one_shot():
         "def _cmd_dictation_hotkey_released", 1
     )[0]
     assert '_cmd_set_dictating(session, {"enabled": True})' in block
-    assert '_start_dictation(one_shot=False, output_mode="ticket")' in block
+    assert '_start_dictation(one_shot=False, output_mode="ticket", worker_controls_audio=True)' in block
     assert "_one_shot_dictation_armed = True" not in block
     assert "_start_dictation(one_shot=True" not in block
 

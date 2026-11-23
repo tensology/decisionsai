@@ -1222,6 +1222,8 @@ class AgentSession:
         )
 
         from distr.core.openai_s2s import completions_model_for_chat, is_openai_s2s_model
+        previous_config = dict(self.config['llm'])
+        previous_identity = self.agent_name, self.role
         if is_openai_s2s_model(model_name):
             twin = completions_model_for_chat(
                 model_name,
@@ -1281,20 +1283,22 @@ class AgentSession:
                 self.role = self._load_agent_role()
                 self.logger.info("HOT-SWAP LLM: agent name changed to %s", self.agent_name)
 
-        # Disconnect old LLM service's ChatManagerCore event listeners before replacing.
-        if old_service and self.chat_manager:
-            for event_name, method_name in [('chat_deleted', 'on_chat_deleted'),
-                                             ('chat_cleared', 'on_chat_cleared')]:
-                handler = getattr(old_service, method_name, None)
-                if handler:
-                    self.chat_manager.off(event_name, handler)
-
         # Create new service
         try:
             self._create_llm_service_only()
         except Exception as e:
+            self.llm_service = old_service
+            self.config['llm'].clear()
+            self.config['llm'].update(previous_config)
+            self.agent_name, self.role = previous_identity
             self.logger.error("HOT-SWAP LLM: failed to create new service: %s", e, exc_info=True)
             return
+
+        if old_service and self.chat_manager:
+            for event_name in ('current_chat_changed', 'chat_deleted', 'chat_cleared'):
+                handler = getattr(old_service, f'on_{event_name.removeprefix("current_")}', None)
+                if handler:
+                    self.chat_manager.off(event_name, handler)
 
         # Copy preserved pipeline state
         if old_pipeline_direction is not None:

@@ -332,7 +332,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
         self._propagate_telegram_flags()
 
         try:
-            self._refresh_system_prompt_for_generation()
+            await self._refresh_system_prompt_for_generation()
             logger.info("%s: [1] refresh_system_prompt: %.3fs", self.SERVICE_NAME, _time.time() - _t0)
 
             # Fast action detection — bypass LLM for simple commands
@@ -570,11 +570,13 @@ class OpenAICompatibleLLMService(BaseLLMService):
             logger.debug("%s: could not resolve a fallback chat id", self.SERVICE_NAME, exc_info=True)
         return None
 
-    def _refresh_system_prompt_for_generation(self):
+    async def _refresh_system_prompt_for_generation(self):
         """Rebuild the first system message with latest dropped-files context."""
         current_chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
         try:
-            system_msg = self._build_system_message(chat_id=current_chat_id, include_tools_description=False)
+            system_msg = await asyncio.to_thread(
+                self._build_system_message, chat_id=current_chat_id, include_tools_description=False,
+            )
             if self._messages and self._messages[0].get('role') == 'system':
                 self._messages[0] = system_msg
             else:

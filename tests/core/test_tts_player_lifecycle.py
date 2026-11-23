@@ -378,9 +378,8 @@ def test_late_tts_start_after_interrupt_cannot_reopen_player(monkeypatch):
     signals.player_play.emit.assert_not_called()
 
 
-def test_set_dictating_deduplicates_repeated_state():
+def test_set_dictating_relays_requested_state_to_worker():
     app = _App()
-    app._last_set_dictating_enabled = False
     app.sent = []
 
     def send(command, payload):
@@ -392,7 +391,11 @@ def test_set_dictating_deduplicates_repeated_state():
     app._dispatch_agent_event("set_dictating", {"enabled": True})
     app._dispatch_agent_event("set_dictating", {"enabled": True})
 
-    assert app.sent == [("set_dictating", {"enabled": True})]
+    assert app.sent == [
+        ("set_dictating", {"enabled": False}),
+        ("set_dictating", {"enabled": True}),
+        ("set_dictating", {"enabled": True}),
+    ]
 
 
 def test_event_drain_accepts_legacy_dict_events():

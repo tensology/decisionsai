@@ -112,6 +112,7 @@ class OpenAIRealtimeS2SBridge(FrameProcessor):
         self._enabled = bool(enabled)
 
         self._ws = None
+        self._discarded_chat_ws = None
         self._connected = False
         self._listener_task = None
         self._lock = asyncio.Lock()
@@ -199,6 +200,16 @@ class OpenAIRealtimeS2SBridge(FrameProcessor):
                 self._schedule_coro(self._stop_output())
         if was and not self._ptt_active and not self._is_dictating:
             self._schedule_coro(self._commit_and_respond())
+
+    def discard_voice_capture(self):
+        self._ptt_active = False
+        self._buffered_audio_bytes = 0
+        if self._enabled and self._ws is not None:
+            # The old socket can still deliver a transcript after a buffer clear.
+            # Retire it before routing any more audio or events to the new chat.
+            self._discarded_chat_ws = self._ws
+            self._response_waiting_for_transcript = False
+            self._schedule_coro(self._stop_output())
 
     def _schedule_coro(self, coro):
         """Run coroutine on the pipeline loop (PTT commands arrive from another thread)."""
@@ -785,6 +796,8 @@ class OpenAIRealtimeS2SBridge(FrameProcessor):
         ws = self._ws
         try:
             async for raw in ws:
+                if ws is self._discarded_chat_ws:
+                    continue
                 try:
                     event = json.loads(raw)
                 except Exception:
@@ -816,6 +829,8 @@ class OpenAIRealtimeS2SBridge(FrameProcessor):
                 await self.connect()
 
     async def _append_pcm16_16k(self, audio_bytes: bytes):
+        if self._ws is not None and self._ws is self._discarded_chat_ws:
+            await self.disconnect()
         if not self._connected or self._ws is None:
             ok = await self.connect()
             if not ok:
@@ -858,7 +873,7 @@ class OpenAIRealtimeS2SBridge(FrameProcessor):
         await self._stop_output()
 
     async def _commit_and_respond(self):
-        if not self._connected or self._ws is None:
+        if not self._connected or self._ws is None or self._ws is self._discarded_chat_ws:
             return
         if self._buffered_audio_bytes < 4800:
             logger.info(
@@ -903,7 +918,7 @@ class OpenAIRealtimeS2SBridge(FrameProcessor):
         self._response_timeout_task = asyncio.create_task(_fallback())
 
     async def _begin_response_for_transcript(self, transcript: str):
-        if not self._connected or self._ws is None:
+        if not self._connected or self._ws is None or self._ws is self._discarded_chat_ws:
             return
         if not self._response_waiting_for_transcript and not (
             self._is_hands_free and not self._response_active

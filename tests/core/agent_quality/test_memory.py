@@ -27,7 +27,7 @@ def _service(persona="You are Hayley Williams."):
     svc = LLMSharedMixin.__new__(LLMSharedMixin)
     svc._persona = persona
     svc._username = "Paul"
-    svc._build_system_prompt_template = lambda chat_id=None, include_tools_description=True: "BASE TEMPLATE"
+    svc._build_system_prompt_template = lambda **kwargs: "BASE TEMPLATE"
     svc._get_provider_name = lambda: "openrouter"
     svc._injected_context_prompt = lambda chat_id=None: ""
     svc.get_session_reflection = lambda: ""

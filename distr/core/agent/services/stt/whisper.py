@@ -338,7 +338,7 @@ class WhisperSTTService(BaseSTTService):
             and not getattr(self, "_ptt_flush_scheduled", False)
         ):
             self._pending_ptt_process = False
-            await self._process_ptt_buffer_immediate(direction)
+            await self._flush_ptt_capture(direction, self._ptt_capture)
 
         # --- SpeakingStarted / Stopped (delegated to base) ---
         if await self._handle_speaking_started(frame, direction):
@@ -356,7 +356,7 @@ class WhisperSTTService(BaseSTTService):
                     logger.debug("STT: PTT receiving audio (first chunk)")
             elif not self._ptt_active and self._ptt_buffer_accumulator:
                 logger.warning("STT: PTT buffer exists but PTT inactive - processing as fallback")
-                await self._process_ptt_buffer_immediate(direction)
+                await self._flush_ptt_capture(direction, self._ptt_capture)
             elif (self._is_hands_free or self._is_dictating) and self._user_speaking:
                 self._audio_buffer.append(frame.audio)
                 # Check if TTS started playing again while user is still talking.

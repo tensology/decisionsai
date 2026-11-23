@@ -1,7 +1,7 @@
 {# Shared LLM + Voice + Skin blocks for chat welcome screen and New chat modal (single source of truth).
    variant: 'modal' — ids match chat.js modal wiring (llmProvider, modalSkinGrid, …)
             'empty' — ids prefixed emptyState* for the welcome / no-chats screen
-            'chatConfig' — ids for Configure Chat modal on an existing chat #}
+            'chatConfig' — ids for the existing agent configuration dialog #}
 {% macro voice_select_fields(variant) -%}
 {% set modal = (variant == 'modal') %}
 {% set empty = (variant == 'empty') %}
@@ -94,5 +94,14 @@
             {% if include_skin %}<p class="{% if modal %}modal-section-label{% else %}empty-state-section-label{% endif %}">{% if modal %}Avatar{% else %}Skin{% endif %}</p>
             <div id="{% if modal %}modalSkinGrid{% else %}emptyStateSkinGrid{% endif %}" class="empty-state-skin-grid">
                 <!-- Dynamically populated -->
-            </div>{% endif %}
+            </div>
+            {{ oracle_background_field('modalOracleBackground' if modal else 'emptyStateOracleBackground') }}
+            {% endif %}
+{%- endmacro %}
+
+{% macro oracle_background_field(id) -%}
+<div class="form-group chat-config-oracle-background" hidden>
+    <label for="{{ id }}">Oracle background</label>
+    <select id="{{ id }}" class="form-control form-control-select" disabled></select>
+</div>
 {%- endmacro %}

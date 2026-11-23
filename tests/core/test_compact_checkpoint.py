@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import distr.core.db.orchestrator  # noqa: F401
 from distr.core.db import Base, Chat
@@ -102,7 +103,7 @@ def test_build_system_message_includes_compact_checkpoint(monkeypatch):
         def _get_provider_name(self):
             return "OpenAI"
 
-        def _build_system_prompt_template(self, chat_id=None, include_tools_description=True):
+        def _build_system_prompt_template(self, chat_id=None, include_tools_description=True, **kwargs):
             return "BASE PROMPT"
 
     svc = _Svc()
@@ -209,3 +210,49 @@ def test_current_chat_command_forces_history_reload(monkeypatch):
 
     assert chat_manager.calls == [(42, True)]
     assert llm.changed == [42]
+
+
+def test_compaction_refresh_keeps_capture_and_only_reloads_the_active_chat():
+    from distr.core.agent.command_handler import _cmd_refresh_compacted_chat
+
+    manager = SimpleNamespace(
+        get_current_chat=lambda: 7,
+        chat_histories={7: ["old active"], 8: ["old inactive"]},
+    )
+    session = SimpleNamespace(
+        chat_manager=manager, llm_service=Mock(), stt_service=Mock(),
+        ptt_active=True, is_dictating=True,
+    )
+
+    _cmd_refresh_compacted_chat(session, {"chat_id": 8})
+    session.llm_service.on_chat_changed.assert_not_called()
+    _cmd_refresh_compacted_chat(session, {"chat_id": 7})
+
+    assert not manager.chat_histories
+    session.llm_service.on_chat_changed.assert_called_once_with(7)
+    assert session.stt_service.mock_calls == []
+    assert session.ptt_active and session.is_dictating
+
+
+def test_compaction_defers_refresh_until_voice_reply_finishes():
+    from distr.core.agent.command_handler import _cmd_refresh_compacted_chat
+
+    generation = Mock()
+    generation.done.return_value = False
+    session = SimpleNamespace(
+        chat_manager=SimpleNamespace(get_current_chat=lambda: 7, chat_histories={7: ["old"]}),
+        llm_service=Mock(_generation_task=generation),
+        command_queue=Mock(),
+    )
+    params = {"chat_id": 7}
+    _cmd_refresh_compacted_chat(session, params)
+
+    session.llm_service.on_chat_changed.assert_not_called()
+    assert session.chat_manager.chat_histories[7] == ["old"]
+    done_callback = generation.get_loop().call_soon_threadsafe.call_args.args[1]
+    done_callback(generation)
+    session.command_queue.put.assert_called_once_with(('refresh_compacted_chat', params), block=False)
+
+    generation.done.return_value = True
+    _cmd_refresh_compacted_chat(session, params)
+    session.llm_service.on_chat_changed.assert_called_once_with(7)

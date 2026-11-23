@@ -716,6 +716,9 @@ def _cmd_set_speaker_enabled(session, params):
 
 
 def _cmd_stop_dictation(session, params):
+    if getattr(session, '_ptt_for_dictation', False):
+        _cmd_dictation_hotkey_released(session, params)
+        return
     if hasattr(session, 'llm_service') and session.llm_service:
         if hasattr(session.llm_service, '_stop_dictation'):
             session.llm_service._stop_dictation()
@@ -937,9 +940,55 @@ def _cancel_pending_ptt_release(session):
         session._ptt_release_handle = None
 
 
-def _cmd_push_to_talk_start(session, params):
+def _discard_chat_voice_capture(session, previous_chat_id):
+    """Cancel audio belonging to the previous chat before changing the pipeline."""
+    was_capturing = _audio_input_should_be_active(session)
+    llm = session.llm_service
+    had_pending_transcript = llm is not None and (
+        getattr(llm, '_voice_capture_pending', False) or getattr(llm, '_dictation_release_pending', False)
+    )
     _cancel_pending_ptt_release(session)
+    session.ptt_active = False
+    session._ptt_for_dictation = False
+    session.is_dictating = False
+    stt = getattr(session, 'stt_service', None)
+    if stt is not None:
+        stt.discard_voice_capture()
+        stt.set_dictating(False)
+    if llm is not None:
+        llm.set_ptt_active(False)
+        llm._voice_capture_pending = False
+        llm._last_ptt_transcription_text = None
+        llm._stop_dictation()
+        if previous_chat_id and (was_capturing or had_pending_transcript):
+            llm._notify_transcription_progress(previous_chat_id, "", done=True, discard_live_preview=True)
+    tts = getattr(session, 'tts_service', None)
+    if tts is not None and hasattr(tts, 'set_ptt_active'):
+        tts.set_ptt_active(False)
+    s2s = getattr(session, 's2s_service', None)
+    if s2s is not None:
+        s2s.discard_voice_capture()
+        s2s.set_dictating(False)
+    _sync_audio_input_power(session, "chat_switch")
+
+
+def _cmd_push_to_talk_start(session, params):
     for_dictation = bool((params or {}).get("for_dictation"))
+    if getattr(session, 'ptt_active', False):
+        release_pending = getattr(session, '_ptt_release_handle', None) is not None
+        if not release_pending and getattr(session, '_ptt_for_dictation', False) == for_dictation:
+            return
+        stt = getattr(session, 'stt_service', None)
+        if stt is not None:
+            stt.discard_voice_capture()
+    _cancel_pending_ptt_release(session)
+    llm = getattr(session, 'llm_service', None)
+    if not for_dictation and (
+        getattr(session, '_ptt_for_dictation', False) or getattr(llm, '_dictation_release_pending', False) is True
+    ):
+        _cmd_set_dictating(session, {"enabled": False})
+        if llm is not None:
+            llm._stop_dictation()
     session.logger.debug(
         "PTT: Push-to-talk START received (for_dictation=%s)",
         for_dictation,
@@ -1130,7 +1179,7 @@ def _cmd_dictation_hotkey_pressed(session, params):
     # Enable STT dictation flag before capture so short utterances stay in typing mode.
     _cmd_set_dictating(session, {"enabled": True})
     if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, '_start_dictation'):
-        session.llm_service._start_dictation(one_shot=False, output_mode="context")
+        session.llm_service._start_dictation(one_shot=False, output_mode="context", worker_controls_audio=True)
     _cmd_push_to_talk_start(session, dictation_params)
 
 
@@ -1141,27 +1190,16 @@ def _cmd_ticket_dictation_hotkey_pressed(session, params):
     dictation_params["for_dictation"] = True
     _cmd_set_dictating(session, {"enabled": True})
     if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, '_start_dictation'):
-        session.llm_service._start_dictation(one_shot=False, output_mode="ticket")
+        session.llm_service._start_dictation(one_shot=False, output_mode="ticket", worker_controls_audio=True)
     _cmd_push_to_talk_start(session, dictation_params)
 
 
 def _cmd_dictation_hotkey_released(session, params):
     """End hold-to-dictate capture using the actual hotkey release state."""
     session.logger.debug("Dictation hotkey: released")
-    _cmd_push_to_talk_stop(session, params)
-    # Stop continuous mic capture immediately in the worker. The buffered PTT
-    # flush has already been scheduled by set_ptt_active(False), and the LLM's
-    # release-pending state keeps that one transcript routed as dictation. Do
-    # not wait for the GUI event_queue round trip to clear these flags: if that
-    # event is delayed or deduplicated, STT otherwise keeps transcribing room
-    # audio while the UI correctly appears to be out of hands-free mode.
-    session.is_dictating = False
-    stt = getattr(session, 'stt_service', None)
-    if stt and hasattr(stt, 'set_dictating'):
-        stt.set_dictating(False)
-    s2s = getattr(session, 's2s_service', None)
-    if s2s and hasattr(s2s, 'set_dictating'):
-        s2s.set_dictating(False)
+    if getattr(session, '_ptt_for_dictation', None) is False:
+        return
+    # Reserve the dictation result before scheduling a flush, even for empty audio.
     try:
         llm = getattr(session, 'llm_service', None)
         if llm and hasattr(llm, '_finish_dictation_after_pending_transcript'):
@@ -1170,6 +1208,15 @@ def _cmd_dictation_hotkey_released(session, params):
             llm._stop_dictation()
     except Exception as exc:
         session.logger.debug("Dictation hotkey release cleanup failed: %s", exc)
+    _cmd_push_to_talk_stop(session, params)
+    # The worker owns mic shutdown. A GUI round trip can arrive late or be deduplicated.
+    session.is_dictating = False
+    stt = getattr(session, 'stt_service', None)
+    if stt and hasattr(stt, 'set_dictating'):
+        stt.set_dictating(False)
+    s2s = getattr(session, 's2s_service', None)
+    if s2s and hasattr(s2s, 'set_dictating'):
+        s2s.set_dictating(False)
 
 
 
@@ -1718,6 +1765,28 @@ def _cmd_files_dropped(session, params):
         session.logger.warning(f"LLM service ({type(session.llm_service).__name__}) does not have _on_files_indexed method")
 
 
+def _cmd_refresh_compacted_chat(session, params):
+    """Refresh a checkpoint without activating its chat or changing audio modes."""
+    manager = session.chat_manager
+    chat_id = params.get('chat_id')
+    if not manager or not chat_id:
+        return
+    llm = session.llm_service if manager.get_current_chat() == chat_id else None
+    generation = getattr(llm, '_generation_task', None)
+    queue = getattr(session, 'command_queue', None)
+    if generation is not None and not generation.done() and queue is not None:
+        # A voice turn may have started while the summarizer was running.
+        # Refresh after it finishes so the checkpoint cannot cancel the reply.
+        generation.get_loop().call_soon_threadsafe(
+            generation.add_done_callback,
+            lambda _: queue.put(('refresh_compacted_chat', params), block=False),
+        )
+        return
+    manager.chat_histories.pop(chat_id, None)
+    if llm is not None:
+        llm.on_chat_changed(chat_id)
+
+
 def _cmd_current_chat_changed(session, params):
     """Switch the agent to a different chat.
 
@@ -1752,6 +1821,8 @@ def _cmd_current_chat_changed(session, params):
     try:
         with get_session() as db:
             chat = db.get(Chat, chat_id)
+            if chat is None:
+                return
             settings_row = db.query(SettingsModel).first()
 
             if chat:
@@ -1908,6 +1979,10 @@ def _cmd_current_chat_changed(session, params):
     # ---------------------------------------------------------------
     # 5. Swap LLM if needed
     # ---------------------------------------------------------------
+    manager = session.chat_manager
+    previous_chat_id = manager.get_current_chat() if callable(getattr(manager, 'get_current_chat', None)) else None
+    if previous_chat_id != chat_id and (previous_chat_id is not None or getattr(session, 'ptt_active', False)):
+        _discard_chat_voice_capture(session, previous_chat_id)
     if need_llm_swap:
         session._hot_swap_llm_service(provider, raw_model, chat_id,
                                        voice_provider=chat_voice_provider,
@@ -2042,4 +2117,5 @@ _COMMAND_MAP = {
     'transcribe_file': _cmd_transcribe_file,
     'files_dropped': _cmd_files_dropped,
     'current_chat_changed': _cmd_current_chat_changed,
+    'refresh_compacted_chat': _cmd_refresh_compacted_chat,
 }

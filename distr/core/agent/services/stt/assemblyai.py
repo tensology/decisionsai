@@ -456,7 +456,7 @@ class AssemblyAISTTService(BaseSTTService):
             and not getattr(self, "_ptt_flush_scheduled", False)
         ):
             self._pending_ptt_process = False
-            await self._process_ptt_buffer_immediate(direction)
+            await self._flush_ptt_capture(direction, self._ptt_capture)
         
         # Process pending streaming transcripts
         if (self._is_hands_free or self._is_dictating) and self._pending_transcripts:
@@ -504,7 +504,7 @@ class AssemblyAISTTService(BaseSTTService):
                     logger.debug(f"STT: PTT buffer: {len(self._ptt_buffer_accumulator)} chunks, ~{duration_ms:.0f}ms")
             elif not self._ptt_active and self._ptt_buffer_accumulator:
                 # PTT just released
-                await self._process_ptt_buffer_immediate(direction)
+                await self._flush_ptt_capture(direction, self._ptt_capture)
             elif (self._is_hands_free or self._is_dictating) and self._user_speaking:
                 # Hands-free mode: stream to v3 API or buffer for batch
                 self._audio_buffer.append(frame.audio)

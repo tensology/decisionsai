@@ -151,7 +151,7 @@ def test_oracle_background_is_saved_per_agent_and_survives_skin_changes(primary_
 
 
 def test_chat_config_background_updates_only_its_appearance_owner(primary_app):
-    from distr.core.db import Chat
+    from distr.core.db import Chat, Settings
 
     client, sessions, _, _, first, second = primary_app
     first_background = client.get(f'/api/chats/{first}').json()['oracle_background']
@@ -177,6 +177,46 @@ def test_chat_config_background_updates_only_its_appearance_owner(primary_app):
         legacy_id = legacy.id
     assert client.patch(f'/api/chats/{legacy_id}', json={'oracle_background': '2.webm'}).status_code == 200
     assert client.get(f'/api/chats/{legacy_id}').json()['oracle_background'] == '2.webm'
+
+    with sessions() as session:
+        session.query(Settings).one().default_oracle_background = '1.webm'
+    creation = {'agent_name': 'New Oracle', 'skin_name': 'oracle'}
+    assert client.post('/api/chats', json={**creation, 'oracle_background': '../2.webm'}).status_code == 422
+    for options, expected in (({}, '1.webm'), ({'oracle_background': None}, None),
+                              ({'oracle_background': '2.webm'}, '2.webm')):
+        created = client.post('/api/chats', json={**creation, **options})
+        assert created.status_code == 200
+        assert client.get(f"/api/chats/{created.json()['id']}").json()['oracle_background'] == expected
+
+    thread = client.post('/api/chats', json={'skin_name': 'oracle', 'oracle_background': '2.webm'})
+    assert thread.status_code == 200
+    assert client.get(f"/api/chats/{thread.json()['id']}").json()['oracle_background'] == '2.webm'
+
+
+def test_compacting_viewed_chat_keeps_runtime_active_and_preserves_new_voice_turn(primary_app, monkeypatch):
+    from distr.core.chat import ChatService
+    from distr.gui.web.routes import chat as routes
+
+    client, _, _, signals, first, second = primary_app
+    ChatService.add_user_message(second, "Earlier context")
+
+    def summarize(messages, **kwargs):
+        assert messages[-1]["content"] == "Earlier context"
+        ChatService.add_user_message(second, "Voice turn recorded during compaction")
+        return "Earlier context summarized.", "test"
+
+    monkeypatch.setattr(routes, "_summarize_chat_with_model", summarize)
+    monkeypatch.setattr(routes, "_maybe_refresh_chat_title", lambda *args, **kwargs: None)
+    monkeypatch.setattr("distr.core.orchestrator.emit_event", lambda **kwargs: None)
+    result = client.post(f"/api/chats/{second}/compact", json={})
+
+    assert result.status_code == 200
+    assert client.get("/api/chats").json()["agent_current_chat_id"] == first
+    signals.web_load_chat_in_agent_requested.emit.assert_not_called()
+    signals.web_chat_compacted.emit.assert_called_once_with(second)
+    history = ChatService.get_chat_history(second)
+    assert history[-1] == {"role": "user", "content": "Voice turn recorded during compaction"}
+    assert len(history) == 2
 
 
 @pytest.mark.parametrize('width', [390,768,1280,1440])

@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% from 'chat/partials/configure_chat_fields.html' import configure_chat_fields, voice_select_fields %}
+{% from 'chat/partials/configure_chat_fields.html' import configure_chat_fields, voice_select_fields, oracle_background_field %}
 
 {% block title %}Chat{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-20261123-create-agent-tabs">
+<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-20261123-agent-oracle-preview">
 <link rel="stylesheet" href="/static/shared/css/mermaid_viewer.css?v=20261028-responsive">
 {% endblock %}
 
@@ -73,7 +73,7 @@
                         <span class="chat-header-usage__text" id="voiceUsageText">—</span>
                     </div>
                     <div class="chat-header-actions">
-                        <button type="button" class="header-icon-btn chat-header-tooltip" id="configureChatButton" aria-label="Configure chat" data-tooltip="Configure chat">
+                        <button type="button" class="header-icon-btn chat-header-tooltip" id="configureChatButton" aria-label="Configure agent" data-tooltip="Configure agent">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                         </button>
                         <button type="button" class="header-icon-btn chat-header-tooltip" id="chatMoreButton" aria-label="Chat actions" data-tooltip="Chat actions" aria-haspopup="menu" aria-controls="chatContextMenu" aria-expanded="false">
@@ -89,11 +89,10 @@
             <!-- Empty State: same configure fields as New chat modal (shared partial); sidebar opens the modal for parity -->
             <div class="empty-state" id="emptyState">
                 <div class="empty-state-content" id="emptyStateSetup">
-                    <p class="empty-state-kicker">Chat</p>
-                    <h2 class="empty-state-setup-title">Chat settings</h2>
+                    <h2 class="empty-state-setup-title">Configure agent</h2>
                     <div id="emptyStateLoader" class="empty-state-loader">
                         <svg class="empty-state-loader-spin" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.2"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
-                        <p class="empty-state-loader-text">Loading chat settings...</p>
+                        <p class="empty-state-loader-text">Loading agent settings...</p>
                     </div>
                     <div class="empty-state-form" id="emptyStateForm" style="display:none;">
                         {{ configure_chat_fields('empty') }}
@@ -212,7 +211,7 @@
     <button type="button" role="menuitem" tabindex="-1" class="chat-context-menu-item flex items-center gap-2" data-action="view"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>View</button>
     <button type="button" role="menuitem" tabindex="-1" class="chat-context-menu-item flex items-center gap-2" data-action="load"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>Load</button>
     <hr class="chat-context-menu-separator" role="separator">
-    <button type="button" role="menuitem" tabindex="-1" class="chat-context-menu-item flex items-center gap-2" data-action="configure"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Configure</button>
+    <button type="button" role="menuitem" tabindex="-1" class="chat-context-menu-item flex items-center gap-2" data-action="configure"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Configure agent</button>
     <button type="button" role="menuitem" tabindex="-1" class="chat-context-menu-item flex items-center gap-2" data-action="compact"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 14h6v6M20 10h-6V4M14 10l6-6M10 14l-6 6"/></svg>Compact</button>
     <button type="button" role="menuitem" tabindex="-1" class="chat-context-menu-item flex items-center gap-2" data-action="fork"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path stroke-width="2" d="M6 3v12"/><circle cx="6" cy="18" r="3"/><path stroke-width="2" d="M18 6v3"/><circle cx="18" cy="6" r="3"/><path stroke-width="2" d="M18 9a9 9 0 0 1-9 9"/></svg>Fork</button>
     <hr class="chat-context-menu-separator" role="separator">
@@ -225,15 +224,17 @@
 <div class="modal" id="chatConfigModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="chatConfigTitle">
     <div class="modal-content chat-config-modal-content">
         <div class="modal-header">
-            <h2 id="chatConfigTitle">Configure Chat</h2>
+            <h2 id="chatConfigTitle">Configure agent</h2>
             <button type="button" class="modal-close" id="chatConfigClose" aria-label="Close">&times;</button>
         </div>
-        <div class="chat-config-tabs" id="chatConfigTabs" role="tablist" aria-label="Chat configuration" hidden>
+        <div class="chat-config-tabs" role="tablist" aria-label="Agent configuration">
             <button type="button" id="chatConfigMainTab" role="tab" aria-selected="true" aria-controls="chatConfigMain">Main</button>
-            <button type="button" id="chatConfigAdvancedTab" role="tab" aria-selected="false" aria-controls="chatConfigAgent" tabindex="-1">Advanced</button>
+            <button type="button" id="chatConfigSkinTab" role="tab" aria-selected="false" aria-controls="chatConfigSkinPanel" tabindex="-1">Skin</button>
+            <button type="button" id="chatConfigAdvancedTab" role="tab" aria-selected="false" aria-controls="chatConfigAgent" tabindex="-1" hidden>Advanced</button>
         </div>
         <div class="modal-body">
             <div id="chatConfigMain" role="tabpanel" aria-labelledby="chatConfigMainTab">
+                {{ voice_select_fields('chatConfig') }}
                 <p class="modal-section-label">LLM</p>
                 <div class="modal-row">
                     <div class="form-group">
@@ -245,17 +246,13 @@
                         <select id="chatConfigLlmModel" class="form-control form-control-select chat-config-select"><option value="">Loading...</option></select>
                     </div>
                 </div>
-                {{ voice_select_fields('chatConfig') }}
-                <div class="modal-row chat-config-appearance">
-                    <div class="form-group">
-                        <label for="chatConfigSkin">Skin</label>
-                        <select id="chatConfigSkin" class="form-control form-control-select chat-config-select"></select>
-                    </div>
-                    <div class="form-group" id="chatConfigOracleBackgroundField" hidden>
-                        <label for="chatConfigOracleBackground">Oracle background</label>
-                        <select id="chatConfigOracleBackground" class="form-control form-control-select chat-config-select" disabled></select>
-                    </div>
+            </div>
+            <div class="chat-config-skin-panel" id="chatConfigSkinPanel" role="tabpanel" aria-labelledby="chatConfigSkinTab" hidden>
+                <input type="hidden" id="chatConfigSkin">
+                <div class="chat-config-skin-scroll">
+                    <div id="chatConfigSkinGrid" class="empty-state-skin-grid"></div>
                 </div>
+                {{ oracle_background_field('chatConfigOracleBackground') }}
             </div>
             <div class="chat-config-agent-panel" id="chatConfigAgent" role="tabpanel" aria-labelledby="chatConfigAdvancedTab" hidden>
                 <div class="form-group">
@@ -283,13 +280,13 @@
 <div class="modal" id="newChatModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="createAgentTitle">
     <div class="modal-content chat-config-modal-content create-agent-modal">
         <div class="modal-header">
-            <h2 id="createAgentTitle">Create agent</h2>
-            <button type="button" class="modal-close" id="modalClose" aria-label="Close create agent">&times;</button>
+            <h2 id="createAgentTitle">Configure agent</h2>
+            <button type="button" class="modal-close" id="modalClose" aria-label="Close">&times;</button>
         </div>
         <div class="chat-config-tabs" id="createAgentTabs" role="tablist" aria-label="Agent configuration">
             <button type="button" id="createAgentMainTab" role="tab" aria-selected="true" aria-controls="createAgentMain">Main</button>
-            <button type="button" id="createAgentAdvancedTab" role="tab" aria-selected="false" aria-controls="createAgentAdvanced" tabindex="-1">Advanced</button>
             <button type="button" id="createAgentSkinTab" role="tab" aria-selected="false" aria-controls="createAgentSkin" tabindex="-1">Skin</button>
+            <button type="button" id="createAgentAdvancedTab" role="tab" aria-selected="false" aria-controls="createAgentAdvanced" tabindex="-1">Advanced</button>
         </div>
         <div class="modal-body">
             <!-- Modal loader -->
@@ -312,8 +309,11 @@
                         <textarea id="agentRole" class="form-control form-control-textarea" rows="3" maxlength="4000"></textarea>
                     </div>
                 </div>
-                <div id="createAgentSkin" role="tabpanel" aria-labelledby="createAgentSkinTab" hidden>
-                    <div id="modalSkinGrid" class="empty-state-skin-grid"></div>
+                <div class="chat-config-skin-panel" id="createAgentSkin" role="tabpanel" aria-labelledby="createAgentSkinTab" hidden>
+                    <div class="chat-config-skin-scroll">
+                        <div id="modalSkinGrid" class="empty-state-skin-grid"></div>
+                    </div>
+                    {{ oracle_background_field('modalOracleBackground') }}
                 </div>
             </fieldset><!-- /modalFormContent -->
             <p id="createAgentError" class="create-agent-error" role="alert" hidden></p>

@@ -128,6 +128,7 @@ class SignalManager(QObject):
     web_send_to_agent_requested = pyqtSignal(int, str, bool, object, object, object)
     web_create_chat_emits_requested = pyqtSignal(int, str, bool, object, object, object, object)
     web_load_chat_in_agent_requested = pyqtSignal(int)
+    web_chat_compacted = pyqtSignal(int)
     web_load_chat_and_process_requested = pyqtSignal(int, str, bool, bool)
 
     # EULA

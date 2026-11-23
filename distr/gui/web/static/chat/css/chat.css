@@ -518,20 +518,11 @@
     box-sizing: border-box;
 }
 
-.empty-state-kicker {
-    color: #f97316;
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    margin: 0 0 0.35rem;
-}
-
 .empty-state-setup-title {
     font-size: 22px;
     font-weight: 600;
     color: rgba(255, 255, 255, 0.95);
-    margin-bottom: 16px;
+    margin-bottom: 28px;
 }
 
 .empty-state-form {
@@ -2750,12 +2741,14 @@
 }
 
 @media (min-width: 760px) {
-    :is(#chatConfigMain, #createAgentMain) > .modal-row > .form-group {
+    :is(#chatConfigMain, #createAgentMain) > .modal-row > .form-group,
+    #emptyStateForm > .empty-state-row > .form-group {
         flex: 3;
         min-width: 0;
     }
 
-    :is(#chatConfigMain, #createAgentMain) > .modal-row > .form-group + .form-group {
+    :is(#chatConfigMain, #createAgentMain) > .modal-row > .form-group + .form-group,
+    #emptyStateForm > .empty-state-row > .form-group + .form-group {
         flex: 7;
     }
 }
@@ -3030,14 +3023,8 @@
     .header-icon-btn, .context-ring, .modal-close, .modal .btn { min-width: 44px; min-height: 44px; }
     .modal-row { flex-direction: column; }
     .modal-row .form-group { width: 100%; }
-    .chat-config-appearance { flex-direction: row; gap: 8px; }
-    .chat-config-appearance .form-group { min-width: 0; }
-    .chat-config-appearance .form-group + .form-group { flex: 1.5; }
-    .chat-config-appearance .form-control-select { padding-right: 28px; background-position: right 6px center; }
 }
 @media (max-width: 359px) {
-    .chat-config-appearance .form-group + .form-group { flex: 1.8; }
-    .chat-config-appearance .form-control-select { padding-inline: 8px 24px; background-position: right 4px center; }
     #chatConfigModal .modal-footer { padding-inline: 16px; gap: 6px; }
     #chatConfigModal .modal-footer-actions { gap: 6px; }
     #chatConfigModal .modal-footer .btn { padding-inline: 10px; }
@@ -3048,15 +3035,15 @@
 .agent-modal-open { overflow: hidden; }
 .create-agent-modal fieldset { display: flex; flex: 1 0 auto; flex-direction: column; border: 0; padding: 0; margin: 0; min-width: 0; }
 .create-agent-modal .empty-state-kilo-wrap, .create-agent-modal .empty-state-key-hint-wrap { display: none !important; }
-.create-agent-modal .empty-state-skin-card { color: inherit; font: inherit; transition: border-color 0.2s; }
-.create-agent-modal .empty-state-skin-card:hover { transform: none; box-shadow: none; }
-.create-agent-modal .empty-state-skin-name { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+:is(.chat-config-modal-content, #emptyStateSkinGrid) .empty-state-skin-card { color: inherit; font: inherit; transition: border-color 0.2s; }
+:is(.chat-config-modal-content, #emptyStateSkinGrid) .empty-state-skin-card:hover { transform: none; box-shadow: none; }
+:is(.chat-config-modal-content, #emptyStateSkinGrid) .empty-state-skin-name { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 .create-agent-error { color: #fca5a5; margin: 12px 0 0; font-size: 14px; }
 .create-agent-modal input:focus-visible, .create-agent-modal textarea:focus-visible,
 .new-chat-btn:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
 @media (max-width: 759px) {
-    .create-agent-modal .voice-select-row { flex-wrap: wrap; }
-    .create-agent-modal .voice-select-row .form-control-select { flex: 0 0 100%; }
+    :is(.chat-config-modal-content, #emptyStateForm) .voice-select-row { flex-wrap: wrap; }
+    :is(.chat-config-modal-content, #emptyStateForm) .voice-select-row .form-control-select { flex: 0 0 100%; }
 }
 
 /* One primary identity above the conversation roster. */
@@ -3182,6 +3169,38 @@ body.group-mode #emptyState, body.group-mode #ttsPlayerCard { display: none !imp
 .chat-config-agent-scope textarea {
     flex: 1 0 auto;
     resize: none;
+}
+.chat-config-modal-content .modal-body:has(.chat-config-skin-panel:not([hidden])) {
+    padding-block: 12px;
+}
+.create-agent-modal fieldset:has(.chat-config-skin-panel:not([hidden])) {
+    flex: 1;
+    min-height: 0;
+}
+.chat-config-skin-panel:not([hidden]) {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+    gap: 8px;
+}
+.chat-config-skin-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+.chat-config-oracle-background {
+    flex: none;
+    margin: 0;
+    padding: 8px 12px;
+    text-align: center;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 8px;
+}
+.chat-config-oracle-background select {
+    max-width: 320px;
 }
 .chat-config-modal-content .modal-footer {
     position: sticky;

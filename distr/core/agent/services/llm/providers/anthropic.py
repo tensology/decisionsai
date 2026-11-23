@@ -6,7 +6,6 @@ Thin provider layer on top of BaseLLMService.
 Only contains:
 - convert_tools_to_anthropic_format (module-level helper)
 - __init__ (Anthropic client setup — delegates to BaseLLMService)
-- _setup_system_prompt (Anthropic uses system as a string, not a message)
 - _generate_response (Anthropic streaming + tool use)
 - _format_vision_message (Anthropic image format)
 - _generate_welcome_summary (Anthropic-specific API call)
@@ -15,14 +14,10 @@ Only contains:
 import asyncio
 import json
 import logging
-import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 from distr.core.agent.libs import (
     TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame,
-)
-from distr.core.agent.services.llm.prompt import (
-    load_system_prompt_template, build_tools_description,
 )
 from distr.core.agent.services.llm.tool_execution_policy import (
     remember_successful_tool_call,
@@ -74,9 +69,7 @@ class AnthropicLLMService(BaseLLMService):
     """Anthropic Claude LLM service using Pipecat.
 
     Inherits common init, tool loading, signal wiring, and generation state
-    from BaseLLMService.  Only overrides _setup_system_prompt (Anthropic uses
-    system as a string, not a message), _generate_response (Anthropic streaming
-    API), and provider-specific helpers.
+    from BaseLLMService. Sends the shared system prompt as an Anthropic API parameter.
     """
 
     SERVICE_NAME = "AnthropicLLMService"
@@ -103,97 +96,6 @@ class AnthropicLLMService(BaseLLMService):
     # ------------------------------------------------------------------
     #  Anthropic-specific overrides
     # ------------------------------------------------------------------
-
-    def _setup_system_prompt(self, system_prompt: Optional[str] = None):
-        """Setup system prompt. Anthropic uses system as a string parameter, not a message."""
-        template = load_system_prompt_template(
-            model_name=self._model_name,
-            provider_name="anthropic",
-        )
-        template = template.replace("{username}", self._username)
-        template = template.replace("{agent_name}", self._agent_name)
-        template = template.replace("{model_name}", self._model_name)
-
-        if self._tools:
-            template = template.replace("{tools_description}", build_tools_description(self._tools))
-        else:
-            template = template.replace("{tools_description}", "No tools available.")
-
-        current_chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
-        template = template.replace("{dropped_files_context}", self._get_dropped_files_context(chat_id=current_chat_id))
-
-        # Also fill in folder paths to avoid KeyError on {desktop_path} etc.
-        try:
-            from distr.core.settings import get_system_folder_paths
-            folder_paths = get_system_folder_paths()
-            home_path = os.path.expanduser("~")
-            template = template.format(
-                agent_name=self._agent_name, username=self._username,
-                tools_description=build_tools_description(self._tools) if self._tools else "No tools available.",
-                model_name=self._model_name,
-                desktop_path=folder_paths.get("Desktop", os.path.join(home_path, "Desktop")),
-                documents_path=folder_paths.get("Documents", os.path.join(home_path, "Documents")),
-                downloads_path=folder_paths.get("Downloads", os.path.join(home_path, "Downloads")),
-                pictures_path=folder_paths.get("Pictures", os.path.join(home_path, "Pictures")),
-                music_path=folder_paths.get("Music", os.path.join(home_path, "Music")),
-                videos_path=folder_paths.get("Videos", os.path.join(home_path, "Videos")),
-                home_path=home_path,
-                dropped_files_context=self._get_dropped_files_context(chat_id=current_chat_id),
-            )
-        except Exception:
-            pass  # Template may already be resolved from .replace() calls above
-
-        try:
-            from distr.core.developer_context import build_developer_context
-
-            developer_context_text = build_developer_context(chat_id=current_chat_id).to_prompt_text(max_chars=2200)
-            if developer_context_text:
-                template += f"\n\n{developer_context_text}"
-        except Exception:
-            logger.warning("Could not build developer workflow context", exc_info=True)
-
-        try:
-            from distr.core.desktop_awareness import get_desktop_inject_block
-
-            desktop_inject = get_desktop_inject_block(mark_injected=True) or ""
-            if desktop_inject:
-                template += (
-                    "\n\nAmbient desktop (cached accessibility summary; may be seconds old; "
-                    "not a live feed). For targeting use get_window_tree / find_element / "
-                    "get_desktop_snapshot:\n"
-                    f"{desktop_inject}"
-                )
-        except Exception:
-            pass
-
-        self.default_template = template
-        self._persona = system_prompt if system_prompt else None
-        self._system_prompt = f"{system_prompt}\n\n{template}" if system_prompt else template
-
-        # Also set _default_template_raw for shared mixin compatibility
-        self._default_template_raw = load_system_prompt_template(
-            model_name=self._model_name,
-            provider_name="anthropic",
-        )
-
-        # Initialize _messages with chat history if available
-        # (Anthropic uses system as a separate param, not a message, but we still
-        # need a system message at index 0 for the shared mixin's on_chat_changed)
-        system_msg = {"role": "system", "content": self._system_prompt}
-        self._messages = [system_msg]
-
-        # Load existing chat history
-        if self.chat_manager:
-            current_chat_id = self.chat_manager.get_current_chat()
-            if current_chat_id:
-                try:
-                    history = self.chat_manager.get_chat_history(current_chat_id)
-                    non_system = [msg for msg in history if msg.get('role') != 'system']
-                    if non_system:
-                        self._messages = [system_msg] + non_system
-                        logger.info("Anthropic: loaded %d messages from chat %s", len(non_system), current_chat_id)
-                except Exception as e:
-                    logger.warning("Anthropic: failed to load chat history: %s", e)
 
     def _format_vision_message(self, text: str, base64_image: str, mime_type: str):
         """Anthropic vision format."""
@@ -256,6 +158,9 @@ class AnthropicLLMService(BaseLLMService):
                             self.event_queue.put(('chat_stream_finished', {'chat_id': cid, 'response_text': ''}), block=False)
                     return
 
+            chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+            system_message = await asyncio.to_thread(self._build_system_message, chat_id=chat_id)
+
             # Build Anthropic messages (system is separate)
             anthropic_messages = self._build_anthropic_messages()
 
@@ -276,7 +181,7 @@ class AnthropicLLMService(BaseLLMService):
 
                 create_kwargs = dict(
                     model=self._model_name, max_tokens=4096,
-                    system=self._system_prompt, messages=anthropic_messages,
+                    system=system_message["content"], messages=anthropic_messages,
                     stream=True,
                 )
                 if anthropic_tools:

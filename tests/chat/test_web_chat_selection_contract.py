@@ -222,13 +222,13 @@ def test_chat_message_rows_do_not_flex_shrink_into_footer_lines():
     assert "appendChild(panel)" not in insert_block
 
 
-def test_chat_loading_copy_is_chat_focused_not_agent_setup():
+def test_chat_loading_copy_distinguishes_agent_configuration_from_starting_a_chat():
     html = _chat_html_source()
     js = _chat_js_source()
     combined = html + js
 
-    assert "Chat settings" in html
-    assert "Loading chat settings..." in html
+    assert "Configure agent" in html
+    assert "Loading agent settings..." in html
     assert "Starting chat..." in combined
     assert "Setup your Agent" not in combined
     assert "Agent is Loading" not in combined
@@ -253,7 +253,7 @@ def test_header_icon_buttons_have_visible_tooltip_contract():
     for control_id, label in [
         ("chatMoreButton", "Chat actions"),
         ("contextRing", "Estimated context used"),
-        ("configureChatButton", "Configure chat"),
+        ("configureChatButton", "Configure agent"),
     ]:
         assert f'id="{control_id}"' in html
         assert f'aria-label="{label}"' in html

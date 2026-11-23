@@ -44,6 +44,9 @@ def test_create_agent_dialog_persistence_and_failure_recovery(width, tmp_path, m
         if path == "/api/skins":
             route.fulfill(json={"selected_skin": "oracle", "skins": [{"folder_name": skin, "name": skin.title(), "preview_image": "idle.webp"} for skin in ("oracle", "hayley", "rusty", "clippy", "masko", "nugget", "patate")]})
             return
+        if path == "/api/skins/oracle/files":
+            route.fulfill(json={"files": ["1.webm", "2.webm"]})
+            return
         if "/preview/" in path:
             route.fulfill(path=str(ROOT / "assets/avatars/hayley/idle.webp"), content_type="image/webp")
             return
@@ -83,7 +86,7 @@ def test_create_agent_dialog_persistence_and_failure_recovery(width, tmp_path, m
     plus = page.get_by_role("button", name="New agent", exact=True)
     assert plus.inner_text().strip() == ""
     plus.click()
-    dialog = page.get_by_role("dialog", name="Create agent", exact=True)
+    dialog = page.get_by_role("dialog", name="Configure agent", exact=True)
     voice = page.locator('#voiceProvider')
     voice.wait_for(state="visible")
     page.evaluate('''async () => {
@@ -103,7 +106,7 @@ def test_create_agent_dialog_persistence_and_failure_recovery(width, tmp_path, m
     assert not name.is_visible()
     main, advanced, skin = (dialog.get_by_role("tab", name=title, exact=True)
                             for title in ("Main", "Advanced", "Skin"))
-    assert dialog.get_by_role("tab").all_text_contents() == ["Main", "Advanced", "Skin"]
+    assert dialog.get_by_role("tab").all_text_contents() == ["Main", "Skin", "Advanced"]
     expect(main).to_have_attribute("aria-selected", "true")
     modal = dialog.locator(".modal-content")
     footer = dialog.locator(".modal-footer")
@@ -114,7 +117,7 @@ def test_create_agent_dialog_persistence_and_failure_recovery(width, tmp_path, m
             left, right = (field.bounding_box()["width"] for field in row.locator(".form-group").all())
             assert left / (left + right) == pytest.approx(0.3, abs=0.005)
     main.focus()
-    main.press("ArrowRight")
+    main.press("End")
     expect(advanced).to_be_focused()
     expect(name).to_be_visible()
     assert (modal.bounding_box(), footer.bounding_box()) == bounds
@@ -123,7 +126,7 @@ def test_create_agent_dialog_persistence_and_failure_recovery(width, tmp_path, m
     scope.fill("Review support tickets")
     assert scope.bounding_box()["height"] > 100
     page.screenshot(path=str(evidence / f"create-agent-advanced-{width}.png"))
-    advanced.press("ArrowRight")
+    advanced.press("ArrowLeft")
     expect(skin).to_be_focused()
     grid = page.locator('#modalSkinGrid')
     expect(grid).to_be_visible()
@@ -153,9 +156,15 @@ def test_create_agent_dialog_persistence_and_failure_recovery(width, tmp_path, m
     name.wait_for(state="visible")
     assert name.input_value() == f"Agent {width}"
     skin.click()
-    page.locator('#modalSkinGrid [data-folder="hayley"]').click()
+    oracle = grid.get_by_role("button", name="Oracle")
+    oracle.click()
+    background = dialog.get_by_label("Oracle background")
+    background.select_option("2.webm")
+    expect(oracle.locator("video")).to_have_attribute("src", "/api/skins/oracle/preview/2.webm")
+    assert (modal.bounding_box(), footer.bounding_box()) == bounds
     page.evaluate("Promise.all([createNewChatWithSettings(), createNewChatWithSettings()])")
     assert len(posted) == 2
+    assert posted[-1]["oracle_background"] == "2.webm"
     assert "starting_question" not in posted[-1]
     assert not dialog.is_visible()
     row = page.locator(".chat-item").filter(has_text=f"Agent {width}")
@@ -166,7 +175,8 @@ def test_create_agent_dialog_persistence_and_failure_recovery(width, tmp_path, m
     with get_session() as session:
         agent = session.query(ChatAgent).filter(ChatAgent.name == f"Agent {width}").one()
         assert agent.role == "Review support tickets"
-        assert agent.skin_name == "hayley"
+        assert agent.skin_name == "oracle"
+        assert agent.oracle_background == "2.webm"
         main_id = agent.main_chat_id
     # Reload from persisted APIs, with a changed topic, without changing identity.
     page.evaluate("async id => { await loadChats(); await selectChat(id); }", main_id)
@@ -182,8 +192,8 @@ def test_create_agent_dialog_persistence_and_failure_recovery(width, tmp_path, m
     page.evaluate("document.body.classList.remove('chat-has-active-thread')")
     plus.click(); voice.wait_for(state="visible")
     create.focus(); page.keyboard.press("Tab")
-    assert page.get_by_role("button", name="Close create agent").evaluate("e => e === document.activeElement")
-    page.get_by_role("button", name="Close create agent").click()
+    assert dialog.get_by_role("button", name="Close", exact=True).evaluate("e => e === document.activeElement")
+    dialog.get_by_role("button", name="Close", exact=True).click()
     assert not dialog.is_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     browser.close()

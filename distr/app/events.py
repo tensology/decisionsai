@@ -279,11 +279,6 @@ class EventHandlerMixin:
             signal_manager.dictation_processing_finished.emit()
         elif event == 'set_dictating':
             enabled = bool(data.get('enabled', False))
-            last_enabled = getattr(self, '_last_set_dictating_enabled', None)
-            if last_enabled is enabled:
-                logger.debug("[EVENT QUEUE] Dedup: skipping set_dictating enabled=%s", enabled)
-                return
-            self._last_set_dictating_enabled = enabled
             self._send_command_to_agent('set_dictating', {'enabled': enabled})
         elif event == 'hands_free_mode_changed':
             signal_manager.hands_free_mode_changed.emit(data.get('enabled', False))

@@ -1,6 +1,9 @@
 """Regression tests for STT PTT interruption coalescing."""
 
-from unittest.mock import MagicMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
+from distr.core.agent.libs import TranscriptionFrame
 
 from distr.core.agent.services.stt.base import BaseSTTService
 
@@ -41,11 +44,44 @@ def test_empty_agent_ptt_release_schedules_terminal_transcription_feedback():
     stt = _DummySTT(event_queue=MagicMock())
     stt._ptt_active = True
     stt._is_dictating = False
-    stt._schedule_agent_empty_transcription_feedback = MagicMock()
+    stt._schedule_empty_ptt_transcription_feedback = MagicMock()
 
     stt.set_ptt_active(False)
 
-    stt._schedule_agent_empty_transcription_feedback.assert_called_once_with()
+    stt._schedule_empty_ptt_transcription_feedback.assert_called_once_with()
+
+
+def test_chat_switch_drops_inflight_ptt_result_and_next_capture_still_transcribes(monkeypatch):
+    async def exercise():
+        stt = _DummySTT(event_queue=MagicMock())
+        started = asyncio.Event()
+        finish = asyncio.Event()
+        sent = AsyncMock()
+        monkeypatch.setattr(BaseSTTService.__mro__[1], "push_frame", sent)
+
+        async def transcribe(direction):
+            started.set()
+            await finish.wait()
+            await stt.push_frame(TranscriptionFrame("test phrase", "", ""), direction)
+
+        stt._process_ptt_buffer_immediate = transcribe
+        stt.set_ptt_active(True, queue_interruption=False)
+        stale_capture = stt._ptt_capture
+        stale = asyncio.create_task(stt._flush_ptt_capture(None, stale_capture))
+        await started.wait()
+        stt.discard_voice_capture()
+        stt.set_ptt_active(True, queue_interruption=False)
+        finish.set()
+        await stale
+        sent.assert_not_awaited()
+
+        await stt._flush_ptt_capture(None, stt._ptt_capture)
+        assert sent.await_args.args[0].text == "test phrase"
+        queued = sent.await_args.args[0]
+        stt.discard_voice_capture()
+        assert queued.metadata["ptt_capture"]["valid"] is False
+
+    asyncio.run(exercise())
 
 
 def test_hands_free_cutoff_notifies_player_immediately():

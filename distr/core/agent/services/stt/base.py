@@ -6,6 +6,7 @@ import string
 import time
 import numpy as np
 from collections import deque
+from contextvars import ContextVar
 
 from distr.core.agent.libs import (
     STTService,
@@ -24,6 +25,7 @@ from distr.core.agent.constants import (
 )
 
 logger = logging.getLogger(__name__)
+_ptt_frame_capture = ContextVar("ptt_frame_capture", default=None)
 
 # Shared across all STT services - no need to duplicate per-service
 _FILLER_WORDS = {
@@ -118,6 +120,7 @@ class BaseSTTService(STTService):
         self._pending_interruption: bool = False
         self._pending_ptt_process: bool = False
         self._ptt_flush_scheduled: bool = False
+        self._ptt_capture = {"valid": True}
         # Invalidates VAD/dictation work that was started in a continuous mode.
         # PTT flushes use their own accumulator and are intentionally allowed to
         # finish after the physical key is released.
@@ -314,6 +317,8 @@ class BaseSTTService(STTService):
         if active:
             # --- PTT just activated ---
             logger.debug("STT: PTT ACTIVATED - capturing audio")
+            self._ptt_capture["valid"] = False
+            self._ptt_capture = {"valid": True}
             self._ptt_buffer_accumulator = []
             self._ptt_flush_scheduled = False
             self._pending_ptt_process = False
@@ -380,10 +385,43 @@ class BaseSTTService(STTService):
                     self._is_dictating,
                     self._is_hands_free,
                 )
-                if self._is_dictating:
-                    self._schedule_dictation_empty_transcription_unblock()
-                else:
-                    self._schedule_agent_empty_transcription_feedback()
+                self._schedule_empty_ptt_transcription_feedback()
+
+    def discard_voice_capture(self):
+        """Drop audio recorded before a chat switch, including delayed results."""
+        self._ptt_capture["valid"] = False
+        was_active = self._ptt_active
+        self._ptt_active = False
+        self._pending_interruption = False
+        self._pending_ptt_process = False
+        self._ptt_flush_scheduled = False
+        self._ptt_buffer_accumulator = []
+        self._cancel_continuous_capture("chat switch")
+        if was_active and self.event_queue:
+            try:
+                self.event_queue.put(("stt_capture_stopped", {}), block=False)
+            except Exception as exc:
+                logger.debug("Could not emit stt_capture_stopped on chat switch: %s", exc)
+
+    async def push_frame(self, frame, direction=None):
+        capture = _ptt_frame_capture.get()
+        if capture is not None:
+            if not capture["valid"]:
+                return
+            frame.metadata["ptt_capture"] = capture
+        if direction is None:
+            await super().push_frame(frame)
+        else:
+            await super().push_frame(frame, direction)
+
+    async def _flush_ptt_capture(self, direction, capture):
+        if not capture["valid"]:
+            return
+        token = _ptt_frame_capture.set(capture)
+        try:
+            await self._process_ptt_buffer_immediate(direction)
+        finally:
+            _ptt_frame_capture.reset(token)
 
     def _merge_pre_buffer_into_ptt_on_release(self):
         """Fold rolling pre-buffer frames collected during dictation/PTT hand-off."""
@@ -416,15 +454,18 @@ class BaseSTTService(STTService):
             return
 
         self._ptt_flush_scheduled = True
+        capture = self._ptt_capture
 
         async def _flush_ptt_buffer():
+            if not capture["valid"]:
+                return
             self._ptt_flush_scheduled = False
             if not self._ptt_buffer_accumulator:
                 self._pending_ptt_process = False
                 return
             self._pending_ptt_process = False
             try:
-                await self._process_ptt_buffer_immediate(direction)
+                await self._flush_ptt_capture(direction, capture)
             except Exception as exc:
                 logger.error("STT: PTT buffer flush failed: %s", exc, exc_info=True)
 
@@ -433,44 +474,6 @@ class BaseSTTService(STTService):
         except Exception as exc:
             self._ptt_flush_scheduled = False
             logger.warning("STT: Could not schedule PTT buffer flush: %s", exc)
-
-    def _schedule_dictation_empty_transcription_unblock(self):
-        """End one-shot dictation when capture produced no audio (avoids 60s stuck state)."""
-        if self.event_queue:
-            try:
-                self.event_queue.put(("stop_dictation", {}), block=False)
-                logger.info(
-                    "STT: Queued stop_dictation after empty dictation capture "
-                    "(no mic audio captured)"
-                )
-                return
-            except Exception as exc:
-                logger.warning("STT: Could not queue stop_dictation for empty capture: %s", exc)
-
-        direction = self._pipeline_direction
-        loop = self._event_loop
-        if direction is None or loop is None or not getattr(loop, "is_running", lambda: False)():
-            logger.warning(
-                "STT: Dictation stuck-unblock skipped — pipeline not ready "
-                "(dictation may time out after 60s)"
-            )
-            return
-
-        async def _emit_empty():
-            try:
-                frame = TranscriptionFrame(text="", user_id="", timestamp=time.time())
-                await self.push_frame(frame, direction)
-                logger.info(
-                    "STT: Sent empty TranscriptionFrame to end one-shot dictation "
-                    "(no mic audio captured)"
-                )
-            except Exception as exc:
-                logger.warning("STT: Could not unblock dictation with empty transcript: %s", exc)
-
-        try:
-            asyncio.run_coroutine_threadsafe(_emit_empty(), loop)
-        except Exception as exc:
-            logger.warning("STT: Could not schedule dictation unblock: %s", exc)
 
     async def _emit_empty_ptt_transcription(self, direction):
         """Terminate an agent PTT capture that produced no usable transcript."""
@@ -481,8 +484,8 @@ class BaseSTTService(STTService):
         except Exception as exc:
             logger.warning("STT: Could not emit empty PTT transcription: %s", exc)
 
-    def _schedule_agent_empty_transcription_feedback(self):
-        """Send a terminal empty transcript when an agent PTT captured no audio."""
+    def _schedule_empty_ptt_transcription_feedback(self):
+        """Send a terminal empty transcript when PTT captured no audio."""
         direction = self._pipeline_direction
         loop = self._event_loop
         if direction is None or loop is None or not getattr(loop, "is_running", lambda: False)():
@@ -490,7 +493,16 @@ class BaseSTTService(STTService):
                 "STT: Empty PTT feedback skipped because the pipeline is not ready"
             )
             return
-        coro = self._emit_empty_ptt_transcription(direction)
+        capture = self._ptt_capture
+
+        async def emit_empty():
+            token = _ptt_frame_capture.set(capture)
+            try:
+                await self._emit_empty_ptt_transcription(direction)
+            finally:
+                _ptt_frame_capture.reset(token)
+
+        coro = emit_empty()
         try:
             asyncio.run_coroutine_threadsafe(coro, loop)
         except Exception as exc:

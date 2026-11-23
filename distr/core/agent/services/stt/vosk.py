@@ -557,7 +557,7 @@ class VoskSTTService(BaseSTTService):
         # Handle pending PTT buffer processing (backup if immediate flush could not run)
         if self._pending_ptt_process and not getattr(self, "_ptt_flush_scheduled", False):
             self._pending_ptt_process = False
-            await self._process_ptt_buffer_immediate(direction)
+            await self._flush_ptt_capture(direction, self._ptt_capture)
         
         # Handle VAD speaking frames (shared upstream barge-in / glow / interrupt)
         if await self._handle_speaking_started(frame, direction):

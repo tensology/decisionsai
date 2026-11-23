@@ -1119,8 +1119,6 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             logging.info(f"[ORACLE] Push-to-talk NOT requested - conditions not met (listening={self.is_listening}, dragging={self.dragging})")
             return
 
-        self._dismiss_tts_player_for_capture("ptt_press")
-        
         # Visual feedback via skin system
         logging.info("[ORACLE] PTT: firing ptt_active hook")
         self.hold_to_talk_active = True
@@ -1131,6 +1129,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         logging.info("[ORACLE] Emitting push_to_talk_start immediately")
         signal_manager.push_to_talk_start.emit()
         self.ptt_requested = True
+        self._dismiss_tts_player_for_capture("ptt_press")
     
     def _on_ptt_delay_complete(self):
         """

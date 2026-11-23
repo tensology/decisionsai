@@ -914,6 +914,9 @@ class SignalBridgeMixin:
                 logger.error("Web load-in-agent slot failed: %s", e, exc_info=True)
         signal_manager.web_load_chat_in_agent_requested.connect(on_web_load_chat_in_agent_requested)
         logger.info("Connected web_load_chat_in_agent_requested (direct command sends, no process restart)")
+        signal_manager.web_chat_compacted.connect(
+            lambda chat_id: self._send_command_to_agent('refresh_compacted_chat', {'chat_id': chat_id}, ensure_alive=False)
+        )
 
         def on_web_load_chat_and_process_requested(chat_id, message, speak, skip_user_persist):
             """Load chat history, then process one orchestrator prompt in deterministic order."""

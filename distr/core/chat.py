@@ -624,6 +624,7 @@ class ChatService:
         skin_name: Optional[str] = None,
         agent_name: Optional[str] = None,
         agent_role: str = "",
+        oracle_background: Optional[str] = None,
     ) -> Tuple[int, Optional[str]]:
         """Create a chat, optionally making it the active conversational agent chat."""
         session_provider = _session_provider or get_session
@@ -680,8 +681,10 @@ class ChatService:
                 created_date=now,
                 modified_date=now,
             )
-            from distr.core.chat_sidebar import set_chat_skin
+            from distr.core.chat_sidebar import set_chat_oracle_background, set_chat_skin
             set_chat_skin(root, skin_name or default_skin or "oracle")
+            if oracle_background:
+                set_chat_oracle_background(root, oracle_background)
             session.add(root)
             session.flush()
             chat_id = root.id
@@ -698,7 +701,10 @@ class ChatService:
             if agent_name is not None:
                 from distr.core.chat_agents import create_agent_profile
 
-                create_agent_profile(session, root, agent_name, agent_role)
+                agent = create_agent_profile(session, root, agent_name, agent_role)
+                # An explicit empty value selects the skin's default instead of inheriting Settings.
+                if oracle_background == "":
+                    agent.oracle_background = None
             session.commit()
             if starting_question:
                 child = Chat(
@@ -762,9 +768,11 @@ class ChatService:
             additional_context = _json_loads_obj(getattr(root, "additional_context", None))
             checkpoint = additional_context.get("compact_checkpoint")
             checkpoint_row_id = None
+            covered_row_id = 0
             if isinstance(checkpoint, dict) and checkpoint.get("active") is not False:
                 try:
                     checkpoint_row_id = int(checkpoint.get("chat_row_id") or 0) or None
+                    covered_row_id = int(checkpoint.get("covered_row_id", checkpoint_row_id) or 0)
                 except (TypeError, ValueError):
                     checkpoint_row_id = None
 
@@ -784,7 +792,7 @@ class ChatService:
             if checkpoint_prompt:
                 messages.append({"role": "system", "content": checkpoint_prompt})
             for row in rows:
-                if checkpoint_row_id is not None and int(row.id or 0) <= checkpoint_row_id:
+                if row.id <= covered_row_id or row.id == checkpoint_row_id:
                     continue
                 if row.input:
                     messages.append({"role": "user", "content": row.input})

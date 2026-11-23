@@ -77,6 +77,11 @@ class OllamaResponseMixin:
 
             # Ensure system message is first
             system_content = self._get_full_system_prompt()
+            from distr.core.chat import get_compact_checkpoint_prompt
+
+            checkpoint = get_compact_checkpoint_prompt(current_chat_id)
+            if checkpoint:
+                system_content = f"{system_content}\n\n{checkpoint}"
             if self._messages and self._messages[0].get('role') == 'system':
                 self._messages[0] = {"role": "system", "content": system_content}
             else:
