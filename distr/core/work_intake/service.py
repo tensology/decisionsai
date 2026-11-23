@@ -97,6 +97,26 @@ _CASUAL_CHAT_RE = re.compile(
     r"(?:can|could|would)\s+you\s+(?:tell|explain|describe|remind|summarize|help\s+me\s+understand)\b)",
     re.I,
 )
+# Explicit disclaimers: the user is commenting, not asking for work. A work
+# idiom like "take a look at" inside commentary must not start a run.
+_NOT_A_REQUEST_RE = re.compile(
+    r"\b(?:i'?m\s+not\s+asking\s+you\s+to|not\s+asking\s+you\s+to|"
+    r"i'?m\s+not\s+asking|you\s+don'?t\s+(?:need|have)\s+to|"
+    r"don'?t\s+(?:do|bother|worry|start|run|create)|no\s+need\s+to|"
+    r"just\s+(?:commenting|saying|thinking|chatting|curious|wondering|asking)|"
+    r"i'?m\s+just\s+(?:saying|commenting|thinking|curious|wondering)|"
+    r"for\s+your\s+information|fyi|never\s*mind|forget\s+it|ignore\s+that|"
+    r"not\s+a\s+request|no\s+action\s+needed|don'?t\s+action\s+that)\b",
+    re.I,
+)
+# A hypothetical or offer is not a request: "if you take a look at the
+# changelog, you can check ..." is conversation, not a task.
+_HYPOTHETICAL_RE = re.compile(
+    r"\bif\s+you\s+(?:do\s+|were\s+to\s+)?(?:take|have)\s+a\s+look\b"
+    r"|\bif\s+you\s+(?:do\s+)?(?:look|check|read|want)\b"
+    r"|\byou\s+could\s+(?:take|have)\s+a\s+look\b",
+    re.I,
+)
 
 
 def _has_work_intent(value: str) -> bool:
@@ -301,6 +321,16 @@ class OrchestratorIntakeService:
             return WorkIntakeDecision(
                 WorkIntakeAction.ANSWER_DIRECTLY,
                 "Short confirmation requires the active conversation context",
+            )
+        if _NOT_A_REQUEST_RE.search(value):
+            return WorkIntakeDecision(
+                WorkIntakeAction.ANSWER_DIRECTLY,
+                "Text explicitly disclaims a request; keep it conversational",
+            )
+        if _HYPOTHETICAL_RE.search(value) and not _EXECUTE_RE.search(value) and not _TICKET_RE.search(value):
+            return WorkIntakeDecision(
+                WorkIntakeAction.ANSWER_DIRECTLY,
+                "Hypothetical/offer phrasing is conversation, not a task",
             )
         steer = _STEER_RE.search(value)
         if steer:
