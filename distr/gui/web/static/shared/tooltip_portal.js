@@ -1,7 +1,7 @@
 // Fixed-position tooltips for the composer/selector area, so no container overflow can clip them.
 // [data-tooltip] shows its text; [data-tooltip-if-truncated] shows its own text only when it is cut off.
 // Inside an open <dialog> the tip is appended to that dialog (top layer); otherwise to <body>.
-const SCOPE = '.studio-composer, .model-dialog, .complexity-dialog, .thread-source-files, .thread-command-queue';
+const SCOPE = '.studio-composer, .model-dialog, .complexity-dialog, .thread-source-files, .thread-command-queue, .sidebar-mark-read';
 
 export function installTooltipPortal(root = document) {
     if (root.__tooltipPortal) return;
@@ -18,7 +18,7 @@ export function installTooltipPortal(root = document) {
         const truncated = target.scrollWidth > target.clientWidth + 1;
         return truncated ? (target.textContent || '').trim() : '';
     };
-    root.addEventListener('pointerover', (event) => {
+    const show = (event) => {
         const target = event.target instanceof Element ? event.target.closest('[data-tooltip], [data-tooltip-if-truncated]') : null;
         if (!target || !target.closest(SCOPE)) return;
         if (target === owner) return;
@@ -52,12 +52,20 @@ export function installTooltipPortal(root = document) {
         top = Math.max(margin, Math.min(top, window.innerHeight - box.height - margin));
         tip.style.left = `${Math.round(left)}px`;
         tip.style.top = `${Math.round(top)}px`;
-    });
-    root.addEventListener('pointerout', (event) => {
+    };
+    const hideOnExit = (event) => {
         if (!owner) return;
         const next = event.relatedTarget;
         if (next instanceof Node && owner.contains(next)) return;
         hide();
+    };
+    root.addEventListener('pointerover', show);
+    root.addEventListener('pointerout', hideOnExit);
+    root.addEventListener('focusin', event => {
+        if (event.target.matches?.('.sidebar-mark-read')) show(event);
+    });
+    root.addEventListener('focusout', event => {
+        if (event.target.matches?.('.sidebar-mark-read')) hideOnExit(event);
     });
     // Queue actions replace their rows after completion. A removed trigger cannot
     // emit pointerout, so retire its tooltip when the DOM update removes it.

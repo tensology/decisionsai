@@ -33,6 +33,8 @@ export function createSidebar({ context, actions, el }) {
     };
     // Finished threads this browser has shown; the folder's ready colour ignores them.
     const readySeen = createReadySeen(window.localStorage);
+    const unreadBySection = new Map();
+    const pendingReadIds = new Set();
     try {
         const pinned = JSON.parse(window.localStorage.getItem('decisions-development-pinned-boards') || '[]');
         const collapsed = JSON.parse(window.localStorage.getItem('decisions-development-collapsed-boards') || '[]');
@@ -139,6 +141,31 @@ export function createSidebar({ context, actions, el }) {
         return Boolean(actions.threadIsReadyUnaddressed?.(readySeen.withSeen(chat)));
     }
 
+    function renderSectionRead(sectionId, chats) {
+        const button = document.querySelector(`[data-mark-section-read="${sectionId}"]`);
+        if (!button || !actions.acknowledgeReadyThread) return;
+        const unread = chats.filter(chat => !pendingReadIds.has(Number(chat.id)) && threadNeedsReview(chat));
+        unreadBySection.set(sectionId, unread);
+        button.setAttribute('aria-disabled', String(!unread.length));
+    }
+
+    async function markSectionRead(sectionId) {
+        const unread = unreadBySection.get(sectionId) || [];
+        if (!unread.length) return;
+        unread.forEach(chat => pendingReadIds.add(Number(chat.id)));
+        renderSidebar();
+        let failed = false;
+        for (let start = 0; start < unread.length; start += 5) {
+            const results = await Promise.all(unread.slice(start, start + 5).map(chat =>
+                actions.acknowledgeReadyThread(chat, { render: false })));
+            if (results.some(result => !result)) failed = true;
+        }
+        unread.forEach(chat => pendingReadIds.delete(Number(chat.id)));
+        renderSidebar();
+        if (failed) actions.toast('Some threads could not be marked as read. Try again.', 'error');
+        else actions.toast('Marked as read.');
+    }
+
     // A thread open in the chat view is being read: once its replies are on screen it no
     // longer counts toward its folder's ready (orange) state.
     function noteOpenThreadSeen() {
@@ -197,7 +224,7 @@ export function createSidebar({ context, actions, el }) {
             const section = el(id + '-section');
             if (!section) continue;
             section.classList.toggle('hidden', !rows.length);
-            el(id + '-count').textContent = String(rows.length);
+            renderSectionRead(id, rows);
             renderSectionToggle(id + '-toggle', id + '-content', expanded);
             setHtml(el(listId), sectionItems(id, rows, 5, isThreadActive)
                 .map(chat => threadRowHtml(chat, isThreadActive(chat))).join(''));
@@ -234,6 +261,18 @@ export function createSidebar({ context, actions, el }) {
         const pinnedBoards = context.boards.filter((board) => state.pinnedBoardKeys.includes(board.key));
         const pinnedThreads = context.chats.filter((chat) => chat.pinned);
         const unpinned = context.boards.filter((board) => !state.pinnedBoardKeys.includes(board.key));
+        const unpinnedBoardKeys = new Set(unpinned.map(board => board.key));
+        const pinnedBoardKeys = new Set(pinnedBoards.map(board => board.key));
+        const pinnedSectionThreads = [...pinnedThreads];
+        const boardSectionThreads = [];
+        for (const chat of context.chats) {
+            if (chat.pinned) continue;
+            const key = threadBoard(chat)?.key;
+            if (pinnedBoardKeys.has(key)) pinnedSectionThreads.push(chat);
+            if (unpinnedBoardKeys.has(key)) boardSectionThreads.push(chat);
+        }
+        renderSectionRead('pinned-board', pinnedSectionThreads);
+        renderSectionRead('boards', boardSectionThreads);
         const activeBoard = activeThreadBoardKey() || context.selectedBoardKey;
         const visible = sectionItems('boards', unpinned, 6, board => board.key === activeBoard);
         const pinnedItems = [...pinnedThreads, ...pinnedBoards];
@@ -296,6 +335,7 @@ export function createSidebar({ context, actions, el }) {
                 return activeB - activeA || byNewest(a, b);
             });
         const visibleRecent = sectionItems('recents', recentThreads, 5, isThreadActive);
+        renderSectionRead('recents', recentThreads);
         el('recents-section').classList.toggle('hidden', !recentThreads.length);
         renderSectionToggle('recents-toggle', 'recents-content', state.recentsExpanded);
         setHtml(el('recent-task-group'), visibleRecent
@@ -1054,6 +1094,9 @@ export function createSidebar({ context, actions, el }) {
                 renderSidebar();
             });
         }
+        document.querySelectorAll('[data-mark-section-read]').forEach(button => {
+            button.addEventListener('click', () => markSectionRead(button.dataset.markSectionRead));
+        });
         el('sidebar-open').addEventListener('click', actions.openSidebar);
         el('sidebar-close').addEventListener('click', actions.closeDrawers);
     }

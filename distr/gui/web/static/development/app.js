@@ -1,4 +1,4 @@
-import { installTooltipPortal } from '../shared/tooltip_portal.js?v=20261110-queue1';
+import { installTooltipPortal } from '../shared/tooltip_portal.js?v=20261123-sidebar-read';
 import { createReports } from './reports/index.js?v=20261114-reports-cache1';
 import { createThreadLiveUpdates } from './threads/live.js?v=20261114-thread-stream1';
 import { createThreadSession } from './threads/session.js?v=20261115-workflow-display';
@@ -11,7 +11,7 @@ import { planCrumbs, renderPlanCrumbs, clearPlanCrumbs } from './planning/breadc
 import { setOverflowLabel } from './shared/overflow-names.js?v=20261111-overflow-names3';
 import { rememberBoardThread, boardLastThread, rememberBoardSection, boardLastSection, boardViewOptions, boardViewSwitchHtml, projectClickTarget } from './planning/view-switch.js?v=20261111-nav-apply-chrome3';
 
-import { createSidebar } from './sidebar/index.js?v=20261123-sidebar-compat';
+import { createSidebar } from './sidebar/index.js?v=20261123-sidebar-read';
 
 import { createAutomations } from './automations/index.js?v=20261113-calendar-page1';
 
@@ -433,18 +433,19 @@ function threadIsReadyUnaddressed(chat) {
     return ackMs < readyMs;
 }
 
-async function acknowledgeReadyThread(chat) {
-    if (!threadIsReadyUnaddressed(chat) || !chat?.id) return;
+async function acknowledgeReadyThread(chat, { render = true } = {}) {
+    if (!threadIsReadyUnaddressed(chat) || !chat?.id) return true;
     try {
         const data = await api(`/chats/${Number(chat.id)}/acknowledge-ready`, { method: 'POST', body: {} });
         const ack = data?.ready_acknowledged_at;
-        if (!ack) return;
+        if (data?.acknowledged === false || !ack) return false;
         chat.ready_acknowledged_at = ack;
         if (Number(state.currentChat?.id) === Number(chat.id)) state.currentChat.ready_acknowledged_at = ack;
         state.chats = state.chats.map((row) => (Number(row.id) === Number(chat.id) ? { ...row, ready_acknowledged_at: ack } : row));
-        sidebar.renderSidebar();
+        if (render) sidebar.renderSidebar();
+        return true;
     } catch (_) {
-        /* Orange remains until a later successful open. */
+        return false;
     }
 }
 
@@ -3054,6 +3055,7 @@ const sidebar = createSidebar({
         }
     },
     actions: {
+        acknowledgeReadyThread,
         api: (...args) => api(...args),
         boardByKey: (...args) => boardByKey(...args),
         boardForProject: (...args) => boardForProject(...args),

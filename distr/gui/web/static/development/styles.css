@@ -1,7 +1,7 @@
 @import './shell.css?v=20261111-client-message';
 @import './shared/components.css?v=20261102-verify';
 @import './threads/styles.css?v=20261120-workflow-thread-result';
-@import './sidebar/styles.css?v=20261123-sidebar-sections';
+@import './sidebar/styles.css?v=20261123-sidebar-read-tooltip';
 @import './boards/styles.css?v=20261111-nav-apply-chrome7';
 @import './planning/styles.css?v=20261120-wfplan';
 @import './incoming/styles.css?v=20261118-message-copy';

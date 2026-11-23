@@ -1,3 +1,8 @@
+{% macro mark_read(section, label) %}
+<button class="sidebar-mark-read" type="button" data-mark-section-read="{{ section }}" data-tooltip="Mark all as read" aria-label="Mark all as read in {{ label }}" aria-disabled="true">
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3.5 8 3 3 6-6"/></svg>
+</button>
+{% endmacro %}
 <aside class="studio-sidebar" id="studio-sidebar" aria-label="Development boards and threads">
             <div class="sidebar-scroll">
                 <div class="sidebar-top-row"><button class="sidebar-new-chat" id="new-thread-button" type="button"><span aria-hidden="true">✎</span> New Thread</button><button class="icon-button sidebar-collapse-toggle" id="sidebar-collapse-toggle" type="button" aria-controls="studio-sidebar" aria-expanded="true" aria-label="Collapse sidebar" title="Collapse sidebar"></button><button class="icon-button sidebar-close mobile-only" id="sidebar-close" aria-label="Close development boards">×</button></div>
@@ -9,8 +14,9 @@
                 <section class="sidebar-bucket sidebar-running-automations hidden" id="running-automations-section" aria-label="Running">
                     <div class="sidebar-section-label">
                         <button class="sidebar-section-toggle" type="button" id="running-automations-toggle" aria-expanded="true" aria-controls="running-automations-content">
-                            <span class="chevron" aria-hidden="true">▼</span><span>Running</span><small class="sidebar-section-count" id="running-automations-count"></small>
+                            <span class="chevron" aria-hidden="true">▼</span><span>Running</span><small class="hidden" id="running-automations-count"></small>
                         </button>
+                        {{ mark_read('running-automations', 'Running') }}
                     </div>
                     <div id="running-automations-content">
                         <div id="running-automations-group" class="task-list"></div>
@@ -22,6 +28,7 @@
                         <button class="sidebar-section-toggle" type="button" id="recents-toggle" aria-expanded="false" aria-controls="recents-content">
                             <span class="chevron" aria-hidden="true">▶</span><span>Recent</span>
                         </button>
+                        {{ mark_read('recents', 'Recent') }}
                     </div>
                     <div id="recents-content" class="hidden">
                         <div id="recent-task-group" class="task-list"></div>
@@ -31,8 +38,9 @@
                 <section class="sidebar-bucket hidden" id="automation-threads-section" aria-label="Automation threads">
                     <div class="sidebar-section-label">
                         <button class="sidebar-section-toggle" type="button" id="automation-threads-toggle" aria-expanded="false" aria-controls="automation-threads-content">
-                            <span class="chevron" aria-hidden="true">▶</span><span>Automations</span><small class="sidebar-section-count" id="automation-threads-count"></small>
+                            <span class="chevron" aria-hidden="true">▶</span><span>Automations</span><small class="hidden" id="automation-threads-count"></small>
                         </button>
+                        {{ mark_read('automation-threads', 'Automations') }}
                     </div>
                     <div id="automation-threads-content" class="hidden">
                         <div id="automation-thread-group" class="task-list"></div>
@@ -44,6 +52,7 @@
                         <button class="sidebar-section-toggle" type="button" id="pinned-section-toggle" aria-expanded="true" aria-controls="pinned-board-content">
                             <span class="chevron" aria-hidden="true">▼</span><span>Pinned</span>
                         </button>
+                        {{ mark_read('pinned-board', 'Pinned') }}
                     </div>
                     <div id="pinned-board-content">
                         <div id="pinned-board-tree" class="project-task-tree"></div>
@@ -58,6 +67,7 @@
                         {# Older cached sidebar modules still toggle this label. #}
                         <span class="hidden" id="boards-label">Boards</span>
                         <button type="button" id="new-board-button" aria-label="Create board" title="Create board">+</button>
+                        {{ mark_read('boards', 'Boards') }}
                     </div>
                     <div id="boards-content">
                         <div id="board-task-tree" class="project-task-tree"></div>
