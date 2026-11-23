@@ -195,7 +195,7 @@ def test_secondary_pages(secondary_page, width):
     expect(page.locator('#chatConfigModal')).to_be_visible()
     expect(page.get_by_role('tab', name='Advanced')).to_be_visible()
     capture(page, 'chat-configure', width)
-    config = page.locator('.chat-config-modal-content')
+    config = page.locator('#chatConfigModal .chat-config-modal-content')
     footer = config.locator('.modal-footer')
     main_bounds = config.bounding_box()
     footer_bounds = footer.bounding_box()

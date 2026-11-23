@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader
+from playwright.sync_api import expect
 
 from tests.browser_launch import launch_chromium
 
@@ -100,29 +101,44 @@ def test_create_agent_dialog_persistence_and_failure_recovery(width, tmp_path, m
     assert page.locator('#voiceProvider').bounding_box()['y'] < page.locator('#llmProvider').bounding_box()['y']
     name = dialog.get_by_label("Custom name (optional)", exact=True)
     assert not name.is_visible()
-    rail = page.locator('.agent-avatar-rail')
+    main, advanced, skin = (dialog.get_by_role("tab", name=title, exact=True)
+                            for title in ("Main", "Advanced", "Skin"))
+    assert dialog.get_by_role("tab").all_text_contents() == ["Main", "Advanced", "Skin"]
+    expect(main).to_have_attribute("aria-selected", "true")
+    modal = dialog.locator(".modal-content")
+    footer = dialog.locator(".modal-footer")
+    page.screenshot(path=str(evidence / f"create-agent-{width}.png"), animations="disabled")
+    bounds = modal.bounding_box(), footer.bounding_box()
+    if width >= 760:
+        for row in dialog.locator("#createAgentMain > .modal-row").all():
+            left, right = (field.bounding_box()["width"] for field in row.locator(".form-group").all())
+            assert left / (left + right) == pytest.approx(0.3, abs=0.005)
+    main.focus()
+    main.press("ArrowRight")
+    expect(advanced).to_be_focused()
+    expect(name).to_be_visible()
+    assert (modal.bounding_box(), footer.bounding_box()) == bounds
+    name.fill(f"Agent {width}")
+    scope = dialog.get_by_label("Agent scope (optional)", exact=True)
+    scope.fill("Review support tickets")
+    assert scope.bounding_box()["height"] > 100
+    page.screenshot(path=str(evidence / f"create-agent-advanced-{width}.png"))
+    advanced.press("ArrowRight")
+    expect(skin).to_be_focused()
     grid = page.locator('#modalSkinGrid')
-    assert rail.is_visible()
-    assert rail.bounding_box()['x'] < voice.bounding_box()['x']
-    assert grid.evaluate('e => e.scrollHeight > e.clientHeight')
-    form_scroll = page.locator('.agent-setup-form').evaluate('e => e.scrollTop')
-    grid.locator('button').last.scroll_into_view_if_needed()
-    assert grid.evaluate('e => e.scrollTop > 0')
-    assert page.locator('.agent-setup-form').evaluate('e => e.scrollTop') == form_scroll
+    expect(grid).to_be_visible()
+    grid.locator('[data-folder="hayley"]').click()
+    assert (modal.bounding_box(), footer.bounding_box()) == bounds
+    page.screenshot(path=str(evidence / f"create-agent-skin-{width}.png"))
     create = page.get_by_role("button", name="Create agent", exact=True)
     page.evaluate("document.getElementById('llmModel').value = ''")
     create.click()
     assert page.get_by_role("alert").inner_text() == "Choose a model and voice before creating the agent."
+    expect(main).to_have_attribute("aria-selected", "true")
     assert not posted
     page.evaluate("document.getElementById('llmModel').value = 'local-test'")
-    page.screenshot(path=str(evidence / f"create-agent-{width}.png"))
-    # The chat header's agent config panel now has its own "Advanced" section; scope to the dialog.
-    dialog.get_by_text("Advanced", exact=True).click()
-    name.fill(f"Agent {width}")
-    dialog.get_by_label("Agent scope (optional)", exact=True).fill("Review support tickets")
-    page.locator('#modalSkinGrid [data-folder="hayley"]').click()
-    assert dialog.evaluate("e => {const r=e.getBoundingClientRect();return r.left>=0 && r.top>=0 && r.right<=innerWidth && r.bottom<=innerHeight}")
-    page.screenshot(path=str(evidence / f"create-agent-options-{width}.png"))
+    skin.click()
+    expect(grid.locator('[data-folder="hayley"]')).to_have_attribute("aria-pressed", "true")
     create.click()
     page.get_by_text("Storage unavailable. Please try again.", exact=True).wait_for()
     assert name.input_value() == f"Agent {width}"
@@ -132,8 +148,11 @@ def test_create_agent_dialog_persistence_and_failure_recovery(width, tmp_path, m
     assert not dialog.is_visible()
     assert plus.evaluate("e => e === document.activeElement")
     plus.click()
+    expect(main).to_have_attribute("aria-selected", "true")
+    advanced.click()
     name.wait_for(state="visible")
     assert name.input_value() == f"Agent {width}"
+    skin.click()
     page.locator('#modalSkinGrid [data-folder="hayley"]').click()
     page.evaluate("Promise.all([createNewChatWithSettings(), createNewChatWithSettings()])")
     assert len(posted) == 2

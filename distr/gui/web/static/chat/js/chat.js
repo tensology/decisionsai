@@ -686,18 +686,23 @@ function setupEventListeners() {
             }
         }
     });
-    const configTabs = document.getElementById('chatConfigTabs');
-    const mainConfigTab = document.getElementById('chatConfigMainTab');
-    const advancedConfigTab = document.getElementById('chatConfigAdvancedTab');
-    mainConfigTab?.addEventListener('click', () => selectChatConfigTab(mainConfigTab));
-    advancedConfigTab?.addEventListener('click', () => selectChatConfigTab(advancedConfigTab));
-    configTabs?.addEventListener('keydown', (event) => {
-        const alternate = event.target === mainConfigTab ? advancedConfigTab : mainConfigTab;
-        const tab = { ArrowLeft: alternate, ArrowRight: alternate, Home: mainConfigTab, End: advancedConfigTab }[event.key];
-        if (!tab) return;
-        event.preventDefault();
-        selectChatConfigTab(tab);
-        tab.focus();
+    document.querySelectorAll('.chat-config-tabs').forEach(tabList => {
+        const tabs = [...tabList.querySelectorAll('[role="tab"]')];
+        tabs.forEach((tab, index) => {
+            tab.addEventListener('click', () => selectChatConfigTab(tab));
+            tab.addEventListener('keydown', event => {
+                const next = {
+                    ArrowLeft: tabs[(index - 1 + tabs.length) % tabs.length],
+                    ArrowRight: tabs[(index + 1) % tabs.length],
+                    Home: tabs[0],
+                    End: tabs.at(-1),
+                }[event.key];
+                if (!next) return;
+                event.preventDefault();
+                selectChatConfigTab(next);
+                next.focus();
+            });
+        });
     });
     document.getElementById('chatConfigDeleteAgent')?.addEventListener('click', async () => {
         const agentId = document.getElementById('chatConfigAgent').dataset.agentId;
@@ -5685,6 +5690,7 @@ async function loadDefaultSettings() {
 // Show/Hide Modal
 async function showNewChatModal() {
     document.getElementById('createAgentError').hidden = true;
+    selectChatConfigTab(document.getElementById('createAgentMainTab'));
     newChatModal.style.display = 'flex';
     document.body.classList.add('agent-modal-open');
     _agentModalUserMoved = false;
@@ -5770,6 +5776,7 @@ async function createNewChatWithSettings() {
     const voiceProvider = (voiceProviderSelect.value || '').trim();
     const voiceModel = (voiceModelSelect.value || '').trim();
     if (!provider || !model || !voiceProvider || !voiceModel) {
+        selectChatConfigTab(document.getElementById('createAgentMainTab'));
         showError('Choose a model and voice before creating the agent.');
         return;
     }
@@ -5800,7 +5807,6 @@ async function createNewChatWithSettings() {
         nameEl.value = '';
         roleEl.value = '';
         _agentModalInitialized = false;
-        document.querySelector('#newChatModal .agent-configuration').open = false;
         if (messageInput) { messageInput.value = ''; messageInput.style.height = 'auto'; }
         await loadChats();
         // View the main conversation without switching the primary Oracle runtime.
@@ -5825,7 +5831,7 @@ document.addEventListener('keydown', event => {
     if (!newChatModal || newChatModal.style.display === 'none') return;
     if (event.key === 'Tab') {
         const focusable = [...newChatModal.querySelectorAll('button, input, select, textarea, summary, [tabindex="0"]')]
-            .filter(el => !el.disabled && el.getClientRects().length);
+            .filter(el => !el.matches(':disabled') && el.tabIndex >= 0 && el.getClientRects().length);
         const first = focusable[0], last = focusable[focusable.length - 1];
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
@@ -5909,13 +5915,13 @@ function changedChatConfigFields(previous, current) {
 
 function selectChatConfigTab(selected) {
     if (!selected) return;
-    document.querySelectorAll('#chatConfigTabs [role="tab"]').forEach(tab => {
+    selected.closest('[role="tablist"]').querySelectorAll('[role="tab"]').forEach(tab => {
         const active = tab === selected;
         tab.setAttribute('aria-selected', String(active));
         tab.tabIndex = active ? 0 : -1;
         document.getElementById(tab.getAttribute('aria-controls')).hidden = !active;
     });
-    chatConfigModal.querySelector('.modal-body').scrollTop = 0;
+    selected.closest('.modal').querySelector('.modal-body').scrollTop = 0;
 }
 
 async function openChatConfigModal(chatId) {

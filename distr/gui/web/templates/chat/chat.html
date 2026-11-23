@@ -4,7 +4,7 @@
 {% block title %}Chat{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-20261123-config-widths">
+<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-20261123-create-agent-tabs">
 <link rel="stylesheet" href="/static/shared/css/mermaid_viewer.css?v=20261028-responsive">
 {% endblock %}
 
@@ -257,7 +257,7 @@
                     </div>
                 </div>
             </div>
-            <div id="chatConfigAgent" role="tabpanel" aria-labelledby="chatConfigAdvancedTab" hidden>
+            <div class="chat-config-agent-panel" id="chatConfigAgent" role="tabpanel" aria-labelledby="chatConfigAdvancedTab" hidden>
                 <div class="form-group">
                     <label for="chatConfigAgentName">Custom name</label>
                     <input id="chatConfigAgentName" class="form-control" type="text" maxlength="80" autocomplete="off">
@@ -281,10 +281,15 @@
 
 <!-- New Chat Configuration Modal -->
 <div class="modal" id="newChatModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="createAgentTitle">
-    <div class="modal-content create-agent-modal">
+    <div class="modal-content chat-config-modal-content create-agent-modal">
         <div class="modal-header">
             <h2 id="createAgentTitle">Create agent</h2>
             <button type="button" class="modal-close" id="modalClose" aria-label="Close create agent">&times;</button>
+        </div>
+        <div class="chat-config-tabs" id="createAgentTabs" role="tablist" aria-label="Agent configuration">
+            <button type="button" id="createAgentMainTab" role="tab" aria-selected="true" aria-controls="createAgentMain">Main</button>
+            <button type="button" id="createAgentAdvancedTab" role="tab" aria-selected="false" aria-controls="createAgentAdvanced" tabindex="-1">Advanced</button>
+            <button type="button" id="createAgentSkinTab" role="tab" aria-selected="false" aria-controls="createAgentSkin" tabindex="-1">Skin</button>
         </div>
         <div class="modal-body">
             <!-- Modal loader -->
@@ -293,32 +298,27 @@
                 <p class="empty-state-loader-text">Loading agent settings...</p>
             </div>
             <fieldset id="modalFormContent" style="display:none;">
-            <div class="agent-setup-layout">
-            <aside class="agent-avatar-rail" aria-label="Agent avatars">
-                <p class="modal-section-label">Avatar</p>
-                <div id="modalSkinGrid" class="empty-state-skin-grid"></div>
-            </aside>
-            <div class="agent-setup-form">
-            {{ voice_select_fields('modal') }}
-            {{ configure_chat_fields('modal', include_voice=false, include_skin=false) }}
-            <details class="agent-configuration">
-                <summary>Advanced</summary>
-                <div class="form-group">
-                    <label for="agentName">Custom name (optional)</label>
-                    <input id="agentName" class="form-control" type="text" maxlength="80" autocomplete="off" placeholder="Uses voice name" aria-describedby="createAgentError">
+                <div id="createAgentMain" role="tabpanel" aria-labelledby="createAgentMainTab">
+                    {{ voice_select_fields('modal') }}
+                    {{ configure_chat_fields('modal', include_voice=false, include_skin=false) }}
                 </div>
-                <div class="form-group">
-                    <label for="agentRole">Agent scope (optional)</label>
-                    <textarea id="agentRole" class="form-control form-control-textarea" rows="3" maxlength="4000"></textarea>
+                <div class="chat-config-agent-panel" id="createAgentAdvanced" role="tabpanel" aria-labelledby="createAgentAdvancedTab" hidden>
+                    <div class="form-group">
+                        <label for="agentName">Custom name (optional)</label>
+                        <input id="agentName" class="form-control" type="text" maxlength="80" autocomplete="off" placeholder="Uses voice name" aria-describedby="createAgentError">
+                    </div>
+                    <div class="form-group chat-config-agent-scope">
+                        <label for="agentRole">Agent scope (optional)</label>
+                        <textarea id="agentRole" class="form-control form-control-textarea" rows="3" maxlength="4000"></textarea>
+                    </div>
                 </div>
-            </details>
-            </div>
-            </div>
+                <div id="createAgentSkin" role="tabpanel" aria-labelledby="createAgentSkinTab" hidden>
+                    <div id="modalSkinGrid" class="empty-state-skin-grid"></div>
+                </div>
             </fieldset><!-- /modalFormContent -->
             <p id="createAgentError" class="create-agent-error" role="alert" hidden></p>
         </div>
         <div class="modal-footer">
-            <span class="modal-footer-note">Settings apply to this agent.</span>
             <div class="modal-footer-actions">
                 <button class="btn btn-secondary" id="modalCancel">Cancel</button>
                 <button class="btn btn-primary" id="modalCreate">Create agent</button>

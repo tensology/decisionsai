@@ -2750,12 +2750,12 @@
 }
 
 @media (min-width: 760px) {
-    #chatConfigMain > .modal-row > .form-group {
+    :is(#chatConfigMain, #createAgentMain) > .modal-row > .form-group {
         flex: 3;
         min-width: 0;
     }
 
-    #chatConfigMain > .modal-row > .form-group + .form-group {
+    :is(#chatConfigMain, #createAgentMain) > .modal-row > .form-group + .form-group {
         flex: 7;
     }
 }
@@ -3043,31 +3043,20 @@
     #chatConfigModal .modal-footer .btn { padding-inline: 10px; }
 }
 
-/* Agent creation keeps identity fields visible and advanced defaults together. */
 .sidebar-header { justify-content: flex-end; }
 .new-chat-btn { width: 44px; height: 44px; padding: 12px; justify-content: center; border-radius: 50%; }
 .agent-modal-open { overflow: hidden; }
-.create-agent-modal { display: flex; flex-direction: column; max-height: calc(100dvh - 32px); }
-.create-agent-modal .modal-body { overflow-y: auto; min-height: 0; }
-.create-agent-modal fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
-.create-agent-modal .modal-header, .create-agent-modal .modal-footer { flex-shrink: 0; }
+.create-agent-modal fieldset { display: flex; flex: 1 0 auto; flex-direction: column; border: 0; padding: 0; margin: 0; min-width: 0; }
 .create-agent-modal .empty-state-kilo-wrap, .create-agent-modal .empty-state-key-hint-wrap { display: none !important; }
 .create-agent-modal .empty-state-skin-card { color: inherit; font: inherit; transition: border-color 0.2s; }
 .create-agent-modal .empty-state-skin-card:hover { transform: none; box-shadow: none; }
 .create-agent-modal .empty-state-skin-name { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
-.create-agent-modal .voice-select-row { flex-wrap: wrap; }
-.create-agent-modal .voice-select-row .form-control-select { flex: 0 0 100%; }
-.create-agent-modal .modal-close { width: 44px; height: 44px; }
-.agent-configuration summary { cursor: pointer; padding: 12px 0; color: #ececf1; }
 .create-agent-error { color: #fca5a5; margin: 12px 0 0; font-size: 14px; }
 .create-agent-modal input:focus-visible, .create-agent-modal textarea:focus-visible,
-.create-agent-modal summary:focus-visible, .new-chat-btn:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
-@media (max-width: 640px) {
-    .create-agent-modal { width: calc(100% - 24px); }
-    .create-agent-modal .form-control { font-size: 16px; }
-    .create-agent-modal .modal-header, .create-agent-modal .modal-body, .create-agent-modal .modal-footer { padding: 16px; }
-    .create-agent-modal .modal-footer { flex-direction: column; align-items: stretch; gap: 12px; }
-    .create-agent-modal .modal-footer-actions { justify-content: flex-end; }
+.new-chat-btn:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
+@media (max-width: 759px) {
+    .create-agent-modal .voice-select-row { flex-wrap: wrap; }
+    .create-agent-modal .voice-select-row .form-control-select { flex: 0 0 100%; }
 }
 
 /* One primary identity above the conversation roster. */
@@ -3094,19 +3083,6 @@
 #primaryAvatarGrid .empty-state-skin-card:hover { transform:none; box-shadow:none; }
 #primaryAvatarGrid .empty-state-skin-name { white-space:normal; overflow:visible; text-overflow:clip; overflow-wrap:anywhere; }
 #primaryAvatarGrid .empty-state-skin-preview img, #primaryAvatarGrid .empty-state-skin-preview video { width:100%; height:100%; object-fit:contain; }
-
-/* Avatar choices stay beside the form and scroll independently on the Y axis. */
-.create-agent-modal { max-width:56rem; }
-.agent-setup-layout { display:grid; grid-template-columns:112px minmax(0,1fr); gap:16px; align-items:start; }
-.agent-avatar-rail { position:relative; align-self:stretch; min-height:0; }
-.agent-avatar-rail .modal-section-label { margin:0; }
-.agent-avatar-rail .empty-state-skin-grid { position:absolute; inset:28px 0 0; display:flex; flex-direction:column; align-items:stretch; gap:8px; padding:4px 4px 8px; overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain; scrollbar-gutter:stable; }
-.agent-avatar-rail .empty-state-skin-card { width:100%; flex-shrink:0; box-sizing:border-box; }
-.agent-avatar-rail .empty-state-skin-preview { width:100%; max-width:64px; height:auto; aspect-ratio:1; flex-shrink:0; }
-.agent-setup-form { min-width:0; max-height: min(36rem, calc(100dvh - 18rem)); overflow-y:auto; overflow-x:hidden; padding:4px; overscroll-behavior:contain; }
-@media (max-width:640px) {
-    .agent-setup-layout { grid-template-columns:88px minmax(0,1fr); gap:12px; }
-}
 
 /* ---- Multi-agent: primary star, drag order, groups ---------------------- */
 .agent-star {
@@ -3173,25 +3149,23 @@ body.group-mode #emptyState, body.group-mode #ttsPlayerCard { display: none !imp
 .agent-delete-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* Configure chat/agent: the body scrolls, the header and Cancel/Save footer always stay visible. */
-#chatConfigModal .chat-config-modal-content {
+.chat-config-modal-content {
     display: flex;
     flex-direction: column;
     max-height: calc(100vh - 32px);
     max-height: calc(100dvh - 32px);
     overflow: hidden;
 }
-#chatConfigModal .chat-config-modal-content:has(.chat-config-tabs:not([hidden])) {
+.chat-config-modal-content:has(.chat-config-tabs:not([hidden])) {
     height: 560px;
 }
 @media (max-width: 759px) {
-    #chatConfigModal .chat-config-modal-content:has(.chat-config-tabs:not([hidden])) {
+    .chat-config-modal-content:has(.chat-config-tabs:not([hidden])) {
         height: 780px;
     }
 }
-#chatConfigModal .modal-header,
-#chatConfigModal .modal-footer,
-#chatConfigModal .chat-config-tabs { flex: 0 0 auto; }
-#chatConfigModal .modal-body {
+.chat-config-modal-content :is(.modal-header, .modal-footer, .chat-config-tabs) { flex: 0 0 auto; }
+.chat-config-modal-content .modal-body {
     display: flex;
     flex-direction: column;
     flex: 1 1 auto;
@@ -3199,20 +3173,20 @@ body.group-mode #emptyState, body.group-mode #ttsPlayerCard { display: none !imp
     overflow-y: auto;
     overscroll-behavior: contain;
 }
-#chatConfigAgent:not([hidden]),
+.chat-config-agent-panel:not([hidden]),
 .chat-config-agent-scope {
     display: flex;
     flex: 1 0 auto;
     flex-direction: column;
 }
-#chatConfigAgentRole {
+.chat-config-agent-scope textarea {
     flex: 1 0 auto;
     resize: none;
 }
-#chatConfigModal .modal-footer {
+.chat-config-modal-content .modal-footer {
     position: sticky;
     bottom: 0;
     background: #1a1f3a;
     border-top: 1px solid rgba(255, 255, 255, 0.10);
 }
-#chatConfigModal .modal-footer-actions { margin-left: auto; }
+.chat-config-modal-content .modal-footer-actions { margin-left: auto; }
