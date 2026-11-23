@@ -1281,9 +1281,14 @@ def test_folder_opened_for_a_thread_returns_to_normal_after_leaving(page: Page):
     assert "decisions:70" in stored
 
 
-def test_recent_show_more_opens_full_recent_development_view(page: Page):
+def test_recent_more_and_less_stay_in_the_current_thread_view(page: Page):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests, recent_project_count=6)
+    older = {"id": 100, "title": "Older development thread", "project_id": 7,
+             "development_board_key": "decisions:70", "development": True, "messages": []}
+    page.route("**/api/chats/100?*", lambda route: route.fulfill(json=older))
+    page.route(re.compile(r"/api/workflows/studio/tasks/100/(artifacts|plans)$"),
+               lambda route: route.fulfill(json={"items": []}))
     page.goto(URL)
 
     page.locator("#recents-toggle").click()
@@ -1291,13 +1296,74 @@ def test_recent_show_more_opens_full_recent_development_view(page: Page):
     expect(page.locator("#recents-show-more")).to_be_visible()
 
     page.locator("#recents-show-more").click()
-    expect(page).to_have_url(re.compile(r"/development/\?recent=1$"))
+    expect(page).to_have_url(URL)
     expect(page.locator("#recents-toggle")).to_have_attribute("aria-expanded", "true")
     expect(page.locator("#recent-task-group [data-chat-id]")).to_have_count(7)
 
-    page.reload()
-    expect(page.locator("#recents-toggle")).to_have_attribute("aria-expanded", "true")
+    page.locator('#recent-task-group [data-chat-id="100"]').click()
+    expect(page).to_have_url(TEST_BASE_URL + "/development/threads/100/")
+    expect(page.locator("#recents-show-more")).to_have_text("Show less")
     expect(page.locator("#recent-task-group [data-chat-id]")).to_have_count(7)
+    page.locator("#recents-show-more").click()
+    expect(page.locator("#recents-show-more")).to_have_text("Show more")
+    expect(page.locator("#recent-task-group [data-chat-id]")).to_have_count(5)
+    expect(page.locator('#recent-task-group [data-chat-id="100"]')).to_have_attribute("aria-current", "page")
+    expect(page).to_have_url(TEST_BASE_URL + "/development/threads/100/")
+
+    page.goto(TEST_BASE_URL + "/development/?recent=1")
+    expect(page.locator("#recents-show-more")).to_have_text("Show less")
+    expect(page.locator("#recent-task-group [data-chat-id]")).to_have_count(7)
+
+
+def test_sidebar_sections_keep_background_work_separate_and_toggle_both_ways(page: Page):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests)
+    manual = {"id": 17, "title": "Manual thread", "development": True, "development_source_type": "prompt"}
+    background = [
+        {"id": 20 + i, "title": f"Background thread {i}", "development": True,
+         "development_source_type": "workflow_run" if i % 2 else "automation",
+         "pinned": i == 7, "development_execution": {"status": "running" if i < 6 else "completed"}}
+        for i in range(8)
+    ]
+    page.route("**/api/chats?*", lambda route: route.fulfill(json={"chats": [manual, *background]}))
+    boards = [{"id": 70 + i, "name": f"Board {i + 1}", "source": "database"} for i in range(14)]
+    page.route("**/api/tickets/boards", lambda route: route.fulfill(json=boards))
+    page.route("**/api/workflows/studio/sidebar/pins", lambda route: route.fulfill(
+        json={"board_keys": [f"decisions:{board['id']}" for board in boards[:7]]}
+    ))
+    page.goto(URL)
+    sections = page.locator("#studio-sidebar .sidebar-bucket:visible")
+    expect(sections).to_have_count(5)
+    assert sections.evaluate_all("nodes => nodes.map(node => node.getAttribute('aria-label'))") == [
+        "Running", "Recent", "Automation threads", "Pinned", "Boards",
+    ]
+    assert sections.evaluate_all("nodes => nodes.map(node => getComputedStyle(node).borderBottomWidth)") == ["1px"] * 5
+    page.locator("#recents-toggle").click()
+    expect(page.locator("#recent-task-group .task-row")).to_have_text(["Manual thread"])
+    expect(page.locator("#recents-show-more")).to_be_hidden()
+    page.locator("#automation-threads-toggle").click()
+    for prefix, list_id, total in (("running-automations", "running-automations-group", 6),
+                                   ("automation-threads", "automation-thread-group", 7)):
+        button = page.locator(f"#{prefix}-show-more")
+        rows = page.locator(f"#{list_id} .task-row")
+        expect(rows).to_have_count(5)
+        button.click()
+        expect(button).to_have_text("Show less")
+        expect(rows).to_have_count(total)
+        button.click()
+        expect(button).to_have_text("Show more")
+        expect(rows).to_have_count(5)
+    expect(page.locator('#pinned-board-tree [data-chat-id="27"]')).to_be_visible()
+    for prefix, list_id in (("pinned-board", "pinned-board-tree"), ("boards", "board-task-tree")):
+        button = page.locator(f"#{prefix}-show-more")
+        rows = page.locator(f"#{list_id} > :is(.project-group, .task-row-wrap)")
+        expect(rows).to_have_count(6)
+        button.click()
+        expect(button).to_have_text("Show less")
+        assert rows.count() > 6
+        button.click()
+        expect(button).to_have_text("Show more")
+        expect(rows).to_have_count(6)
 
 
 def test_new_thread_wins_over_a_stale_thread_load(page: Page):
@@ -1897,7 +1963,7 @@ def test_project_context_pin_keeps_projects_first_and_collapse_persists(page: Pa
 
 
 @pytest.mark.parametrize("width", [390, 768, 1280, 1440])
-def test_delayed_sidebar_refresh_preserves_confirmed_jira_pin(page: Page, width: int):
+def test_delayed_sidebar_refresh_preserves_confirmed_jira_pin(page: Page, width: int, tmp_path):
     _install_api(page, [])
     keys = ["decisions:70"]
     delayed = []
@@ -1933,7 +1999,7 @@ def test_delayed_sidebar_refresh_preserves_confirmed_jira_pin(page: Page, width:
     pin_button.click()
     expect(page.locator("html")).to_have_attribute("data-pin-write-held", "true")
     expect(pin_button).to_be_disabled()
-    page.screenshot(path=f"/private/tmp/development-jira-pin-pending-{width}.png", full_page=True)
+    page.screenshot(path=tmp_path / f"development-jira-pin-pending-{width}.png", full_page=True)
     write = writes.pop()
     assert write.request.post_data_json == {"board_key": "jira:jira-1", "pinned": True}
     keys.append("trello:trello-1")  # Another client saved a pin after this tab read the list.
@@ -1944,19 +2010,13 @@ def test_delayed_sidebar_refresh_preserves_confirmed_jira_pin(page: Page, width:
     assert keys == ["decisions:70", "trello:trello-1", "jira:jira-1"]
     other_pin = page.locator('#pinned-board-tree [data-board-select="trello:trello-1"]')
     expect(other_pin).to_be_visible()
-    page.evaluate("""() => {
-        const observer = new MutationObserver(() => {
-            observer.disconnect();
-            document.documentElement.dataset.pinRefreshRendered = 'true';
-        });
-        observer.observe(document.getElementById('pinned-board-tree'), { childList: true });
-    }""")
     stale_route, stale_keys = delayed.pop()
-    stale_route.fulfill(json={"board_keys": stale_keys})
-    expect(page.locator("html")).to_have_attribute("data-pin-refresh-rendered", "true")
+    # The transcript snapshot fetch follows the sidebar render even when its DOM stays unchanged.
+    with page.expect_request("**/api/workflows/studio/tasks/17/artifacts"):
+        stale_route.fulfill(json={"board_keys": stale_keys})
     expect(pinned).to_be_visible(timeout=1000)
     expect(other_pin).to_be_visible(timeout=1000)
-    page.screenshot(path=f"/private/tmp/development-jira-pin-after-refresh-{width}.png", full_page=True)
+    page.screenshot(path=tmp_path / f"development-jira-pin-after-refresh-{width}.png", full_page=True)
     page.reload()
     if sidebar_button.is_visible():
         sidebar_button.click()
@@ -1965,14 +2025,13 @@ def test_delayed_sidebar_refresh_preserves_confirmed_jira_pin(page: Page, width:
     expect(page.locator('#board-task-tree [data-board-select="jira:jira-1"]')).to_have_count(0)
 
 
-def test_boards_section_only_collapses_when_a_board_is_pinned(page: Page, unpinned_board_preferences):
+def test_boards_section_keeps_its_collapse_preference_without_pinned_boards(page: Page, unpinned_board_preferences):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests)
     unpinned_board_preferences()
     page.goto(URL)
 
-    expect(page.locator("#boards-toggle")).to_be_hidden()
-    expect(page.locator("#boards-label")).to_be_visible()
+    expect(page.locator("#boards-toggle")).to_be_visible()
     expect(page.locator("#boards-content")).to_be_visible()
 
     page.locator('[data-board-select="decisions:70"]').click(button="right")
@@ -1991,7 +2050,9 @@ def test_boards_section_only_collapses_when_a_board_is_pinned(page: Page, unpinn
     page.locator('#pinned-board-tree [data-board-select="decisions:70"]').click(button="right")
     page.get_by_role("menuitem", name="Unpin Board", exact=True).click()
     page.reload()
-    expect(page.locator("#boards-toggle")).to_be_hidden()
+    expect(page.locator("#boards-toggle")).to_be_visible()
+    expect(page.locator("#boards-content")).to_be_hidden()
+    page.locator("#boards-toggle").click()
     expect(page.locator("#boards-content")).to_be_visible()
     page.evaluate("window.localStorage.removeItem('decisions-development-collapsed-boards')")
 

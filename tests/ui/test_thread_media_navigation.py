@@ -160,6 +160,8 @@ def test_project_defaults_to_four_newest_and_collapsed_running_folder_glows(page
     page.emulate_media(reduced_motion='reduce')
     assert glow.evaluate('el => getComputedStyle(el).animationName') == 'none'
     group.locator('[data-board-toggle]').click()
+    expect(group.locator('.task-row')).to_have_count(7)
+    group.get_by_role('button', name='Show less').click()
     expect(group.locator('.task-row')).to_have_count(4)
     group.locator('[data-board-toggle]').click()
     page.get_by_role('button', name='Stop', exact=True).click()

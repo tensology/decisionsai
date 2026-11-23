@@ -19,18 +19,13 @@ export function createSidebar({ context, actions, el }) {
         // Thread being revealed while the app is still switching into the thread view.
         revealPending: null,
         boardsCollapsed: false,
-        boardsExpanded: false,
-        // "No project" is its own folder (threads with no board or project), never a project entry.
-        noProjectExpanded: false,
-        // Thread the No project folder last auto-opened for. Auto-open happens once per thread, so a
-        // user collapse while that thread stays open sticks (also across reloads).
-        noProjectRevealedFor: 0,
+        expandedSections: new Set(),
+        automationsExpanded: false,
         // Whole Pinned section collapsed (its header toggle). Pinned folders keep their own collapse.
         pinnedSectionCollapsed: false,
         // Running automations header toggle (default open).
         runningSectionCollapsed: false,
         recentsExpanded: new URLSearchParams(window.location.search).get('recent') === '1',
-        showAllRecents: new URLSearchParams(window.location.search).get('recent') === '1',
         contextBoardKey: '',
         contextThreadId: null,
         pendingTerminalBoards: new Set(),
@@ -44,8 +39,7 @@ export function createSidebar({ context, actions, el }) {
         state.pinnedBoardKeys = Array.isArray(pinned) ? pinned : [];
         state.collapsedBoardKeys = new Set(Array.isArray(collapsed) ? collapsed : []);
         state.boardsCollapsed = window.localStorage.getItem('decisions-development-boards-collapsed') === 'true';
-        state.noProjectExpanded = window.localStorage.getItem('decisions-development-no-project-expanded') === 'true';
-        state.noProjectRevealedFor = Number(window.localStorage.getItem('decisions-development-no-project-revealed') || 0);
+        state.automationsExpanded = window.localStorage.getItem('decisions-development-no-project-expanded') === 'true';
         state.pinnedSectionCollapsed = window.localStorage.getItem('decisions-development-pinned-section-collapsed') === 'true';
         state.runningSectionCollapsed = window.localStorage.getItem('decisions-development-running-section-collapsed') === 'true';
     } catch (_) {
@@ -57,7 +51,7 @@ export function createSidebar({ context, actions, el }) {
         // thread through the same handler, and the re-render after opening drops it.
         const unread = threadNeedsReview(chat);
         const unreadPin = unread ? '<span class="task-row-unread-pin" aria-hidden="true"></span>' : '';
-        return `<div class="task-row-wrap${active ? ' active' : ''}${unread ? ' unread' : ''}"><button class="task-row" data-chat-id="${Number(chat.id)}"${active ? ' aria-current="page"' : ''}${unread ? ' aria-description="Unread"' : ''}>${unreadPin}${actions.threadRowContentHtml(chat, pinned)}</button></div>`;
+        return `<div class="task-row-wrap${active ? ' active' : ''}${unread ? ' unread' : ''}"><button type="button" class="task-row" data-chat-id="${Number(chat.id)}"${active ? ' aria-current="page"' : ''}${unread ? ' aria-description="Unread"' : ''}>${unreadPin}${actions.threadRowContentHtml(chat, pinned)}</button></div>`;
     }
     let pinRevision = 0;
     let pinWritePending = false;
@@ -132,7 +126,6 @@ export function createSidebar({ context, actions, el }) {
             if (key === keep) return;
             state.revealedBoardKeys.delete(key);
             state.collapsedBoardKeys.add(key);
-            state.expandedThreadBoards.delete(key);
         });
     }
     function isBoardViewSelected(boardKey) {
@@ -159,114 +152,51 @@ export function createSidebar({ context, actions, el }) {
         if (threadNeedsReview(chat) || (row && threadNeedsReview(row))) readySeen.markSeen(chat);
     }
 
-    // 2026-11-13: two sections above Pinned/Boards that are not projects.
-    // - Running automations: every automation thread that is processing right now (project-linked
-    //   ones also stay in their project folder). Hidden when nothing runs; refreshed by the ~6s shell poll.
-    // - No project: threads with no board/project. Its own folder, outside the projects list.
-    // Threads nobody typed into: automations, Incoming-dispatched work (WhatsApp/Gmail proposals),
-    // scheduled/initiative/orchestrator runs and workflow runs. Ordinary user prompts stay out.
-    // Same rule as BACKGROUND_SOURCE_TYPES in distr/gui/development_hot_corner.py.
+    // Background sources match the Development hot corner.
     const BACKGROUND_SOURCE_TYPES = new Set(['automation', 'incoming_proposal', 'scheduled', 'initiative', 'orchestrator', 'proactive_orchestrator']);
     function isBackgroundThread(chat) {
         const source = String(chat?.development_source_type || '').toLowerCase();
         return BACKGROUND_SOURCE_TYPES.has(source) || source.includes('workflow');
     }
-    function ensureExtraSections() {
-        const anchor = el('pinned-board-section');
-        if (!anchor || document.getElementById('running-automations-section')) return;
-        anchor.insertAdjacentHTML('beforebegin',
-            '<section class="sidebar-bucket sidebar-running-automations hidden" id="running-automations-section" aria-label="Running">'
-            + '<div class="sidebar-section-label"><button class="sidebar-section-toggle" type="button" id="running-automations-toggle" aria-expanded="true" aria-controls="running-automations-group">'
-            + '<span class="chevron" aria-hidden="true">▼</span><span>Running</span><small class="sidebar-section-count" id="running-automations-count"></small></button></div>'
-            + '<div class="task-list" id="running-automations-group" aria-live="polite"></div></section>'
-            + '<section class="sidebar-bucket sidebar-no-project hidden" id="no-project-section" aria-label="Threads with no project">'
-            + '<div class="sidebar-section-label"><button class="sidebar-section-toggle" type="button" id="no-project-toggle" aria-expanded="false" aria-controls="no-project-content">'
-            + '<span class="chevron" aria-hidden="true">▶</span><span>No project</span><small class="sidebar-section-count" id="no-project-count"></small></button></div>'
-            + '<div class="task-list hidden" id="no-project-content"></div></section>');
-        document.getElementById('running-automations-toggle').addEventListener('click', () => {
-            state.runningSectionCollapsed = !state.runningSectionCollapsed;
-            try {
-                window.localStorage.setItem('decisions-development-running-section-collapsed', String(state.runningSectionCollapsed));
-            } catch (_) { /* keep the in-memory choice */ }
-            renderSidebar();
-            document.getElementById('running-automations-toggle')?.focus({ preventScroll: true });
-        });
-        document.getElementById('no-project-toggle').addEventListener('click', () => {
-            state.noProjectExpanded = !state.noProjectExpanded;
-            // The open thread's one-time auto-open is used up: the user's choice wins from here.
-            const open = context.currentChat?.id ? Number(context.currentChat.id) : 0;
-            if (open) state.noProjectRevealedFor = open;
-            try {
-                window.localStorage.setItem('decisions-development-no-project-expanded', String(state.noProjectExpanded));
-                window.localStorage.setItem('decisions-development-no-project-revealed', String(state.noProjectRevealedFor || 0));
-            } catch (_) { /* keep the in-memory choice */ }
-            renderSidebar();
-            document.getElementById('no-project-toggle')?.focus({ preventScroll: true });
-        });
+    function byNewest(a, b) {
+        return String(b.modified_date || '').localeCompare(String(a.modified_date || '')) || Number(b.id) - Number(a.id);
     }
-    // Pinned gets its own ▶/▼ header toggle (the template ships a plain label). Built once.
-    function ensurePinnedToggle() {
-        const section = el('pinned-board-section');
-        const label = section?.querySelector(':scope > .sidebar-section-label');
-        if (!label || document.getElementById('pinned-section-toggle')) return;
-        label.innerHTML = '<button class="sidebar-section-toggle" type="button" id="pinned-section-toggle" aria-expanded="true" aria-controls="pinned-board-tree">'
-            + '<span class="chevron" aria-hidden="true">▼</span><span>Pinned</span></button>';
-        document.getElementById('pinned-section-toggle').addEventListener('click', () => {
-            state.pinnedSectionCollapsed = !state.pinnedSectionCollapsed;
-            try {
-                window.localStorage.setItem('decisions-development-pinned-section-collapsed', String(state.pinnedSectionCollapsed));
-            } catch (_) { /* keep the in-memory choice */ }
-            renderSidebar();
-            document.getElementById('pinned-section-toggle')?.focus({ preventScroll: true });
-        });
+    function previewItems(items, limit, expanded, isActive) {
+        if (expanded || items.length <= limit) return items;
+        const preview = items.slice(0, limit);
+        const active = items.find(isActive);
+        if (active && !preview.includes(active)) preview[limit - 1] = active;
+        return preview;
     }
-    function paintPinnedToggle() {
-        ensurePinnedToggle();
-        const toggle = document.getElementById('pinned-section-toggle');
-        if (!toggle) return;
-        const collapsed = state.pinnedSectionCollapsed;
-        toggle.setAttribute('aria-expanded', String(!collapsed));
-        toggle.querySelector('.chevron').textContent = collapsed ? '▶' : '▼';
-        el('pinned-board-tree').classList.toggle('hidden', collapsed);
-    }
-    function renderExtraSections() {
-        paintPinnedToggle();
-        ensureExtraSections();
-        const runningSection = document.getElementById('running-automations-section');
-        const noProjectSection = document.getElementById('no-project-section');
-        if (!runningSection || !noProjectSection) return;
-        const byNewest = (a, b) => String(b.modified_date || '').localeCompare(String(a.modified_date || '')) || Number(b.id) - Number(a.id);
-        const running = context.chats
-            .filter((chat) => isBackgroundThread(chat) && actions.threadIsProcessing?.(chat))
-            .sort(byNewest);
-        runningSection.classList.toggle('hidden', !running.length);
-        document.getElementById('running-automations-count').textContent = running.length ? String(running.length) : '';
-        setHtml(document.getElementById('running-automations-group'), running.map((chat) => threadRowHtml(chat, isThreadActive(chat))).join(''));
-        const runningToggle = document.getElementById('running-automations-toggle');
-        runningToggle.setAttribute('aria-expanded', String(!state.runningSectionCollapsed));
-        runningToggle.querySelector('.chevron').textContent = state.runningSectionCollapsed ? '▶' : '▼';
-        document.getElementById('running-automations-group').classList.toggle('hidden', state.runningSectionCollapsed);
-        const loose = context.chats.filter((chat) => !chat.pinned && !threadBoard(chat)).sort(byNewest);
-        // Auto-open once when the user lands on one of its threads; never override an explicit collapse.
-        const activeLoose = loose.find((chat) => isThreadActive(chat));
-        if (activeLoose && Number(activeLoose.id) !== Number(state.noProjectRevealedFor)) {
-            state.noProjectRevealedFor = Number(activeLoose.id);
-            state.noProjectExpanded = true;
-            try {
-                window.localStorage.setItem('decisions-development-no-project-expanded', 'true');
-                window.localStorage.setItem('decisions-development-no-project-revealed', String(state.noProjectRevealedFor));
-            } catch (_) { /* keep the in-memory choice */ }
-        }
-        const expanded = state.noProjectExpanded;
-        noProjectSection.classList.toggle('hidden', !loose.length);
-        noProjectSection.classList.toggle('has-running-thread', loose.some((chat) => actions.threadIsProcessing?.(chat)));
-        const toggle = document.getElementById('no-project-toggle');
+    function renderSectionToggle(toggleId, contentId, expanded) {
+        const toggle = el(toggleId);
         toggle.setAttribute('aria-expanded', String(expanded));
         toggle.querySelector('.chevron').textContent = expanded ? '▼' : '▶';
-        document.getElementById('no-project-count').textContent = loose.length ? String(loose.length) : '';
-        const content = document.getElementById('no-project-content');
-        content.classList.toggle('hidden', !expanded);
-        setHtml(content, loose.map((chat) => threadRowHtml(chat, isThreadActive(chat))).join(''));
+        el(contentId).classList.toggle('hidden', !expanded);
+    }
+    function sectionItems(id, items, limit, isActive) {
+        const expanded = state.expandedSections.has(id);
+        const button = el(id + '-show-more');
+        button.classList.toggle('hidden', items.length <= limit);
+        button.setAttribute('aria-expanded', String(expanded && items.length > limit));
+        button.textContent = expanded ? 'Show less' : 'Show more';
+        return previewItems(items, limit, expanded, isActive);
+    }
+    function renderBackgroundSections() {
+        const background = context.chats.filter(isBackgroundThread).sort(byNewest);
+        const running = background.filter(chat => actions.threadIsProcessing?.(chat));
+        const automations = background.filter(chat => !chat.pinned);
+        const sections = [
+            ['running-automations', 'running-automations-group', running, !state.runningSectionCollapsed],
+            ['automation-threads', 'automation-thread-group', automations, state.automationsExpanded]
+        ];
+        for (const [id, listId, rows, expanded] of sections) {
+            el(id + '-section').classList.toggle('hidden', !rows.length);
+            el(id + '-count').textContent = String(rows.length);
+            renderSectionToggle(id + '-toggle', id + '-content', expanded);
+            setHtml(el(listId), sectionItems(id, rows, 5, isThreadActive)
+                .map(chat => threadRowHtml(chat, isThreadActive(chat))).join(''));
+        }
     }
     // Rewrite a container only when its markup changed. Replacing identical rows on every ~6s
     // refresh restarted the folder glow and the row spinner animations (visible flicker).
@@ -299,22 +229,15 @@ export function createSidebar({ context, actions, el }) {
         const pinnedBoards = context.boards.filter((board) => state.pinnedBoardKeys.includes(board.key));
         const pinnedThreads = context.chats.filter((chat) => chat.pinned);
         const unpinned = context.boards.filter((board) => !state.pinnedBoardKeys.includes(board.key));
-        const visible = state.boardsExpanded ? unpinned : unpinned.slice(0, 6);
-        const pinnedRows = pinnedThreads
-            .map((chat) => {
-                const active = isThreadActive(chat);
-                return threadRowHtml(chat, active, true);
-            })
-            .join('');
-        setHtml(el('pinned-board-tree'), pinnedRows + pinnedBoards.map(boardGroupHtml).join(''));
-        el('pinned-board-section').classList.toggle('hidden', !pinnedThreads.length && !pinnedBoards.length);
-        const boardsCollapsible = pinnedBoards.length > 0;
-        const boardsCollapsed = boardsCollapsible && state.boardsCollapsed;
-        el('boards-toggle').classList.toggle('hidden', !boardsCollapsible);
-        el('boards-label').classList.toggle('hidden', boardsCollapsible);
-        el('boards-toggle').setAttribute('aria-expanded', String(!boardsCollapsed));
-        el('boards-toggle').querySelector('.chevron').textContent = boardsCollapsed ? '▶' : '▼';
-        el('boards-content').classList.toggle('hidden', boardsCollapsed);
+        const activeBoard = activeThreadBoardKey() || context.selectedBoardKey;
+        const visible = sectionItems('boards', unpinned, 6, board => board.key === activeBoard);
+        const pinnedItems = [...pinnedThreads, ...pinnedBoards];
+        const pinnedRows = sectionItems('pinned-board', pinnedItems, 6, item => item.key ? item.key === activeBoard : isThreadActive(item));
+        setHtml(el('pinned-board-tree'), pinnedRows.map(item => item.key
+            ? boardGroupHtml(item) : threadRowHtml(item, isThreadActive(item), true)).join(''));
+        el('pinned-board-section').classList.toggle('hidden', !pinnedItems.length);
+        renderSectionToggle('pinned-section-toggle', 'pinned-board-content', !state.pinnedSectionCollapsed);
+        renderSectionToggle('boards-toggle', 'boards-content', !state.boardsCollapsed);
         const groupedBoards = ['jira', 'trello', 'decisions']
             .map((provider) => ({
                 provider,
@@ -328,8 +251,6 @@ export function createSidebar({ context, actions, el }) {
                         `<div class="board-provider-label">${actions.escapeHtml(actions.providerName(group.provider))}</div>${group.boards.map(boardGroupHtml).join('')}`
                 )
                 .join('') || '<div class="sidebar-empty">No ticket boards connected.</div>');
-        el('boards-show-more').classList.toggle('hidden', unpinned.length <= 6);
-        el('boards-show-more').textContent = state.boardsExpanded ? 'Show less' : `Show ${unpinned.length - 6} more`;
         const ruleMode = ['automations', 'automation_rules'].includes(context.workspaceMode);
         const newThreadActive = context.workspaceMode === 'chat' && !context.currentChat && !context.selectedBoardKey;
         el('new-thread-button').classList.toggle('active', newThreadActive);
@@ -361,18 +282,15 @@ export function createSidebar({ context, actions, el }) {
 
         const activeStatuses = new Set(['initializing', 'queued', 'running', 'waiting']);
         const recentThreads = context.chats
-            .filter((chat) => chat.development_source_type !== 'automation')
-            .slice()
+            .filter(chat => !isBackgroundThread(chat))
             .sort((a, b) => {
                 const activeA = Number(activeStatuses.has(String(a.development_execution?.status || '').toLowerCase()));
                 const activeB = Number(activeStatuses.has(String(b.development_execution?.status || '').toLowerCase()));
-                return activeB - activeA || String(b.modified_date || '').localeCompare(String(a.modified_date || '')) || Number(b.id) - Number(a.id);
+                return activeB - activeA || byNewest(a, b);
             });
-        const visibleRecent = state.showAllRecents ? recentThreads : recentThreads.slice(0, 5);
+        const visibleRecent = sectionItems('recents', recentThreads, 5, isThreadActive);
         el('recents-section').classList.toggle('hidden', !recentThreads.length);
-        el('recents-content').classList.toggle('hidden', !state.recentsExpanded);
-        el('recents-toggle').setAttribute('aria-expanded', String(state.recentsExpanded));
-        el('recents-toggle').querySelector('.chevron').textContent = state.recentsExpanded ? '▼' : '▶';
+        renderSectionToggle('recents-toggle', 'recents-content', state.recentsExpanded);
         setHtml(el('recent-task-group'), visibleRecent
             .map((chat) => {
                 const active = isThreadActive(chat);
@@ -380,8 +298,7 @@ export function createSidebar({ context, actions, el }) {
             })
             .join(''));
         setHtml(el('archived-task-group'), archived);
-        el('recents-show-more').classList.toggle('hidden', state.showAllRecents || recentThreads.length <= 5);
-        renderExtraSections();
+        renderBackgroundSections();
 
         unbound('[data-board-toggle]').forEach(bindProjectToggle);
         unbound('[data-project-threads-more]').forEach(button => {
@@ -390,7 +307,9 @@ export function createSidebar({ context, actions, el }) {
                 if (state.expandedThreadBoards.has(key)) state.expandedThreadBoards.delete(key);
                 else state.expandedThreadBoards.add(key);
                 renderSidebar();
-                document.querySelector(`[data-project-threads-more="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
+                const toggle = document.querySelector(`[data-project-threads-more="${CSS.escape(key)}"]`);
+                toggle?.focus({ preventScroll: true });
+                if (!state.expandedThreadBoards.has(key)) toggle?.scrollIntoView({ block: 'nearest' });
             });
         });
         unbound('[data-board-select]').forEach((button) => {
@@ -845,7 +764,7 @@ export function createSidebar({ context, actions, el }) {
             return (Number.isFinite(first) && Number.isFinite(second) ? second - first : 0) || Number(b.id) - Number(a.id);
         });
         const expanded = state.expandedThreadBoards.has(board.key);
-        const visibleChats = expanded ? orderedChats : orderedChats.slice(0, 4);
+        const visibleChats = previewItems(orderedChats, 4, expanded, isThreadActive);
         const rows = visibleChats.map(chat => threadRowHtml(chat, isThreadActive(chat), Boolean(chat.pinned))).join('');
         const showMore = orderedChats.length > 4
             ? `<button type="button" class="project-threads-more" data-project-threads-more="${actions.escapeHtml(board.key)}" aria-expanded="${expanded}">${expanded ? 'Show less' : 'Show more'}</button>` : '';
@@ -883,7 +802,6 @@ export function createSidebar({ context, actions, el }) {
             state.revealedBoardKeys.delete(boardKey);
             if (closing) {
                 state.collapsedBoardKeys.add(boardKey);
-                state.expandedThreadBoards.delete(boardKey);
                 state.peekBoardKeys.delete(boardKey);
             } else {
                 if (state.collapsedBoardKeys.has(boardKey)) state.peekBoardKeys.add(boardKey);
@@ -1105,20 +1023,30 @@ export function createSidebar({ context, actions, el }) {
             el('board-link-dialog').close();
             deleteBoard(board);
         });
-        el('boards-show-more').addEventListener('click', () => {
-            state.boardsExpanded = !state.boardsExpanded;
-            renderSidebar();
-        });
-        el('boards-toggle').addEventListener('click', () => {
-            state.boardsCollapsed = !state.boardsCollapsed;
-            window.localStorage.setItem('decisions-development-boards-collapsed', String(state.boardsCollapsed));
-            renderSidebar();
-        });
-        el('recents-toggle').addEventListener('click', () => {
-            state.recentsExpanded = !state.recentsExpanded;
-            renderSidebar();
-        });
-        el('recents-show-more').addEventListener('click', actions.openRecentThreads);
+        for (const id of ['running-automations', 'recents', 'automation-threads', 'pinned-board', 'boards']) {
+            const button = el(id + '-show-more');
+            button.addEventListener('click', () => {
+                if (!state.expandedSections.delete(id)) state.expandedSections.add(id);
+                renderSidebar();
+                if (!state.expandedSections.has(id)) button.scrollIntoView({ block: 'nearest' });
+            });
+        }
+        const sectionStates = [
+            ['running-automations-toggle', 'runningSectionCollapsed', 'decisions-development-running-section-collapsed'],
+            ['recents-toggle', 'recentsExpanded'],
+            ['automation-threads-toggle', 'automationsExpanded', 'decisions-development-no-project-expanded'],
+            ['pinned-section-toggle', 'pinnedSectionCollapsed', 'decisions-development-pinned-section-collapsed'],
+            ['boards-toggle', 'boardsCollapsed', 'decisions-development-boards-collapsed']
+        ];
+        for (const [id, key, storageKey] of sectionStates) {
+            el(id).addEventListener('click', () => {
+                state[key] = !state[key];
+                if (storageKey) {
+                    try { window.localStorage.setItem(storageKey, String(state[key])); } catch (_) { /* Keep this session's preference. */ }
+                }
+                renderSidebar();
+            });
+        }
         el('sidebar-open').addEventListener('click', actions.openSidebar);
         el('sidebar-close').addEventListener('click', actions.closeDrawers);
     }
@@ -1152,7 +1080,7 @@ export function createSidebar({ context, actions, el }) {
         bindBoardEditTabs,
         openRecents() {
             state.recentsExpanded = true;
-            state.showAllRecents = true;
+            state.expandedSections.add('recents');
             renderSidebar();
         },
         revealThread(chat) {
@@ -1165,14 +1093,7 @@ export function createSidebar({ context, actions, el }) {
             state.revealPending = { chatId: Number(chat.id), mode: context.workspaceMode };
             state.peekBoardKeys.delete(board.key);
             state.collapsedBoardKeys.delete(board.key);
-            state.expandedThreadBoards.delete(board.key);
-            state.boardsCollapsed = false;
-            const unpinned = context.boards.filter(row => !state.pinnedBoardKeys.includes(row.key));
-            if (unpinned.findIndex(row => row.key === board.key) >= 6) state.boardsExpanded = true;
             storeCollapsedBoards();
-            try {
-                window.localStorage.setItem('decisions-development-boards-collapsed', 'false');
-            } catch (_) {}
         },
         renderSidebar,
         threadBoard
