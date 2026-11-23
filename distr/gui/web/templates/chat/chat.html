@@ -4,7 +4,7 @@
 {% block title %}Chat{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-20261123-chat-background">
+<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-20261123-config-modal">
 <link rel="stylesheet" href="/static/shared/css/mermaid_viewer.css?v=20261028-responsive">
 {% endblock %}
 
@@ -234,7 +234,6 @@
         </div>
         <div class="modal-body">
             <div id="chatConfigMain" role="tabpanel" aria-labelledby="chatConfigMainTab">
-                <p class="chat-config-note">Changes apply to this chat only. If this chat is loaded, the agent hot-swaps to the new settings.</p>
                 <p class="modal-section-label">LLM</p>
                 <div class="modal-row">
                     <div class="form-group">
@@ -263,7 +262,7 @@
                     <label for="chatConfigAgentName">Custom name</label>
                     <input id="chatConfigAgentName" class="form-control" type="text" maxlength="80" autocomplete="off">
                 </div>
-                <div class="form-group">
+                <div class="form-group chat-config-agent-scope">
                     <label for="chatConfigAgentRole">Agent scope</label>
                     <textarea id="chatConfigAgentRole" class="form-control form-control-textarea" rows="3" maxlength="4000"></textarea>
                 </div>

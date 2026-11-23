@@ -2560,15 +2560,9 @@
     max-width: 720px;
 }
 
-.chat-config-note,
 .chat-config-status {
-    color: rgba(255, 255, 255, 0.62);
     font-size: 13px;
-    margin: 0 0 14px 0;
-}
-
-.chat-config-status {
-    margin-top: 12px;
+    margin: 12px 0 14px;
     color: #f97316;
 }
 
@@ -3175,13 +3169,34 @@ body.group-mode #emptyState, body.group-mode #ttsPlayerCard { display: none !imp
     max-height: calc(100dvh - 32px);
     overflow: hidden;
 }
+#chatConfigModal .chat-config-modal-content:has(.chat-config-tabs:not([hidden])) {
+    height: 560px;
+}
+@media (max-width: 759px) {
+    #chatConfigModal .chat-config-modal-content:has(.chat-config-tabs:not([hidden])) {
+        height: 780px;
+    }
+}
 #chatConfigModal .modal-header,
-#chatConfigModal .modal-footer { flex: 0 0 auto; }
+#chatConfigModal .modal-footer,
+#chatConfigModal .chat-config-tabs { flex: 0 0 auto; }
 #chatConfigModal .modal-body {
+    display: flex;
+    flex-direction: column;
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
+}
+#chatConfigAgent:not([hidden]),
+.chat-config-agent-scope {
+    display: flex;
+    flex: 1 0 auto;
+    flex-direction: column;
+}
+#chatConfigAgentRole {
+    flex: 1 0 auto;
+    resize: none;
 }
 #chatConfigModal .modal-footer {
     position: sticky;

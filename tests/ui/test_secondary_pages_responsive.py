@@ -176,6 +176,7 @@ def test_secondary_pages(secondary_page, width):
         page.locator('#emptyState').evaluate('(node) => node.scrollTo({top: node.scrollHeight, behavior: "instant"})')
         capture(page, 'chat-setup-bottom', width)
     chat = {'id': 1, 'title': 'Review the responsive interface with a long conversation title',
+            'agent_id': 10, 'agent_name': 'Responsive review', 'agent_role': 'Review layouts at each viewport.',
             'provider': 'openai', 'model_name': 'gpt-test', 'voice_provider': 'openai', 'voice_model': 'alloy',
             'messages': [{'role': 'user', 'content': 'Please review the mobile layouts.', 'timestamp': 1793200000},
                          {'role': 'assistant', 'content': 'The tables and editors remain readable across screen sizes.', 'timestamp': 1793200001}]}
@@ -192,7 +193,21 @@ def test_secondary_pages(secondary_page, width):
         assert page.locator('#chatTitle').evaluate('(node) => getComputedStyle(node).textOverflow') == 'ellipsis'
     page.locator('#configureChatButton').click()
     expect(page.locator('#chatConfigModal')).to_be_visible()
+    expect(page.get_by_role('tab', name='Advanced')).to_be_visible()
     capture(page, 'chat-configure', width)
+    config = page.locator('.chat-config-modal-content')
+    footer = config.locator('.modal-footer')
+    main_bounds = config.bounding_box()
+    footer_bounds = footer.bounding_box()
+    page.get_by_role('tab', name='Advanced').click()
+    expect(config.get_by_label('Agent scope')).to_be_visible()
+    assert config.bounding_box() == main_bounds
+    assert footer.bounding_box() == footer_bounds
+    textarea = config.get_by_label('Agent scope').bounding_box()
+    assert footer_bounds['y'] - textarea['y'] - textarea['height'] == pytest.approx(24, abs=1)
+    capture(page, 'chat-configure-advanced', width)
+    page.get_by_role('tab', name='Main').click()
+    assert config.bounding_box() == main_bounds
     page.locator('#chatConfigClose').click()
     page.evaluate("content => renderMessages([{role: 'assistant', content, timestamp: Date.now()}])", '```mermaid\nflowchart TD\n A[Review] --> B[Verify]\n```')
     expect(page.locator('[data-mermaid-open]')).to_be_visible()
