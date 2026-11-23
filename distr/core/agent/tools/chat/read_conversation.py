@@ -10,8 +10,8 @@ from pydantic import BaseModel, Field
 
 
 class ReadConversationInput(BaseModel):
-    agent_name: str = Field(default="", description="Chat agent name, e.g. 'Uncle Roger'.")
-    chat_id: Optional[int] = Field(default=None, description="Chat or Development thread id.")
+    agent_name: str = Field(default="", description="Agent name, e.g. 'Uncle Roger'.")
+    chat_id: Optional[int] = Field(default=None, description="Agent conversation or Development thread ID.")
     title: str = Field(default="", description="Words from the chat title when the id is unknown.")
     limit: int = Field(default=8, ge=1, le=30, description="How many recent exchanges to return.")
 

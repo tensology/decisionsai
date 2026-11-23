@@ -435,7 +435,7 @@ export function createReports({ api, root, escapeHtml, getPinnedProjectIds }) {
             const jobs = [
                 settle(api(HISTORY_RUNS_URL, { signal: request.signal })),
                 settle(api(HISTORY_TIME_URL, { signal: request.signal })),
-                settle(api('/chats?include_archived=true&surface=development', { signal: request.signal })),
+                settle(api('/agent-conversations?include_archived=true&surface=development', { signal: request.signal })),
                 settle(api('/projects', { signal: request.signal }))
             ];
             if (tab === 'costs') {

@@ -22,15 +22,15 @@ class ThreadTargetInput(BaseModel):
 
 
 SELECT_DESCRIPTION = (
-    "Select and highlight a thread in the Decisions web UI left sidebar (Development threads by default, or Chat). "
+    "Select and highlight a thread in the Decisions web UI left sidebar (Development threads by default, or Agents). "
     "Use for 'select the latest thread', 'select my most recent thread', 'select the newest Development thread', "
     "'select the thread about X', 'select thread 1798', 'show me the latest thread'. "
     "Pushes a live event to open web UI tabs; if no tab acknowledges within ~1.5s it opens the thread in the "
     "default browser itself. Result says path=selected or path=opened. View only: never loads the thread into "
-    "the Oracle's live chat."
+    "the Oracle's active conversation."
 )
 OPEN_DESCRIPTION = (
-    "Open a specific Decisions thread page in the default browser (Development threads by default, or Chat). "
+    "Open a specific Decisions thread page in the default browser (Development threads by default, or Agents). "
     "Use when the user says 'open' a thread ('open my most recent thread', 'open thread 1798', 'open the thread about X') "
     "or the web UI is not open. Reuses an already-open tab (selects + focuses) instead of opening a duplicate. "
     "When the web UI is already open and the user says 'select', use select_thread."

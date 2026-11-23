@@ -76,7 +76,7 @@ export function createThreadCliMode({ el, token, getContext, toast, api }) {
             : mode.on
               ? 'Return to chat view'
               : 'Open real Pi CLI in the project folder';
-        btn.setAttribute('aria-label', mode.on ? 'Chat or CLI view: CLI active. Switch to Chat' : 'Chat or CLI view: Chat active. Switch to CLI');
+        btn.setAttribute('aria-label', mode.on ? 'Conversation or CLI view: CLI active. Switch to conversation' : 'Conversation or CLI view: Conversation active. Switch to CLI');
     }
 
     function setComposerVisible(visible) {

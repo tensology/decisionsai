@@ -141,7 +141,7 @@ def _find_test_docs(workspace: dict | None = None) -> list[dict]:
 
 
 def _chats() -> list[dict]:
-    status, payload = _api(f"/workflows/studio/plan-workspaces/{WORKSPACE_ID}/chats")
+    status, payload = _api(f"/workflows/studio/plan-workspaces/{WORKSPACE_ID}/conversations")
     if status != 200:
         raise AssertionError(f"GET chats failed ({status}): {payload}")
     return list((payload or {}).get("chats") or [])
@@ -189,7 +189,7 @@ def _delete_doc(item: dict, events: list[str], page=None) -> None:
 
 
 def _delete_chat(chat_id: int, events: list[str], page=None) -> None:
-    path = f"/workflows/studio/plan-workspaces/{WORKSPACE_ID}/chats/{chat_id}"
+    path = f"/workflows/studio/plan-workspaces/{WORKSPACE_ID}/conversations/{chat_id}"
     if page is not None:
         result = _page_fetch(page, path, method="DELETE")
         status, payload = result.get("status"), result.get("payload")
@@ -468,7 +468,7 @@ def _run_journey() -> dict:
                     raise AssertionError("New planning chat was not created")
                 # Title the chat so teardown can find it if the id is lost
                 _api(
-                    f"/workflows/studio/plan-workspaces/{WORKSPACE_ID}/chats/{chat_id}",
+                    f"/workflows/studio/plan-workspaces/{WORKSPACE_ID}/conversations/{chat_id}",
                     method="PATCH",
                     data={"title": TITLE, "expected_revision": created[-1].get("revision")},
                 )

@@ -17,39 +17,39 @@ def create_routes(base_path: str = "") -> APIRouter:
         """Return the full API endpoint catalogue for the docs UI."""
         base = "http://127.0.0.1:8765"
         endpoints = [
-            # ── Chats ──────────────────────────────────────────────
+            # ── Agents ──────────────────────────────────────────────
             {
-                "section": "Chats",
+                "section": "Agents",
                 "endpoints": [
                     {
                         "method": "GET",
-                        "path": "/api/chats",
-                        "summary": "List all chats",
-                        "description": "Returns all root-level chat conversations, ordered by most recently modified. Also returns last_chat_id and agent_current_chat_id from settings.",
-                        "curl": f'curl -s {base}/api/chats',
+                        "path": "/api/agent-conversations",
+                        "summary": "List agent conversations",
+                        "description": "Returns all root-level agent conversations, ordered by most recently modified. Also returns last_chat_id and agent_current_chat_id from settings.",
+                        "curl": f'curl -s {base}/api/agent-conversations',
                         "body": None,
-                        "response_example": '{"chats": [{"id": 1, "title": "New Chat", "provider": "Ollama", "model_name": "ornith:9b"}], "last_chat_id": 1, "agent_current_chat_id": 1}',
+                        "response_example": '{"chats": [{"id": 1, "title": "New conversation", "provider": "Ollama", "model_name": "ornith:9b"}], "last_chat_id": 1, "agent_current_chat_id": 1}',
                     },
                     {
                         "method": "GET",
-                        "path": "/api/chats/{chat_id}",
-                        "summary": "Get chat with messages",
-                        "description": "Returns a specific chat including its full message history (recursive thread), provider, model, and voice settings.",
-                        "curl": f'curl -s {base}/api/chats/1',
+                        "path": "/api/agent-conversations/{chat_id}",
+                        "summary": "Get agent conversation with messages",
+                        "description": "Returns an agent conversation including its full message history (recursive thread), provider, model, and voice settings.",
+                        "curl": f'curl -s {base}/api/agent-conversations/1',
                         "body": None,
-                        "params": [{"name": "chat_id", "type": "int", "required": True, "description": "Chat ID"}],
-                        "response_example": '{"id": 1, "title": "New Chat", "messages": [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi!"}], "provider": "Ollama", "model_name": "ornith:9b"}',
+                        "params": [{"name": "chat_id", "type": "int", "required": True, "description": "Agent conversation ID"}],
+                        "response_example": '{"id": 1, "title": "New conversation", "messages": [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi!"}], "provider": "Ollama", "model_name": "ornith:9b"}',
                     },
                     {
                         "method": "POST",
-                        "path": "/api/chats",
-                        "summary": "Create a new chat",
-                        "description": "Creates a new chat conversation. Optionally specify provider, model, voice, title, and a starting question. If starting_question is provided, it will be sent to the agent immediately.",
-                        "curl": f"""curl -s -X POST {base}/api/chats \\
+                        "path": "/api/agent-conversations",
+                        "summary": "Start an agent conversation",
+                        "description": "Starts an agent conversation. Optionally specify provider, model, voice, title, and a starting question. If starting_question is provided, it will be sent to the agent immediately.",
+                        "curl": f"""curl -s -X POST {base}/api/agent-conversations \\
   -H 'Content-Type: application/json' \\
-  -d '{{"provider": "ollama", "model_name": "ornith:9b", "title": "My Chat", "starting_question": "Hello!"}}'""",
+  -d '{{"provider": "ollama", "model_name": "ornith:9b", "title": "My conversation", "starting_question": "Hello!"}}'""",
                         "body": {
-                            "title": {"type": "string", "required": False, "description": "Chat title (auto-generated from question if omitted)"},
+                            "title": {"type": "string", "required": False, "description": "Conversation title (auto-generated from question if omitted)"},
                             "provider": {"type": "string", "required": False, "description": "LLM provider: ollama, openai, anthropic, groq, openrouter, kilocode, gemini, nvidia"},
                             "model_name": {"type": "string", "required": False, "description": "Model name (e.g. ornith:9b, gpt-4o)"},
                             "voice_provider": {"type": "string", "required": False, "description": "TTS provider: kokoro, openai, elevenlabs, f5tts"},
@@ -57,16 +57,16 @@ def create_routes(base_path: str = "") -> APIRouter:
                             "starting_question": {"type": "string", "required": False, "description": "First message to send to the agent"},
                             "speak": {"type": "boolean", "required": False, "description": "Whether agent should speak the reply (default: true)"},
                         },
-                        "response_example": '{"id": 5, "title": "My Chat", "provider": "Ollama", "model_name": "ornith:9b", "message": "Chat created successfully"}',
+                        "response_example": '{"id": 5, "title": "My conversation", "provider": "Ollama", "model_name": "ornith:9b", "message": "Conversation created successfully"}',
                     },
                     {
                         "method": "PATCH",
-                        "path": "/api/chats/{chat_id}",
-                        "summary": "Update a chat",
-                        "description": "Update chat title, provider, model, or voice settings. Only provided fields are updated.",
-                        "curl": f"""curl -s -X PATCH {base}/api/chats/1 \\
+                        "path": "/api/agent-conversations/{chat_id}",
+                        "summary": "Update an agent conversation",
+                        "description": "Update agent conversation title, provider, model, or voice settings. Only provided fields are updated.",
+                        "curl": f"""curl -s -X PATCH {base}/api/agent-conversations/1 \\
   -H 'Content-Type: application/json' \\
-  -d '{{"title": "Renamed Chat"}}'""",
+  -d '{{"title": "Renamed conversation"}}'""",
                         "body": {
                             "title": {"type": "string", "required": False, "description": "New title"},
                             "provider": {"type": "string", "required": False, "description": "New LLM provider"},
@@ -74,35 +74,35 @@ def create_routes(base_path: str = "") -> APIRouter:
                             "voice_provider": {"type": "string", "required": False, "description": "New voice provider"},
                             "voice_model": {"type": "string", "required": False, "description": "New voice model"},
                         },
-                        "params": [{"name": "chat_id", "type": "int", "required": True, "description": "Chat ID"}],
-                        "response_example": '{"id": 1, "title": "Renamed Chat", "message": "Chat updated"}',
+                        "params": [{"name": "chat_id", "type": "int", "required": True, "description": "Agent conversation ID"}],
+                        "response_example": '{"id": 1, "title": "Renamed conversation", "message": "Conversation updated"}',
                     },
                     {
                         "method": "DELETE",
-                        "path": "/api/chats/{chat_id}",
-                        "summary": "Delete a chat",
-                        "description": "Permanently deletes a chat and all its child messages.",
-                        "curl": f'curl -s -X DELETE {base}/api/chats/1',
-                        "params": [{"name": "chat_id", "type": "int", "required": True, "description": "Chat ID"}],
+                        "path": "/api/agent-conversations/{chat_id}",
+                        "summary": "Delete an agent conversation",
+                        "description": "Permanently deletes a conversation and all its child messages.",
+                        "curl": f'curl -s -X DELETE {base}/api/agent-conversations/1',
+                        "params": [{"name": "chat_id", "type": "int", "required": True, "description": "Agent conversation ID"}],
                         "body": None,
-                        "response_example": '{"message": "Chat deleted successfully"}',
+                        "response_example": '{"message": "Conversation deleted successfully"}',
                     },
                     {
                         "method": "POST",
-                        "path": "/api/chats/{chat_id}/load-in-agent",
-                        "summary": "Load chat into agent",
-                        "description": "Sets this chat as the active chat in the agent. The agent will hot-swap to this chat's provider/model/voice. You MUST load a chat before sending messages to it.",
-                        "curl": f'curl -s -X POST {base}/api/chats/1/load-in-agent',
-                        "params": [{"name": "chat_id", "type": "int", "required": True, "description": "Chat ID"}],
+                        "path": "/api/agent-conversations/{chat_id}/load-in-agent",
+                        "summary": "Load an agent conversation",
+                        "description": "Makes this the active agent conversation and applies its model and voice. Load it before sending a message.",
+                        "curl": f'curl -s -X POST {base}/api/agent-conversations/1/load-in-agent',
+                        "params": [{"name": "chat_id", "type": "int", "required": True, "description": "Agent conversation ID"}],
                         "body": None,
                         "response_example": '{"loaded": true}',
                     },
                     {
                         "method": "POST",
-                        "path": "/api/chats/{chat_id}/send-to-agent",
+                        "path": "/api/agent-conversations/{chat_id}/send-to-agent",
                         "summary": "Send message to agent",
-                        "description": "Sends a message to the agent for LLM processing. The chat MUST be loaded first (via load-in-agent). The agent will generate a response, optionally execute tools, and stream the result back.",
-                        "curl": f"""curl -s -X POST {base}/api/chats/1/send-to-agent \\
+                        "description": "Sends a message to the agent for LLM processing. Load the conversation first with load-in-agent. The agent will generate a response, optionally execute tools, and stream the result back.",
+                        "curl": f"""curl -s -X POST {base}/api/agent-conversations/1/send-to-agent \\
   -H 'Content-Type: application/json' \\
   -d '{{"message": "What time is it?", "speak": false}}'""",
                         "body": {
@@ -111,7 +111,7 @@ def create_routes(base_path: str = "") -> APIRouter:
                             "provider": {"type": "string", "required": False, "description": "Override LLM provider for this message"},
                             "model_name": {"type": "string", "required": False, "description": "Override model for this message"},
                         },
-                        "params": [{"name": "chat_id", "type": "int", "required": True, "description": "Chat ID (must be loaded first)"}],
+                        "params": [{"name": "chat_id", "type": "int", "required": True, "description": "Agent conversation ID (must be loaded first)"}],
                         "response_example": '{"sent": true}',
                     },
                 ],
@@ -379,7 +379,7 @@ def create_routes(base_path: str = "") -> APIRouter:
   -d '{{"instruction": "Deploy the app to production", "chat_id": null}}'""",
                         "body": {
                             "instruction": {"type": "string", "required": True, "description": "Instruction to break into steps"},
-                            "chat_id": {"type": "int", "required": False, "description": "Optional chat ID to link"},
+                            "chat_id": {"type": "int", "required": False, "description": "Optional conversation ID to link"},
                         },
                         "response_example": '{"id": 3, "name": "Deploy the app to production", "context_rules": "", "steps": [...]}',
                     },
@@ -760,7 +760,7 @@ def create_routes(base_path: str = "") -> APIRouter:
                 "section": "Models & LLMs",
                 "endpoints": [
                     {"method": "GET", "path": "/api/models", "summary": "Get default LLM model", "description": "Returns the default conversational LLM provider and model from settings.", "curl": f'curl -s {base}/api/models', "body": None, "response_example": '{"provider": "Ollama", "model": "ornith:9b"}'},
-                    {"method": "GET", "path": "/api/chats/agent-setup", "summary": "Get current agent setup", "description": "Returns the current agent configuration (model + voice) from settings.", "curl": f'curl -s {base}/api/chats/agent-setup', "body": None, "response_example": '{"provider": "Ollama", "model_name": "ornith:9b", "voice_provider": "Kokoro", "voice_model": "Heart"}'},
+                    {"method": "GET", "path": "/api/agent-conversations/agent-setup", "summary": "Get current agent setup", "description": "Returns the current agent configuration (model + voice) from settings.", "curl": f'curl -s {base}/api/agent-conversations/agent-setup', "body": None, "response_example": '{"provider": "Ollama", "model_name": "ornith:9b", "voice_provider": "Kokoro", "voice_model": "Heart"}'},
                     {"method": "GET", "path": "/api/llms", "summary": "Get LLM settings", "description": "Returns the current LLM provider, model, and related configuration.", "curl": f'curl -s {base}/api/llms', "body": None, "response_example": '{"provider": "Ollama", "model_name": "ornith:9b", "ollama_url": "http://localhost:11434/"}'},
                     {"method": "POST", "path": "/api/llms", "summary": "Save LLM settings", "description": "Update the default LLM provider and model. Triggers agent reload.", "curl": f"curl -s -X POST {base}/api/llms -H 'Content-Type: application/json' -d '{{\"provider\": \"Ollama\", \"model_name\": \"ornith:9b\"}}'", "body": {"provider": {"type": "string", "required": True, "description": "LLM provider: Ollama, OpenAI, Anthropic, Groq, OpenRouter, KiloCode, Google Gemini"}, "model_name": {"type": "string", "required": True, "description": "Model name (e.g. ornith:9b, gpt-4o)"}}, "response_example": '{"success": true, "message": "LLM settings saved"}'},
                     {"method": "GET", "path": "/api/llms/models", "summary": "List available models for a provider", "description": "Returns models available for the given provider. For Ollama, queries the local server.", "curl": f'curl -s "{base}/api/llms/models?provider=Ollama"', "params": [{"name": "provider", "type": "string", "required": True, "description": "Provider name"}], "body": None, "response_example": '{"models": [{"name": "ornith:9b", "size": "6 GB"}]}'},
@@ -843,27 +843,27 @@ def create_routes(base_path: str = "") -> APIRouter:
             {
                 "section": "Programmatic API",
                 "endpoints": [
-                    {"method": "GET", "path": "/api/chats/current", "summary": "Current Oracle chat", "description": "The chat the Oracle is on. Change it with POST /api/chats/{chat_id}/load-in-agent.", "curl": f'curl -s {base}/api/chats/current', "body": None, "response_example": '{"chat_id": 1652, "chat": {"id": 1652, "title": "..."}}'},
-                    {"method": "POST", "path": "/api/chats/{chat_id}/send-to-agent", "summary": "Send text to the Oracle and (optionally) wait for the reply", "description": "Text message, not speech inject. ?wait=true&timeout=N (max 300 s) blocks until the turn finishes and returns turn_status.assistant_text. Without wait it returns at once with after_row_id (turn_id may be null until the agent persists the row; poll GET /api/chats/{chat_id}/turns?after_row_id=N).", "curl": f"curl -s -X POST '{base}/api/chats/1/send-to-agent?wait=true&timeout=120' -H \"X-DecisionsAI-Internal-Token: $TOKEN\" -H 'Content-Type: application/json' -d '{{\"message\": \"Hello\", \"speak\": false}}'", "body": {"message": {"type": "string", "required": True, "description": "Text"}, "speak": {"type": "bool", "required": False, "description": "Speak the reply (default true)"}}, "response_example": '{"sent": true, "turn_id": 1700, "turn_status": {"status": "completed", "assistant_text": "Hi!"}}'},
+                    {"method": "GET", "path": "/api/agent-conversations/current", "summary": "Current agent conversation", "description": "The conversation the active agent is using. Change it with POST /api/agent-conversations/{chat_id}/load-in-agent.", "curl": f'curl -s {base}/api/agent-conversations/current', "body": None, "response_example": '{"chat_id": 1652, "chat": {"id": 1652, "title": "..."}}'},
+                    {"method": "POST", "path": "/api/agent-conversations/{chat_id}/send-to-agent", "summary": "Send text to the Oracle and (optionally) wait for the reply", "description": "Text message, not speech inject. ?wait=true&timeout=N (max 300 s) blocks until the turn finishes and returns turn_status.assistant_text. Without wait it returns at once with after_row_id (turn_id may be null until the agent persists the row; poll GET /api/agent-conversations/{chat_id}/turns?after_row_id=N).", "curl": f"curl -s -X POST '{base}/api/agent-conversations/1/send-to-agent?wait=true&timeout=120' -H \"X-DecisionsAI-Internal-Token: $TOKEN\" -H 'Content-Type: application/json' -d '{{\"message\": \"Hello\", \"speak\": false}}'", "body": {"message": {"type": "string", "required": True, "description": "Text"}, "speak": {"type": "bool", "required": False, "description": "Speak the reply (default true)"}}, "response_example": '{"sent": true, "turn_id": 1700, "turn_status": {"status": "completed", "assistant_text": "Hi!"}}'},
                     {"method": "POST", "path": "/api/workflows/studio/tasks/{chat_id}/messages", "summary": "Send to a Development thread", "description": "Returns turn_id; ?wait=true&timeout=N (max 300 s) waits for the harness reply.", "curl": f"curl -s -X POST '{base}/api/workflows/studio/tasks/1/messages?wait=true' -H \"X-DecisionsAI-Internal-Token: $TOKEN\" -H 'Content-Type: application/json' -d '{{\"message\": \"Fix the bug\"}}'", "body": {"message": {"type": "string", "required": True, "description": "Instruction"}, "skill_ids": {"type": "list", "required": False, "description": "Skills to apply"}}, "response_example": '{"started": true, "turn_id": 1701, "turn_status": {"status": "running"}}'},
-                    {"method": "GET", "path": "/api/chats/{chat_id}/turns", "summary": "List turns", "description": "Turn summaries (status, assistant_text, timestamps); after_row_id filters to newer turns.", "curl": f'curl -s {base}/api/chats/1/turns?after_row_id=1699', "body": None, "response_example": '{"chat_id": 1, "turns": [...]}'},
-                    {"method": "GET", "path": "/api/chats/{chat_id}/turns/{turn_id}", "summary": "Get one turn", "description": "status (pending/running/completed/failed/cancelled), assistant_text, error, created/started/updated/completed timestamps. ?wait=true&timeout=N long-polls.", "curl": f'curl -s {base}/api/chats/1/turns/1700?wait=true&timeout=60', "body": None, "response_example": '{"turn_id": 1700, "status": "completed", "assistant_text": "Hi!", "done": true}'},
-                    {"method": "GET", "path": "/api/chats/{chat_id}/messages", "summary": "List history rows", "description": "Every row (input + response) in transcript order.", "curl": f'curl -s {base}/api/chats/1/messages', "body": None, "response_example": '{"messages": [{"message_id": 1700, "input": "Hello", "response": "Hi!"}]}'},
-                    {"method": "GET", "path": "/api/chats/{chat_id}/messages/{message_id}", "summary": "Get one history row", "description": "", "curl": f'curl -s {base}/api/chats/1/messages/1700', "body": None, "response_example": '{"message_id": 1700, "input": "Hello", "response": "Hi!"}'},
-                    {"method": "PATCH", "path": "/api/chats/{chat_id}/messages/{message_id}", "summary": "Edit a history row", "description": "input/response/is_hidden. 409 while that turn is running. Reloads Oracle history when it is the current chat; emits chat_updated.", "curl": f"curl -s -X PATCH {base}/api/chats/1/messages/1700 -H \"X-DecisionsAI-Internal-Token: $TOKEN\" -H 'Content-Type: application/json' -d '{{\"response\": \"Edited\"}}'", "body": {"input": {"type": "string", "required": False, "description": ""}, "response": {"type": "string", "required": False, "description": ""}, "is_hidden": {"type": "bool", "required": False, "description": ""}}, "response_example": '{"message_id": 1700, "oracle_reloaded": true}'},
-                    {"method": "DELETE", "path": "/api/chats/{chat_id}/messages/{message_id}", "summary": "Delete a history row", "description": "Root row cannot be deleted (use DELETE /api/chats/{chat_id}).", "curl": f"curl -s -X DELETE {base}/api/chats/1/messages/1700 -H \"X-DecisionsAI-Internal-Token: $TOKEN\"", "body": None, "response_example": '{"deleted": 1}'},
-                    {"method": "POST", "path": "/api/chats/{chat_id}/messages/{message_id}/truncate-after", "summary": "Delete everything after a row", "description": "Keeps message_id itself.", "curl": f"curl -s -X POST {base}/api/chats/1/messages/1700/truncate-after -H \"X-DecisionsAI-Internal-Token: $TOKEN\"", "body": None, "response_example": '{"deleted": 3}'},
+                    {"method": "GET", "path": "/api/agent-conversations/{chat_id}/turns", "summary": "List turns", "description": "Turn summaries (status, assistant_text, timestamps); after_row_id filters to newer turns.", "curl": f'curl -s {base}/api/agent-conversations/1/turns?after_row_id=1699', "body": None, "response_example": '{"chat_id": 1, "turns": [...]}'},
+                    {"method": "GET", "path": "/api/agent-conversations/{chat_id}/turns/{turn_id}", "summary": "Get one turn", "description": "status (pending/running/completed/failed/cancelled), assistant_text, error, created/started/updated/completed timestamps. ?wait=true&timeout=N long-polls.", "curl": f'curl -s {base}/api/agent-conversations/1/turns/1700?wait=true&timeout=60', "body": None, "response_example": '{"turn_id": 1700, "status": "completed", "assistant_text": "Hi!", "done": true}'},
+                    {"method": "GET", "path": "/api/agent-conversations/{chat_id}/messages", "summary": "List history rows", "description": "Every row (input + response) in transcript order.", "curl": f'curl -s {base}/api/agent-conversations/1/messages', "body": None, "response_example": '{"messages": [{"message_id": 1700, "input": "Hello", "response": "Hi!"}]}'},
+                    {"method": "GET", "path": "/api/agent-conversations/{chat_id}/messages/{message_id}", "summary": "Get one history row", "description": "", "curl": f'curl -s {base}/api/agent-conversations/1/messages/1700', "body": None, "response_example": '{"message_id": 1700, "input": "Hello", "response": "Hi!"}'},
+                    {"method": "PATCH", "path": "/api/agent-conversations/{chat_id}/messages/{message_id}", "summary": "Edit a history row", "description": "input/response/is_hidden. 409 while that turn is running. Reloads Oracle history when it is the active agent conversation; emits chat_updated.", "curl": f"curl -s -X PATCH {base}/api/agent-conversations/1/messages/1700 -H \"X-DecisionsAI-Internal-Token: $TOKEN\" -H 'Content-Type: application/json' -d '{{\"response\": \"Edited\"}}'", "body": {"input": {"type": "string", "required": False, "description": ""}, "response": {"type": "string", "required": False, "description": ""}, "is_hidden": {"type": "bool", "required": False, "description": ""}}, "response_example": '{"message_id": 1700, "oracle_reloaded": true}'},
+                    {"method": "DELETE", "path": "/api/agent-conversations/{chat_id}/messages/{message_id}", "summary": "Delete a history row", "description": "Root row cannot be deleted (use DELETE /api/agent-conversations/{chat_id}).", "curl": f"curl -s -X DELETE {base}/api/agent-conversations/1/messages/1700 -H \"X-DecisionsAI-Internal-Token: $TOKEN\"", "body": None, "response_example": '{"deleted": 1}'},
+                    {"method": "POST", "path": "/api/agent-conversations/{chat_id}/messages/{message_id}/truncate-after", "summary": "Delete everything after a row", "description": "Keeps message_id itself.", "curl": f"curl -s -X POST {base}/api/agent-conversations/1/messages/1700/truncate-after -H \"X-DecisionsAI-Internal-Token: $TOKEN\"", "body": None, "response_example": '{"deleted": 3}'},
                     {"method": "GET", "path": "/api/settings", "summary": "All settings sections", "description": "general, audio, llms, advanced, initiative, shortcuts, thirdparty, mcp. Secrets always masked.", "curl": f'curl -s {base}/api/settings', "body": None, "response_example": '{"sections": {"general": {...}}, "secrets_masked": true}'},
                     {"method": "GET", "path": "/api/settings/schema", "summary": "Settings schema", "description": "Writable keys + JSON schema per section.", "curl": f'curl -s {base}/api/settings/schema', "body": None, "response_example": '{"sections": {"audio": {"writable": true, "keys": [...]}}}'},
                     {"method": "PATCH", "path": "/api/settings/{section}", "summary": "Patch one settings section", "description": "Only keys in the section model; merged with current values and saved through the section's own POST route (same side effects). thirdparty and mcp are read-only here.", "curl": f"curl -s -X PATCH {base}/api/settings/audio -H \"X-DecisionsAI-Internal-Token: $TOKEN\" -H 'Content-Type: application/json' -d '{{\"remember_audio_settings\": true}}'", "body": None, "response_example": '{"success": true, "updated_keys": ["remember_audio_settings"]}'},
-                    {"method": "POST", "path": "/api/skills/{skill_id}/invoke", "summary": "Invoke a skill in a Development thread", "description": "Sends a Development-thread message with skill_ids=[skill_id]; supports ?wait=true. Oracle chats are rejected (no skill execution path).", "curl": f"curl -s -X POST {base}/api/skills/decisions-playwright/invoke -H \"X-DecisionsAI-Internal-Token: $TOKEN\" -H 'Content-Type: application/json' -d '{{\"chat_id\": 1, \"message\": \"Check example.com\"}}'", "body": {"chat_id": {"type": "int", "required": True, "description": "Development thread id"}, "message": {"type": "string", "required": False, "description": ""}}, "response_example": '{"started": true, "turn_id": 1702}'},
+                    {"method": "POST", "path": "/api/skills/{skill_id}/invoke", "summary": "Invoke a skill in a Development thread", "description": "Sends a Development-thread message with skill_ids=[skill_id]; supports ?wait=true. Only Development threads are accepted (no skill execution path).", "curl": f"curl -s -X POST {base}/api/skills/decisions-playwright/invoke -H \"X-DecisionsAI-Internal-Token: $TOKEN\" -H 'Content-Type: application/json' -d '{{\"chat_id\": 1, \"message\": \"Check example.com\"}}'", "body": {"chat_id": {"type": "int", "required": True, "description": "Development thread id"}, "message": {"type": "string", "required": False, "description": ""}}, "response_example": '{"started": true, "turn_id": 1702}'},
                 ],
             },
             # ── System ─────────────────────────────────────────
             {
                 "section": "System",
                 "endpoints": [
-                    {"method": "GET", "path": "/health", "summary": "Health check", "description": "Returns server health status.", "curl": f'curl -s {base}/health', "body": None, "response_example": '{"status": "ok", "services": ["flow", "board", "settings", "chat"]}'},
+                    {"method": "GET", "path": "/health", "summary": "Health check", "description": "Returns server health status.", "curl": f'curl -s {base}/health', "body": None, "response_example": '{"status": "ok", "services": ["flow", "board", "settings", "agents"]}'},
                     {"method": "GET", "path": "/api/logs", "summary": "Get application logs", "description": "Returns recent application log entries for debugging.", "curl": f'curl -s {base}/api/logs', "body": None, "response_example": '{"logs": "2025-03-24 10:00:00 INFO Agent started..."}'},
                 ],
             },

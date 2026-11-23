@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import signal
 import sys
@@ -7,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from distr.core import process_tracker
+from distr.core import process_tracker, runtime_lifecycle
 
 
 def test_close_multiprocessing_resources_closes_queues_and_managers():
@@ -41,6 +42,7 @@ def test_run_multiprocessing_finalizers_invokes_registry(monkeypatch):
 
 def test_signal_handler_routes_through_application_shutdown(monkeypatch):
     calls: list[str] = []
+    monkeypatch.setattr(process_tracker, "_record_signal_exit_intent", calls.append)
     monkeypatch.setattr(process_tracker, "_shutdown_callback", lambda: calls.append("quit"))
     monkeypatch.setattr(
         process_tracker,
@@ -50,11 +52,12 @@ def test_signal_handler_routes_through_application_shutdown(monkeypatch):
 
     process_tracker._signal_handler(signal.SIGTERM, None)
 
-    assert calls == ["quit"]
+    assert calls == [signal.SIGTERM, "quit"]
 
 
 def test_signal_handler_fallback_cleans_up_without_keyboard_interrupt(monkeypatch, tmp_path):
     calls: list[str] = []
+    monkeypatch.setattr(process_tracker, "_record_signal_exit_intent", lambda signum: None)
     monkeypatch.setattr(process_tracker, "_shutdown_callback", None)
     monkeypatch.setattr(process_tracker, "kill_tracked_pids", lambda: calls.append("cleanup"))
     monkeypatch.setattr(process_tracker, "_get_pid_file", lambda: str(tmp_path / "missing"))
@@ -64,6 +67,32 @@ def test_signal_handler_fallback_cleans_up_without_keyboard_interrupt(monkeypatc
 
     assert exc_info.value.code == 128 + signal.SIGTERM
     assert calls == ["cleanup"]
+
+
+def test_record_signal_exit_intent_preserves_existing_restart(monkeypatch, tmp_path):
+    lifecycle_log = tmp_path / "runtime_lifecycle.jsonl"
+    monkeypatch.setattr(runtime_lifecycle, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(runtime_lifecycle, "RUN_DIR", tmp_path)
+    monkeypatch.setattr(runtime_lifecycle, "EXIT_INTENT", tmp_path / "exit_intent.json")
+    monkeypatch.setattr(runtime_lifecycle, "LIFECYCLE_LOG", lifecycle_log)
+
+    process_tracker._record_signal_exit_intent(signal.SIGTERM)
+
+    intent = runtime_lifecycle.read_exit_intent()
+    assert intent["reason"] == "signal"
+    assert intent["source"] == "process_tracker.SIGTERM"
+    assert intent["expected_restart"] is False
+    assert intent["signum"] == signal.SIGTERM
+
+    runtime_lifecycle.write_exit_intent("restart_app", source="test", expected_restart=True)
+    restart_intent = runtime_lifecycle.read_exit_intent()
+    process_tracker._record_signal_exit_intent(signal.SIGTERM)
+
+    assert runtime_lifecycle.read_exit_intent() == restart_intent
+    event = json.loads(lifecycle_log.read_text(encoding="utf-8").splitlines()[-1])
+    assert event["event"] == "signal_received"
+    assert event["source"] == "process_tracker.signal"
+    assert event["signum"] == signal.SIGTERM
 
 
 def test_rogue_sweep_catches_frozen_multiprocessing_helpers(monkeypatch):

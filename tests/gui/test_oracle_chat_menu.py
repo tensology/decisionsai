@@ -26,12 +26,12 @@ from distr.gui.oracle.menu import (
 
 def test_format_chat_short_hash_active_chat() -> None:
     chat_id = 42
-    expected = f"Chat: #{hashlib.md5(str(chat_id).encode()).hexdigest()[:6]}"
+    expected = f"Agent: #{hashlib.md5(str(chat_id).encode()).hexdigest()[:6]}"
     assert format_chat_short_hash(chat_id) == expected
 
 
 def test_format_chat_short_hash_no_chat() -> None:
-    assert format_chat_short_hash(None) == "No active chat"
+    assert format_chat_short_hash(None) == "No active agent"
 
 
 def test_chat_submenu_orders_manage_before_new_chat() -> None:
@@ -40,8 +40,8 @@ def test_chat_submenu_orders_manage_before_new_chat() -> None:
     from distr.gui.oracle.menu import MenuTrayMixin
 
     source = inspect.getsource(MenuTrayMixin.create_menu)
-    manage_idx = source.index('QAction("Manage Chats"')
-    new_chat_idx = source.index('QAction("New Chat"')
+    manage_idx = source.index('QAction("Manage Agents"')
+    new_chat_idx = source.index('QAction("New agent conversation"')
     chat_id_idx = source.index("self.chat_id_menu_item")
     assert manage_idx < new_chat_idx < chat_id_idx
 
@@ -52,7 +52,7 @@ def test_new_chat_action_opens_the_chat_surface() -> None:
     from distr.gui.oracle.window import OracleWindow
 
     source = inspect.getsource(OracleWindow.handle_new_chat)
-    assert 'self._open_web_url(f"/chat/?id={int(new_chat_id)}")' in source
+    assert 'self._open_web_url(f"/agents/?id={int(new_chat_id)}")' in source
     assert "/development/threads/" not in source
 
 
@@ -129,7 +129,7 @@ def test_system_tray_runtime_hierarchy_matches_finished_menu(monkeypatch) -> Non
         "Listening",
         "Hands-Free Mode: OFF",
         "Stop Dictating",
-        "Chat",
+        "Agents",
         "Development",
         "Actions",
         "Snippets",
@@ -332,8 +332,8 @@ def test_format_menu_title_long() -> None:
 
 
 def test_format_menu_title_empty_fallback() -> None:
-    assert format_menu_title("") == "New Chat"
-    assert format_menu_title("   ") == "New Chat"
+    assert format_menu_title("") == "New conversation"
+    assert format_menu_title("   ") == "New conversation"
 
 
 def test_skin_display_name_unchanged() -> None:

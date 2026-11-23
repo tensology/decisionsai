@@ -8,7 +8,8 @@ logger = logging.getLogger(__name__)
 
 
 def register_routes(router, templates):
-    @router.post("/chats/{chat_id}/acknowledge-ready")
+    @router.post("/chats/{chat_id}/acknowledge-ready", include_in_schema=False)
+    @router.post("/agent-conversations/{chat_id}/acknowledge-ready", summary="Acknowledge a ready Development thread")
     async def acknowledge_ready(chat_id: int):
         from distr.core.workflow.thread_ready_ack import acknowledge_ready_thread
 

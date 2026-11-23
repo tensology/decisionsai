@@ -175,7 +175,8 @@ def register_routes(router, templates):
             session.commit()
             return JSONResponse({"success": True})
 
-    @router.put("/last-chat-id")
+    @router.put("/last-chat-id", include_in_schema=False)
+    @router.put("/last-agent-conversation", summary="Remember the last viewed agent conversation")
     @route_handler("save last_chat_id")
     async def set_last_chat_id(body: LastChatIdUpdate):
         """Persist the viewed chat ID so refresh can restore the open thread.

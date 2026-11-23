@@ -4,13 +4,13 @@ Every route in this module requires the internal token (header
 ``X-DecisionsAI-Internal-Token`` or ``?internal_token=``), including GETs, the
 same check ``/api/thirdparty`` uses.
 
-* ``GET  /api/chat/replies/{reply_id}?wait=<sec>`` reply status + content (long-poll, cap 60 s)
-* ``GET  /api/chat/current`` / ``PUT /api/chat/current {"chat_id": N}``
+* ``GET  /api/agent-conversation-audit/replies/{reply_id}?wait=<sec>`` reply status + content (long-poll, cap 60 s)
+* ``GET  /api/agent-conversation-audit/current`` / ``PUT /api/agent-conversation-audit/current {"chat_id": N}``
 * ``POST /api/skills/{skill_id}/run`` one-shot skill run, returns a ``reply_id``
 * ``GET  /api/settings/all`` every settings section, secrets masked
-* ``GET|PATCH|DELETE /api/chat/{chat_id}/messages/{message_id}`` and
-  ``POST /api/chat/{chat_id}/messages/{message_id}/truncate-after?confirm=true``
-  (aliases of the ``/api/chats/...`` routes in ``api_extensions``)
+* ``GET|PATCH|DELETE /api/agent-conversation-audit/{chat_id}/messages/{message_id}`` and
+  ``POST /api/agent-conversation-audit/{chat_id}/messages/{message_id}/truncate-after?confirm=true``
+  (aliases of the ``/api/agent-conversations/...`` routes in ``api_extensions``)
 
 ``reply_id`` format: ``"<chat_id>.<after_row_id>.<sha8>"``. It is stateless (no
 registry, survives restarts): the reply is the first thread row newer than
@@ -208,7 +208,8 @@ def create_router() -> APIRouter:
     router = APIRouter(dependencies=[Depends(require_token)])
 
     # ---- 1. replies --------------------------------------------------------
-    @router.get("/chat/replies/{reply_id}")
+    @router.get("/chat/replies/{reply_id}", include_in_schema=False)
+    @router.get("/agent-conversation-audit/replies/{reply_id}", summary="Get reply")
     async def get_reply(reply_id: str, wait: float = 0.0):
         """Status (+ content once done). ``?wait=N`` long-polls up to N s (cap 60)."""
         return JSONResponse(await wait_for_reply(reply_id, wait))
@@ -224,39 +225,45 @@ def create_router() -> APIRouter:
             data = {"detail": resp.text}
         return JSONResponse(data, status_code=resp.status_code)
 
-    @router.get("/chat/{chat_id}/messages/{message_id}")
+    @router.get("/chat/{chat_id}/messages/{message_id}", include_in_schema=False)
+    @router.get("/agent-conversation-audit/{chat_id}/messages/{message_id}", summary="Alias get message")
     async def alias_get_message(chat_id: int, message_id: int, request: Request):
-        return await _proxy(request, "GET", f"/api/chats/{chat_id}/messages/{message_id}")
+        return await _proxy(request, "GET", f"/api/agent-conversations/{chat_id}/messages/{message_id}")
 
-    @router.patch("/chat/{chat_id}/messages/{message_id}")
+    @router.patch("/chat/{chat_id}/messages/{message_id}", include_in_schema=False)
+    @router.patch("/agent-conversation-audit/{chat_id}/messages/{message_id}", summary="Alias patch message")
     async def alias_patch_message(chat_id: int, message_id: int, request: Request):
         try:
             body = await request.json()
         except Exception:
             raise HTTPException(status_code=400, detail="Body must be JSON")
-        return await _proxy(request, "PATCH", f"/api/chats/{chat_id}/messages/{message_id}", body)
+        return await _proxy(request, "PATCH", f"/api/agent-conversations/{chat_id}/messages/{message_id}", body)
 
-    @router.delete("/chat/{chat_id}/messages/{message_id}")
+    @router.delete("/chat/{chat_id}/messages/{message_id}", include_in_schema=False)
+    @router.delete("/agent-conversation-audit/{chat_id}/messages/{message_id}", summary="Alias delete message")
     async def alias_delete_message(chat_id: int, message_id: int, request: Request):
-        return await _proxy(request, "DELETE", f"/api/chats/{chat_id}/messages/{message_id}")
+        return await _proxy(request, "DELETE", f"/api/agent-conversations/{chat_id}/messages/{message_id}")
 
-    @router.post("/chat/{chat_id}/messages/{message_id}/truncate-after")
+    @router.post("/chat/{chat_id}/messages/{message_id}/truncate-after", include_in_schema=False)
+    @router.post("/agent-conversation-audit/{chat_id}/messages/{message_id}/truncate-after", summary="Alias truncate")
     async def alias_truncate(chat_id: int, message_id: int, request: Request, confirm: bool = False):
         return await _proxy(request, "POST",
-                            f"/api/chats/{chat_id}/messages/{message_id}/truncate-after?confirm={'true' if confirm else 'false'}")
+                            f"/api/agent-conversations/{chat_id}/messages/{message_id}/truncate-after?confirm={'true' if confirm else 'false'}")
 
     # ---- 3. current chat -------------------------------------------------
-    @router.get("/chat/current")
+    @router.get("/chat/current", include_in_schema=False)
+    @router.get("/agent-conversation-audit/current", summary="Get current")
     async def get_current():
         payload = await asyncio.to_thread(_current_chat_payload)
-        payload["set_via"] = "PUT /api/chat/current"
+        payload["set_via"] = "PUT /api/agent-conversation-audit/current"
         return JSONResponse(payload)
 
-    @router.put("/chat/current")
+    @router.put("/chat/current", include_in_schema=False)
+    @router.put("/agent-conversation-audit/current", summary="Put current")
     async def put_current(body: CurrentChatBody, request: Request):
         """Switch the Oracle's current chat (same path as the UI's load-in-agent)."""
         previous = (await asyncio.to_thread(_current_chat_payload)).get("chat_id")
-        resp = await _proxy(request, "POST", f"/api/chats/{int(body.chat_id)}/load-in-agent")
+        resp = await _proxy(request, "POST", f"/api/agent-conversations/{int(body.chat_id)}/load-in-agent")
         if resp.status_code >= 400:
             return resp
         from distr.gui.web.routes.chat import broadcast_chat_event
@@ -294,11 +301,11 @@ def create_router() -> APIRouter:
         if chat_id is None:
             chat_id = (await asyncio.to_thread(_current_chat_payload)).get("chat_id")
         if chat_id is None:
-            raise HTTPException(status_code=409, detail="No current chat; pass chat_id")
+            raise HTTPException(status_code=409, detail="No active agent conversation; pass chat_id")
         with get_session() as session:
             chat = session.get(Chat, int(chat_id))
             if chat is None:
-                raise HTTPException(status_code=404, detail="Chat not found")
+                raise HTTPException(status_code=404, detail="Conversation not found")
             dev = bool(is_development_thread(session, chat))
         wait_s = max(0.0, min(float(wait or 0), REPLY_WAIT_CAP_SECONDS))
         if dev:
@@ -325,7 +332,7 @@ def create_router() -> APIRouter:
             f"Skill instructions ({skill_file or 'not on disk'}):\n<<<SKILL\n{instructions or '(no SKILL.md body available)'}\nSKILL>>>\n\n"
             f"Input:\n{(body.input or '').strip() or '(none)'}"
         )
-        resp = await _proxy(request, "POST", f"/api/chats/{int(chat_id)}/send-to-agent",
+        resp = await _proxy(request, "POST", f"/api/agent-conversations/{int(chat_id)}/send-to-agent",
                             {"message": message, "speak": bool(body.speak)})
         data = json.loads(resp.body)
         if resp.status_code >= 400 or not isinstance(data, dict):

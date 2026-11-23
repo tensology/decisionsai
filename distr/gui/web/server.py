@@ -215,6 +215,8 @@ def create_app() -> FastAPI:
     _mount_static(app, "/settings/static/js", static_dir / "settings" / "js", "settings_js")
     _mount_static(app, "/chat/static/css", static_dir / "chat" / "css", "chat_css")
     _mount_static(app, "/chat/static/js", static_dir / "chat" / "js", "chat_js")
+    _mount_static(app, "/agents/static/css", static_dir / "chat" / "css", "agents_css")
+    _mount_static(app, "/agents/static/js", static_dir / "chat" / "js", "agents_js")
     _mount_static(app, "/docs/static/css", static_dir / "docs" / "css", "docs_css")
     _mount_static(app, "/docs/static/js", static_dir / "docs" / "js", "docs_js")
     _mount_static(app, "/tickets/static/js", static_dir / "kanban" / "js", "tickets_js")
@@ -240,7 +242,7 @@ def create_app() -> FastAPI:
             response = await call_next(request)
             path = request.url.path
             if any(path.startswith(p) for p in [
-                "/board/", "/settings/static/", "/chat/static/", "/docs/static/",
+                "/board/", "/settings/static/", "/agents/static/", "/chat/static/", "/docs/static/",
                 "/tickets/static/", "/kanban/static/", "/automations/static/", "/actions/static/", "/workflows/static/",
                 "/skills/static/", "/projects/static/", "/oauth/static/",
                 "/static/shared/", "/static/development/",
@@ -424,14 +426,16 @@ def create_app() -> FastAPI:
     async def settings_page_with_slash(request: Request):
         return page_templates.TemplateResponse(request, "settings/settings.html", _template_context(request, "/settings"))
 
-    # Chat page
-    @app.get("/chat", response_class=HTMLResponse)
-    async def chat_page_no_slash(request: Request):
-        return page_templates.TemplateResponse(request, "chat/chat.html", _template_context(request, "/chat"))
+    @app.get("/agents/", response_class=HTMLResponse)
+    async def agents_page(request: Request):
+        return page_templates.TemplateResponse(request, "chat/chat.html", _template_context(request, "/agents"))
 
-    @app.get("/chat/", response_class=HTMLResponse)
-    async def chat_page_with_slash(request: Request):
-        return page_templates.TemplateResponse(request, "chat/chat.html", _template_context(request, "/chat"))
+    @app.get("/agents", include_in_schema=False)
+    @app.get("/chat", include_in_schema=False)
+    @app.get("/chat/", include_in_schema=False)
+    async def redirect_to_agents(request: Request):
+        query = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(url=f"/agents/{query}", status_code=307)
 
     @app.get("/diagram", response_class=HTMLResponse)
     async def diagram_page_no_slash(request: Request):
@@ -473,9 +477,9 @@ def create_app() -> FastAPI:
 
     try:
         from distr.gui.web.routes.chat import create_routes as create_chat_routes
-        chat_router = create_chat_routes(chat_templates_dir, base_path="/chat")
-        app.include_router(chat_router, prefix="/api", tags=["chat"])
-        logger.info("Chat API routes mounted at /api")
+        chat_router = create_chat_routes(chat_templates_dir, base_path="/agents")
+        app.include_router(chat_router, prefix="/api", tags=["agents"])
+        logger.info("Agents API routes mounted at /api")
     except Exception as e:
         logger.error("Failed to load Chat routes: %s", e, exc_info=True)
 
@@ -1179,7 +1183,7 @@ def create_app() -> FastAPI:
     async def health_check():
         return {
             "status": "ok",
-            "services": ["flow", "board", "settings", "chat"],
+            "services": ["flow", "board", "settings", "agents"],
             "pid": os.getpid(),
         }
     
@@ -1528,8 +1532,8 @@ class UnifiedGuiServer:
         return f"{self.get_url()}/settings"
 
     def get_chat_url(self) -> str:
-        """Get the Chat base URL"""
-        return f"{self.get_url()}/chat"
+        """Get the Agents base URL."""
+        return f"{self.get_url()}/agents/"
 
     def is_ready(self) -> bool:
         """Check if the server is running and ready by attempting to connect"""

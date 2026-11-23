@@ -26,6 +26,7 @@ from distr.core.hotkeys import (
 from sqlalchemy import desc, nulls_last
 
 from distr.core.db import Action, Chat, Snippet, get_session
+from distr.core.chat_title_auto import public_conversation_title
 from distr.core.planning.chats import is_plan_chat
 from distr.core.db.kanban import KanbanBoard
 from distr.core.db.projects import Project
@@ -60,14 +61,14 @@ def get_skin_display_name(skin_name: Optional[str]) -> str:
 def format_chat_short_hash(chat_id: Optional[int]) -> str:
     """Return the short hash label shown for a chat ID in the context menu."""
     if not chat_id:
-        return "No active chat"
+        return "No active agent"
     md5_hash = hashlib.md5(str(chat_id).encode()).hexdigest()
-    return f"Chat: #{md5_hash[:6]}"
+    return f"Agent: #{md5_hash[:6]}"
 
 
 def format_menu_title(title: str) -> str:
     """Keep the full menu title, with a fallback for blank names."""
-    return (title or "New Chat").strip() or "New Chat"
+    return public_conversation_title(title)
 
 
 def get_recent_chats_for_menu(limit: int = 5) -> list[tuple[int, str]]:
@@ -92,7 +93,7 @@ def get_recent_chats_for_menu(limit: int = 5) -> list[tuple[int, str]]:
                 params = {}
             if is_plan_chat(chat) or isinstance(params.get("development"), dict):
                 continue
-            rows.append((chat.id, format_menu_title(chat.title or "New Chat")))
+            rows.append((chat.id, format_menu_title(chat.title)))
             if len(rows) >= int(limit):
                 break
         return rows
@@ -535,22 +536,22 @@ class MenuTrayMixin:
 
         self.menu.addSeparator()
 
-        self.chat_submenu = QtWidgets.QMenu("Chat", self.menu)
+        self.chat_submenu = QtWidgets.QMenu("Agents", self.menu)
         self.chat_menu_action = self.menu.addMenu(self.chat_submenu)
 
-        self.chats_action = QAction("Manage Chats", self.chat_submenu)
-        self.chats_action.triggered.connect(lambda: self._open_web_url("/chat/"))
+        self.chats_action = QAction("Manage Agents", self.chat_submenu)
+        self.chats_action.triggered.connect(lambda: self._open_web_url("/agents/"))
         self.chat_submenu.addAction(self.chats_action)
 
         self.chat_submenu.addSeparator()
 
-        self.new_chat_action = QAction("New Chat", self.chat_submenu)
+        self.new_chat_action = QAction("New agent conversation", self.chat_submenu)
         self.new_chat_action.triggered.connect(self.handle_new_chat)
         self.chat_submenu.addAction(self.new_chat_action)
 
         self.chat_submenu.addSeparator()
 
-        self.chat_id_menu_item = QAction("No active chat", self.chat_submenu)
+        self.chat_id_menu_item = QAction("No active agent", self.chat_submenu)
         self.chat_id_menu_item.setEnabled(False)
         self.chat_submenu.addAction(self.chat_id_menu_item)
 
@@ -989,11 +990,11 @@ class MenuTrayMixin:
             else:
                 self.hands_free_action.setToolTip("")
 
-        # Check for unsubmitted new chat and disable "New Chat" if exists
+        # Check for unsubmitted new chat and disable "New agent conversation" if exists
         try:
             if self._has_unsubmitted_new_chat():
                 self.new_chat_action.setEnabled(False)
-                self.new_chat_action.setToolTip("Complete the current new chat first")
+                self.new_chat_action.setToolTip("Finish the current conversation first")
             elif eula_accepted:
                 # Only re-enable if EULA is accepted
                 self.new_chat_action.setEnabled(True)

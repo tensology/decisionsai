@@ -32,7 +32,7 @@ def test_fast_action_does_not_hijack_dev_thread_request():
     from distr.core.agent.services.llm.fast_action_detector import ActionType, FastActionDetector
     d = FastActionDetector()
     assert d.detect(BUG_TEXT).action_type == ActionType.UNKNOWN
-    assert d.detect("new chat").tool_name == "new_chat"
+    assert d.detect("new chat").tool_name == "new_agent_conversation"
 
 
 class _CM:

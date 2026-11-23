@@ -119,11 +119,11 @@ def test_speak_spoken_has_own_guard(full_app, monkeypatch):
     calls = []
     monkeypatch.setattr(rr, "speak_spoken_text", lambda text: calls.append(text) or False)
     remote = TestClient(full_app, client=("10.0.0.9", 5000))
-    assert remote.post("/api/chats/speak-spoken", json={"text": "x"}, headers=HDR).status_code == 403
+    assert remote.post("/api/agent-conversations/speak-spoken", json={"text": "x"}, headers=HDR).status_code == 403
     local = TestClient(full_app, client=("127.0.0.1", 5000))
-    assert local.post("/api/chats/speak-spoken", json={"text": "x"}).status_code == 401
+    assert local.post("/api/agent-conversations/speak-spoken", json={"text": "x"}).status_code == 401
     assert calls == []
-    ok = local.post("/api/chats/speak-spoken", json={"text": "x"}, headers=HDR)
+    ok = local.post("/api/agent-conversations/speak-spoken", json={"text": "x"}, headers=HDR)
     assert ok.status_code == 200
     assert calls == ["x"]
 
@@ -132,8 +132,8 @@ def test_chats_current_is_not_captured_by_chat_id_route(full_app, monkeypatch):
     from distr.core.chat import ChatService
 
     monkeypatch.setattr(ChatService, "get_current_chat_id", staticmethod(lambda: None))
-    assert TestClient(full_app).get("/api/chats/current").status_code == 401
-    r = TestClient(full_app).get("/api/chats/current", headers=HDR)
+    assert TestClient(full_app).get("/api/agent-conversations/current").status_code == 401
+    r = TestClient(full_app).get("/api/agent-conversations/current", headers=HDR)
     assert r.status_code == 200
     assert r.json()["chat_id"] is None
 
@@ -163,11 +163,11 @@ def test_get_turn_endpoint_and_wait_timeout(db, monkeypatch):
     monkeypatch.setattr(ext, "POLL_INTERVAL_SECONDS", 0.05)
     root, (done_id, pending_id) = _seed(db, active=1)
     client, _ = _ext_client(monkeypatch)
-    assert client.get(f"/api/chats/{root}/turns/{done_id}").json()["assistant_text"] == "hi there"
-    r = client.get(f"/api/chats/{root}/turns/{pending_id}?wait=true&timeout=0.2").json()
+    assert client.get(f"/api/agent-conversations/{root}/turns/{done_id}").json()["assistant_text"] == "hi there"
+    r = client.get(f"/api/agent-conversations/{root}/turns/{pending_id}?wait=true&timeout=0.2").json()
     assert r["timed_out"] is True and r["status"] == "pending"
-    assert client.get(f"/api/chats/{root}/turns/424242").status_code == 404
-    listing = client.get(f"/api/chats/{root}/turns?after_row_id={done_id}").json()
+    assert client.get(f"/api/agent-conversations/{root}/turns/424242").status_code == 404
+    listing = client.get(f"/api/agent-conversations/{root}/turns?after_row_id={done_id}").json()
     assert [t["turn_id"] for t in listing["turns"]] == [pending_id]
 
 
@@ -260,23 +260,23 @@ def test_message_get_patch_delete_truncate(db, monkeypatch):
         s.commit()
     client, reloaded = _ext_client(monkeypatch, current_chat=root)
 
-    assert client.get(f"/api/chats/{root}/messages/{ids[0]}").json()["response"] == "r0"
-    assert len(client.get(f"/api/chats/{root}/messages").json()["messages"]) == 5
+    assert client.get(f"/api/agent-conversations/{root}/messages/{ids[0]}").json()["response"] == "r0"
+    assert len(client.get(f"/api/agent-conversations/{root}/messages").json()["messages"]) == 5
 
-    r = client.patch(f"/api/chats/{root}/messages/{ids[0]}", json={"response": "edited"})
+    r = client.patch(f"/api/agent-conversations/{root}/messages/{ids[0]}", json={"response": "edited"})
     assert r.status_code == 200 and r.json()["response"] == "edited" and r.json()["oracle_reloaded"] is True
-    assert client.patch(f"/api/chats/{root}/messages/{ids[0]}", json={"bogus": 1}).status_code == 422
-    assert client.patch(f"/api/chats/{root}/messages/{ids[0]}", json={}).status_code == 400
+    assert client.patch(f"/api/agent-conversations/{root}/messages/{ids[0]}", json={"bogus": 1}).status_code == 422
+    assert client.patch(f"/api/agent-conversations/{root}/messages/{ids[0]}", json={}).status_code == 400
 
-    r = client.delete(f"/api/chats/{root}/messages/{ids[1]}")
+    r = client.delete(f"/api/agent-conversations/{root}/messages/{ids[1]}")
     assert r.status_code == 200 and r.json()["deleted"] == 1
     with db() as s:
         assert s.get(Chat, ids[1]) is None
         assert s.query(ChatTurnEvent).filter(ChatTurnEvent.turn_id == ids[1]).count() == 0
 
-    assert client.delete(f"/api/chats/{root}/messages/{root}").status_code == 409
-    assert client.post(f"/api/chats/{root}/messages/{ids[0]}/truncate-after").status_code == 400
-    r = client.post(f"/api/chats/{root}/messages/{ids[0]}/truncate-after?confirm=true")
+    assert client.delete(f"/api/agent-conversations/{root}/messages/{root}").status_code == 409
+    assert client.post(f"/api/agent-conversations/{root}/messages/{ids[0]}/truncate-after").status_code == 400
+    r = client.post(f"/api/agent-conversations/{root}/messages/{ids[0]}/truncate-after?confirm=true")
     assert r.json()["deleted"] == 2
     with db() as s:
         assert sorted(c.id for c in s.query(Chat).filter(Chat.parent_id == root)) == [ids[0]]
@@ -287,10 +287,10 @@ def test_message_ops_reject_running_turn_and_foreign_rows(db, monkeypatch):
     root, ids = _seed(db, responses=("r0", None), active=1)
     other_root, other_ids = _seed(db, responses=("z",))
     client, reloaded = _ext_client(monkeypatch, current_chat=None)
-    assert client.patch(f"/api/chats/{root}/messages/{ids[1]}", json={"input": "x"}).status_code == 409
-    assert client.post(f"/api/chats/{root}/messages/{ids[0]}/truncate-after?confirm=true").status_code == 409
-    assert client.get(f"/api/chats/{root}/messages/{other_ids[0]}").status_code == 404
-    r = client.patch(f"/api/chats/{root}/messages/{ids[0]}", json={"is_hidden": True})
+    assert client.patch(f"/api/agent-conversations/{root}/messages/{ids[1]}", json={"input": "x"}).status_code == 409
+    assert client.post(f"/api/agent-conversations/{root}/messages/{ids[0]}/truncate-after?confirm=true").status_code == 409
+    assert client.get(f"/api/agent-conversations/{root}/messages/{other_ids[0]}").status_code == 404
+    r = client.patch(f"/api/agent-conversations/{root}/messages/{ids[0]}", json={"is_hidden": True})
     assert r.status_code == 200 and r.json()["oracle_reloaded"] is False
     assert reloaded == []
 
@@ -314,7 +314,7 @@ def test_reload_oracle_only_for_current_chat(monkeypatch):
 def test_current_chat_endpoint(db, monkeypatch):
     root, _ = _seed(db)
     client, _ = _ext_client(monkeypatch, current_chat=root)
-    body = client.get("/api/chats/current").json()
+    body = client.get("/api/agent-conversations/current").json()
     assert body["chat_id"] == root and body["chat"]["title"] == "Root"
 
 
@@ -458,13 +458,13 @@ def test_oracle_send_to_agent_returns_turn_id_and_waits_for_reply(db, monkeypatc
     monkeypatch.setattr(signals, "signal_manager", fake)
     app = FastAPI(); app.include_router(chat_routes.create_routes(__import__("pathlib").Path(".")), prefix="/api")
     client = TestClient(app)
-    r = client.post(f"/api/chats/{root}/send-to-agent?wait=true&timeout=5", json={"message": "hello agent", "speak": False})
+    r = client.post(f"/api/agent-conversations/{root}/send-to-agent?wait=true&timeout=5", json={"message": "hello agent", "speak": False})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["sent"] is True and body["turn_id"]
     assert body["turn_status"]["assistant_text"] == "agent reply" and body["turn_status"]["done"] is True
     # Without wait the response still carries the (already persisted) turn id when available.
-    r2 = client.post(f"/api/chats/{root}/send-to-agent", json={"message": "second", "speak": False}).json()
+    r2 = client.post(f"/api/agent-conversations/{root}/send-to-agent", json={"message": "second", "speak": False}).json()
     assert r2["sent"] is True and "turn_id" in r2 and "after_row_id" in r2
 
 

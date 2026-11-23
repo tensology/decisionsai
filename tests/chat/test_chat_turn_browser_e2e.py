@@ -163,7 +163,7 @@ def test_plain_conversation_does_not_show_work_controls(page: Page) -> None:
 )
 def test_turn_panel_realtime_steer_refresh_and_terminal_recovery(page: Page, viewport: dict) -> None:
     try:
-        if not page.request.get(f"{BASE_URL}/api/chats").ok:
+        if not page.request.get(f"{BASE_URL}/api/agent-conversations").ok:
             pytest.skip("DecisionsAI server is unavailable")
     except Exception:
         pytest.skip("DecisionsAI server is unavailable")
@@ -259,7 +259,7 @@ def test_turn_panel_realtime_steer_refresh_and_terminal_recovery(page: Page, vie
 def test_built_tool_shows_ordered_execution_steps(page: Page, monkeypatch: pytest.MonkeyPatch) -> None:
     """A frozen runtime tool exposes each deterministic step in the live Chat panel."""
     try:
-        if not page.request.get(f"{BASE_URL}/api/chats").ok:
+        if not page.request.get(f"{BASE_URL}/api/agent-conversations").ok:
             pytest.skip("DecisionsAI server is unavailable")
     except Exception:
         pytest.skip("DecisionsAI server is unavailable")

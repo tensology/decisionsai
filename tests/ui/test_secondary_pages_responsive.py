@@ -180,8 +180,8 @@ def test_secondary_pages(secondary_page, width):
             'provider': 'openai', 'model_name': 'gpt-test', 'voice_provider': 'openai', 'voice_model': 'alloy',
             'messages': [{'role': 'user', 'content': 'Please review the mobile layouts.', 'timestamp': 1793200000},
                          {'role': 'assistant', 'content': 'The tables and editors remain readable across screen sizes.', 'timestamp': 1793200001}]}
-    page.route('**/api/chats', lambda route: route.fulfill(json={'chats': [chat], 'last_chat_id': 1, 'agent_current_chat_id': 1}))
-    page.route('**/api/chats/1', lambda route: route.fulfill(json=chat))
+    page.route('**/api/agent-conversations', lambda route: route.fulfill(json={'chats': [chat], 'last_chat_id': 1, 'agent_current_chat_id': 1}))
+    page.route('**/api/agent-conversations/1', lambda route: route.fulfill(json=chat))
     page.reload()
     expect(page.locator('#chatMessages')).to_be_visible()
     expect(page.locator('#chatMessages')).to_contain_text('The tables and editors')

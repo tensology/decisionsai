@@ -34,7 +34,7 @@ def _app(monkeypatch, *extra_routers, current_chat=None):
 def test_every_audit_route_requires_token(db, monkeypatch):
     app = _app(monkeypatch)
     anon = TestClient(app)
-    for method, path in [("GET", "/api/chat/replies/1.0.abcdef12"), ("GET", "/api/chat/current"),
+    for method, path in [("GET", "/api/agent-conversation-audit/replies/1.0.abcdef12"), ("GET", "/api/chat/current"),
                          ("PUT", "/api/chat/current"), ("POST", "/api/skills/x/run"),
                          ("GET", "/api/settings/all"), ("GET", "/api/chat/1/messages/1"),
                          ("PATCH", "/api/chat/1/messages/1"), ("DELETE", "/api/chat/1/messages/1"),
@@ -76,9 +76,9 @@ def test_send_returns_reply_id_and_reply_endpoint_long_polls(db, monkeypatch):
     # Backward compatible fields stay; reply_id is new.
     assert body["sent"] is True and "turn_id" in body and "after_row_id" in body
     rid = body["reply_id"]
-    assert body["reply_url"] == f"/api/chat/replies/{rid}" and rid.startswith(f"{root}.")
+    assert body["reply_url"] == f"/api/agent-conversation-audit/replies/{rid}" and rid.startswith(f"{root}.")
 
-    queued = client.get(f"/api/chat/replies/{rid}").json()
+    queued = client.get(f"/api/agent-conversation-audit/replies/{rid}").json()
     assert queued["status"] == "queued" and queued["done"] is False and queued["content"] is None
 
     # Agent persists the row with a reply -> done + content.
@@ -86,13 +86,13 @@ def test_send_returns_reply_id_and_reply_endpoint_long_polls(db, monkeypatch):
         row = Chat(parent_id=root, input="hello agent", response="the answer",
                    created_date=datetime(2026, 10, 22, 15, 0), modified_date=datetime(2026, 10, 22, 15, 0))
         s.add(row); s.commit(); turn_id = row.id
-    done = client.get(f"/api/chat/replies/{rid}?wait=2").json()
+    done = client.get(f"/api/agent-conversation-audit/replies/{rid}?wait=2").json()
     assert done["done"] is True and done["content"] == "the answer" and done["turn_id"] == turn_id
     assert done["timed_out"] is False
     # Bare turn id works too.
-    assert client.get(f"/api/chat/replies/{turn_id}").json()["content"] == "the answer"
-    assert client.get("/api/chat/replies/999999").status_code == 404
-    assert client.get("/api/chat/replies/bad.id").status_code == 400
+    assert client.get(f"/api/agent-conversation-audit/replies/{turn_id}").json()["content"] == "the answer"
+    assert client.get("/api/agent-conversation-audit/replies/999999").status_code == 404
+    assert client.get("/api/agent-conversation-audit/replies/bad.id").status_code == 400
 
 
 def test_reply_wait_is_capped_and_times_out(db, monkeypatch):
@@ -101,7 +101,7 @@ def test_reply_wait_is_capped_and_times_out(db, monkeypatch):
     root, ids = _seed(db, responses=("partial",), active=0)  # active turn -> running
     client = TestClient(_app(monkeypatch), headers=HDR)
     assert api_audit.REPLY_WAIT_CAP_SECONDS == 60.0
-    r = client.get(f"/api/chat/replies/{ids[0]}?wait=0.2").json()
+    r = client.get(f"/api/agent-conversation-audit/replies/{ids[0]}?wait=0.2").json()
     assert r["done"] is False and r["timed_out"] is True and r["content"] is None
     assert r["partial_content"] == "partial"
 
@@ -134,7 +134,7 @@ def test_get_and_put_current_chat_broadcasts(db, monkeypatch):
     loaded, events = [], []
     r = APIRouter()
 
-    @r.post("/chats/{chat_id}/load-in-agent")
+    @r.post("/agent-conversations/{chat_id}/load-in-agent")
     async def fake_load(chat_id: int):
         loaded.append(chat_id)
         return {"loaded": True}
@@ -168,7 +168,7 @@ def test_skill_run_oracle_one_shot(db, monkeypatch, tmp_path):
     sent = {}
     r = APIRouter()
 
-    @r.post("/chats/{chat_id}/send-to-agent")
+    @r.post("/agent-conversations/{chat_id}/send-to-agent")
     async def fake_send(chat_id: int, request: Request):
         sent.update(chat_id=chat_id, body=await request.json())
         return {"sent": True, "turn_id": None, "reply_id": f"{chat_id}.0.deadbeef"}

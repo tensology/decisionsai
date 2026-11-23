@@ -54,7 +54,7 @@ def test_chat_actions_menu(width, tmp_path):
         assert row.evaluate("el => getComputedStyle(el).borderLeftWidth === '0px'")
         assert row.locator('.chat-item-title').evaluate("el => getComputedStyle(el).color") == 'rgb(255, 255, 255)'
         page.evaluate('currentChatId = 7')
-        trigger = page.get_by_role('button', name='Chat actions', exact=True)
+        trigger = page.get_by_role('button', name='Agent actions', exact=True)
         trigger.click()
         assert trigger.get_attribute('aria-expanded') == 'true'
         assert page.get_by_role('menu').is_visible()

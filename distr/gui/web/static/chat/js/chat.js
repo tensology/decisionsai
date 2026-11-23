@@ -52,7 +52,7 @@ let transcriptionStatusFlushScheduled = false;
 let streamingChatId = null;
 /** Plain text of the last reply finalized in stream_finished — suppress duplicate assistant message_added / poll rows. */
 let _lastStreamFinalizedPlain = null;
-/** True when this chat was loaded with skipLoadInAgent (new chat from modal). POST /chats already hot-swapped the agent; first send must NOT call load-in-agent (would interrupt_tts and kill in-flight first reply). */
+/** True when this chat was loaded with skipLoadInAgent (new chat from modal). POST /agent-conversations already hot-swapped the agent; first send must NOT call load-in-agent (would interrupt_tts and kill in-flight first reply). */
 let loadedChatSkippedLoadInAgent = false;
 /** Monotonically increasing token; each poll/stream registers its token and checks it's still current before resolving. Prevents stale polls from old chats firing on new chats. */
 let _streamToken = 0;
@@ -532,14 +532,14 @@ async function fetchDefaultsForNewChat() {
 async function createDefaultChat() {
     const d = await fetchDefaultsForNewChat();
     const body = {
-        title: 'New Chat',
+        title: 'New conversation',
         provider: d.provider,
         voice_provider: d.voice_provider,
         voice_model: d.voice_model
     };
     if (d.model_name) body.model_name = d.model_name;
     try {
-        const response = await fetch(`${API_BASE}/chats`, {
+        const response = await fetch(`${API_BASE}/agent-conversations`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
@@ -962,7 +962,7 @@ function startChatWebSocket(force) {
                     return;
                 }
                 if (msg.type === 'agent_chat_changed') {
-                    // Oracle / voice / PUT /api/chat/current moved the live agent: star and loadedChatId follow.
+                    // Oracle / voice / PUT /api/agent-conversation-audit/current moved the live agent: star and loadedChatId follow.
                     const liveId = msg.agent_current_chat_id != null ? Number(msg.agent_current_chat_id) : null;
                     if (liveId && !Number.isNaN(liveId)) {
                         loadedChatId = liveId;
@@ -975,7 +975,7 @@ function startChatWebSocket(force) {
                 if (msg.type === 'chat_updated' && msg.chat_id === currentChatId) {
                     if (streamingChatId === currentChatId && _agentStreamWaiters.has(Number(currentChatId))) {
                         // Fallback: stream_finished never fired (e.g. legacy provider). Fetch and render, then resolve.
-                        fetch(`${API_BASE}/chats/${currentChatId}`).then(r => r.json()).then(data => {
+                        fetch(`${API_BASE}/agent-conversations/${currentChatId}`).then(r => r.json()).then(data => {
                             const wrap = document.getElementById('streamingAssistantMessage');
                             if (wrap) {
                                 const textEl = document.getElementById('streamingAssistantText');
@@ -1000,7 +1000,7 @@ function startChatWebSocket(force) {
                             removeTypingIndicator();
                             _resolveAgentStreamWaiter(currentChatId);
                             updateChatSettingsDisplay({
-                                title: data.title || 'New Chat',
+                                title: data.title || 'New conversation',
                                 agent_name: data.agent_name,
                                 provider: data.provider || '-',
                                 model_name: data.model_name || '-',
@@ -1014,10 +1014,10 @@ function startChatWebSocket(force) {
                         return;
                     }
                     if (streamingChatId === currentChatId) {
-                        fetch(`${API_BASE}/chats/${currentChatId}`).then(r => r.json()).then(data => {
+                        fetch(`${API_BASE}/agent-conversations/${currentChatId}`).then(r => r.json()).then(data => {
                             mergeChatUpdatedDuringStream(data.messages || []);
                             updateChatSettingsDisplay({
-                                title: data.title || 'New Chat',
+                                title: data.title || 'New conversation',
                                 agent_name: data.agent_name,
                                 provider: data.provider || '-',
                                 model_name: data.model_name || '-',
@@ -1032,10 +1032,10 @@ function startChatWebSocket(force) {
                         return;
                     }
                     if (isStreaming && streamingChatId !== currentChatId) {
-                        fetch(`${API_BASE}/chats/${currentChatId}`).then(r => r.json()).then(data => {
+                        fetch(`${API_BASE}/agent-conversations/${currentChatId}`).then(r => r.json()).then(data => {
                             mergeChatUpdatedDuringStream(data.messages || []);
                             updateChatSettingsDisplay({
-                                title: data.title || 'New Chat',
+                                title: data.title || 'New conversation',
                                 agent_name: data.agent_name,
                                 provider: data.provider || '-',
                                 model_name: data.model_name || '-',
@@ -1046,10 +1046,10 @@ function startChatWebSocket(force) {
                         }).catch(() => {});
                         return;
                     }
-                    fetch(`${API_BASE}/chats/${currentChatId}`).then(r => r.json()).then(data => {
+                    fetch(`${API_BASE}/agent-conversations/${currentChatId}`).then(r => r.json()).then(data => {
                         renderMessages(data.messages || [], true);
                         updateChatSettingsDisplay({
-                            title: data.title || 'New Chat',
+                            title: data.title || 'New conversation',
                             agent_name: data.agent_name,
                             provider: data.provider || '-',
                             model_name: data.model_name || '-',
@@ -1108,7 +1108,7 @@ function startChatWebSocket(force) {
 function recoverTurnState(chatId) {
     const requested = Number(chatId);
     if (!requested) return;
-    fetch(`${API_BASE}/chats/${requested}`)
+    fetch(`${API_BASE}/agent-conversations/${requested}`)
         .then(response => response.ok ? response.json() : null)
         .then(data => {
             if (!data || Number(currentChatId) !== requested) return;
@@ -1743,7 +1743,7 @@ function mergeChatUpdatedDuringStream(messages) {
 
 function repairMissingUserMessageForStream(chatId) {
     if (!chatMessages || chatId !== currentChatId) return;
-    fetch(`${API_BASE}/chats/${chatId}`)
+    fetch(`${API_BASE}/agent-conversations/${chatId}`)
         .then(r => r.json())
         .then(data => {
             if (chatId !== currentChatId) return;
@@ -1856,7 +1856,7 @@ function handleChatEventStreamFinished(msg) {
     } else {
         // Streaming element was destroyed (e.g. by polling race) - fetch final state from DB
         const chatId = currentChatId;
-        fetch(`${API_BASE}/chats/${chatId}`).then(r => r.json()).then(data => {
+        fetch(`${API_BASE}/agent-conversations/${chatId}`).then(r => r.json()).then(data => {
             if (currentChatId === chatId) {
                 const messages = data.messages || [];
                 const lastAssistant = messages.filter(m => m.role === 'assistant').pop();
@@ -1868,7 +1868,7 @@ function handleChatEventStreamFinished(msg) {
                 syncRenderedMessageCountFromDom();
                 _suppressChatUpdatedFetchUntil = Date.now() + 2500;
                 updateChatSettingsDisplay({
-                    title: data.title || 'New Chat',
+                    title: data.title || 'New conversation',
                     agent_name: data.agent_name,
                     provider: data.provider || '-',
                     model_name: data.model_name || '-',
@@ -1892,8 +1892,8 @@ function handleChatEventStreamFinished(msg) {
     const isLoadedView = loadedChatId === currentChatId;
     messageInput.disabled = !isLoadedView || chatActivationInFlight;
     messageInput.placeholder = chatActivationInFlight
-        ? 'Loading chat into agent...'
-        : (isLoadedView ? 'Send message...' : 'Load this chat to reply...');
+        ? 'Loading agent...'
+        : (isLoadedView ? 'Send message...' : 'Load this agent to reply...');
     sendButton.disabled = !isLoadedView || chatActivationInFlight || !messageInput.value.trim();
     setViewOnlyChrome(!isLoadedView);
     setSendButtonStreaming(false);
@@ -2343,7 +2343,7 @@ async function acknowledgeChatRead(chatId, replyId) {
     if (sidebarReadRequest === key) return;
     sidebarReadRequest = key;
     try {
-        const response = await fetch(`${API_BASE}/chats/${chatId}/read`, {
+        const response = await fetch(`${API_BASE}/agent-conversations/${chatId}/read`, {
             method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({reply_id: replyId})
         });
@@ -2373,7 +2373,7 @@ async function loadChats() {
                 if (skinsResponse.ok) sidebarSkins = (await skinsResponse.json()).skins || [];
             } catch (e) { console.warn('Chat avatars unavailable:', e); }
         }
-        const response = await fetch(`${API_BASE}/chats`);
+        const response = await fetch(`${API_BASE}/agent-conversations`);
         if (!response.ok) throw new Error('Failed to load chats');
         const data = await response.json();
         const rows = data.chats !== undefined ? data.chats : (Array.isArray(data) ? data : []);
@@ -2410,7 +2410,7 @@ async function loadChats() {
 // Persist loaded chat ID to DB (Settings.last_chat_id) so refresh restores it (same as native)
 async function saveLastChatId(chatId) {
     try {
-        await fetch('/api/last-chat-id', {
+        await fetch('/api/last-agent-conversation', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ last_chat_id: chatId })
@@ -2540,7 +2540,7 @@ function createChatItem(chat) {
     div.className = 'chat-item';
     div.setAttribute('data-chat-id', String(chat.id));
     div.dataset.identity = JSON.stringify([chat.agent_id, chat.is_primary]);
-    div.setAttribute('title', 'Click to view. Use Load to make it active in the agent.');
+    div.setAttribute('title', 'Click to view. Use Load to activate the agent.');
     div.setAttribute('tabindex', '0');
     div.setAttribute('role', 'option');
     div.setAttribute('aria-selected', chat.id === currentChatId ? 'true' : 'false');
@@ -2600,7 +2600,7 @@ function createChatItem(chat) {
 }
 
 function updateChatItem(row, chat) {
-    row.dataset.chatTitle = chat.title || 'New Chat';
+    row.dataset.chatTitle = chat.title || 'New conversation';
     row.dataset.agentName = chat.agent_name || '';
     const title = row.querySelector('.chat-item-title');
     const preview = row.querySelector('.chat-item-preview');
@@ -2698,7 +2698,7 @@ function hideChatContextMenu() {
     }
 }
 
-// Create New Chat
+// Create New conversation
 async function createNewChat() {
     if (_createChatGuard) return;
     _createChatGuard = true;
@@ -2726,7 +2726,7 @@ async function createNewChat() {
                 voiceModel = d.voice_model || null;
             }
         }
-        const response = await fetch(`${API_BASE}/chats`, {
+        const response = await fetch(`${API_BASE}/agent-conversations`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title: null, provider, model_name: modelName, voice_provider: voiceProvider, voice_model: voiceModel })
@@ -2761,7 +2761,7 @@ async function selectChat(chatId) {
     _renderedMessageCount = 0;
     updateActiveChat();
     try {
-        const response = await fetch(`${API_BASE}/chats/${chatId}`);
+        const response = await fetch(`${API_BASE}/agent-conversations/${chatId}`);
         const data = await response.json();
         // Discard if a newer selectChat/loadChat has already taken over
         if (seq !== _selectSeq) return;
@@ -2773,7 +2773,7 @@ async function selectChat(chatId) {
         restoreLiveChatState(chatId, data.messages);
         acknowledgeChatRead(chatId, data.latest_reply_id);
         updateChatSettingsDisplay({
-            title: data.title || 'New Chat',
+            title: data.title || 'New conversation',
             agent_name: data.agent_name,
             provider: data.provider || '-',
             model_name: data.model_name || '-',
@@ -2818,7 +2818,7 @@ async function loadChat(chatId, options = {}) {
     // Lock sidebar so user can't click another chat while this one is loading into agent
     chatList.classList.add('chat-list--locked');
     try {
-        const response = await fetch(`${API_BASE}/chats/${chatId}`);
+        const response = await fetch(`${API_BASE}/agent-conversations/${chatId}`);
         const data = await response.json();
         if (seq !== _selectSeq) return; // superseded by another navigation
         setViewedChatAppearance(data);
@@ -2829,7 +2829,7 @@ async function loadChat(chatId, options = {}) {
         restoreLiveChatState(chatId, data.messages);
         acknowledgeChatRead(chatId, data.latest_reply_id);
         updateChatSettingsDisplay({
-            title: data.title || 'New Chat',
+            title: data.title || 'New conversation',
             agent_name: data.agent_name,
             provider: data.provider || '-',
             model_name: data.model_name || '-',
@@ -2848,7 +2848,7 @@ async function loadChat(chatId, options = {}) {
         } else {
             loadedChatSkippedLoadInAgent = false;
             try {
-                const loadRes = await fetch(`${API_BASE}/chats/${chatId}/load-in-agent`, { method: 'POST' });
+                const loadRes = await fetch(`${API_BASE}/agent-conversations/${chatId}/load-in-agent`, { method: 'POST' });
                 if (!loadRes.ok) {
                     const err = await loadRes.json().catch(() => ({}));
                     throw new Error(err.detail || err.error || 'Load in agent failed');
@@ -2974,8 +2974,8 @@ function showChatView(isLoaded) {
     if (!isStreaming) {
         messageInput.disabled = !isLoaded || chatActivationInFlight;
         messageInput.placeholder = chatActivationInFlight
-            ? 'Loading chat into agent...'
-            : (isLoaded ? 'Send message...' : 'Load this chat to reply...');
+            ? 'Loading agent...'
+            : (isLoaded ? 'Send message...' : 'Load this agent to reply...');
         sendButton.disabled = !isLoaded || chatActivationInFlight || !messageInput.value.trim();
     }
 }
@@ -3848,7 +3848,7 @@ function updateTurnComposerState() {
         messageInput.placeholder = active ? 'Steer…' : (agentName ? `Message ${agentName}` : 'Send message…');
     } else if (messageInput && chatActivationInFlight) {
         messageInput.disabled = true;
-        messageInput.placeholder = 'Loading chat into agent…';
+        messageInput.placeholder = 'Loading agent…';
     }
     if (sendButton) {
         sendButton.title = active ? 'Steer active work' : 'Send';
@@ -3933,7 +3933,7 @@ function handleChatTurnEvent(msg) {
 }
 
 function refreshTurnStateAfterResponse(chatId) {
-    fetch(`${API_BASE}/chats/${Number(chatId)}`)
+    fetch(`${API_BASE}/agent-conversations/${Number(chatId)}`)
         .then(response => response.ok ? response.json() : null)
         .then(data => {
             if (data && Number(currentChatId) === Number(chatId)) {
@@ -4099,7 +4099,7 @@ async function playTTS(button) {
     try {
         const payload = { text, speed: 1.0, format: 'mp3' };
         if (chatId != null) payload.chat_id = chatId;
-        const response = await fetch(`${API_BASE}/chats/tts/generate`, {
+        const response = await fetch(`${API_BASE}/agent-conversations/tts/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
@@ -4663,7 +4663,7 @@ async function sendMessage() {
         handleInputChange();
         sendButton.disabled = true;
         try {
-            const response = await fetch(`${API_BASE}/chats/${Number(currentChatId)}/turns/${turnId}/steer`, {
+            const response = await fetch(`${API_BASE}/agent-conversations/${Number(currentChatId)}/turns/${turnId}/steer`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message })
@@ -4687,7 +4687,7 @@ async function sendMessage() {
             isStreaming = false;
             sendButton.disabled = true;
             setViewOnlyChrome(true);
-            alert('Please load a chat to reply.');
+            alert('Please load the agent to reply.');
             return;
         }
         let provider;
@@ -4722,13 +4722,13 @@ async function sendMessage() {
         const background = document.getElementById('emptyStateOracleBackground');
         showEmptyStateAgentLoading();
         const savedPlaceholder = messageInput.placeholder;
-        messageInput.placeholder = 'Starting chat...';
+        messageInput.placeholder = 'Starting conversation...';
         messageInput.disabled = true;
         streamAbortController = new AbortController();
         setSendButtonStreaming(true);
         let newChatId = null;
         try {
-            const response = await fetch(`${API_BASE}/chats`, {
+            const response = await fetch(`${API_BASE}/agent-conversations`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -4753,7 +4753,7 @@ async function sendMessage() {
                 streamAbortController = null;
                 sendButton.disabled = !messageInput.value.trim();
                 setSendButtonStreaming(false);
-                alert('Could not create chat: ' + (data.detail || response.statusText || 'Please try again.'));
+                alert('Could not start conversation: ' + (data.detail || response.statusText || 'Please try again.'));
                 return;
             }
             persistGlobalVoiceToSettings(voiceProvider, voiceModel);
@@ -4782,7 +4782,7 @@ async function sendMessage() {
             hideEmptyStateAgentLoading();
             await loadChats();
             if (!ttsEnabled) {
-                fetch(`${API_BASE}/chats/restore-speaker`, { method: 'POST' }).catch(() => {});
+                fetch(`${API_BASE}/agent-conversations/restore-speaker`, { method: 'POST' }).catch(() => {});
             }
             return;
         } catch (error) {
@@ -4850,7 +4850,7 @@ async function sendToAgentWhenReady(message, abortSignal) {
         ? globalThis.crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const intakeSourceMessageId = `web:${targetChatId}:${requestNonce}`;
-    // New chat from modal: POST /chats already emitted web_create_chat_emits_requested, which runs
+    // New chat from modal: POST /agent-conversations already emitted web_create_chat_emits_requested, which runs
     // current_chat_changed(initial_message) on the agent. Do NOT call load-in-agent here — that
     // path sends interrupt_tts first and cancels the in-flight LLM/TTS for the starting question.
     if (loadedChatSkippedLoadInAgent && targetChatId) {
@@ -4880,7 +4880,7 @@ async function sendToAgentWhenReady(message, abortSignal) {
             body.voice_provider = currentChatSettings.voice_provider || null;
             body.voice_model = currentChatSettings.voice_model || null;
         }
-        const res = await fetch(`${API_BASE}/chats/${targetChatId}/send-to-agent`, {
+        const res = await fetch(`${API_BASE}/agent-conversations/${targetChatId}/send-to-agent`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
@@ -4908,7 +4908,7 @@ async function sendToAgentWhenReady(message, abortSignal) {
 
 // Wait for agent response: WebSocket stream_finished OR polling. Always polls in parallel.
 async function pollUntilAgentResponse(abortSignal) {
-    if (!loadedChatId) throw new Error('No chat loaded');
+    if (!loadedChatId) throw new Error('No agent loaded');
     const myToken = _streamToken;
     const myChatId = loadedChatId;
     // Use client-side count instead of fetching the entire chat just to snapshot initialCount.
@@ -4943,7 +4943,7 @@ async function pollUntilAgentResponse(abortSignal) {
             if (pollDone || (abortSignal && abortSignal.aborted)) return;
             // Self-cancel if chat has changed
             if (_streamToken !== myToken) { done(); reject(new DOMException('Aborted', 'AbortError')); return; }
-            const r = await fetch(`${API_BASE}/chats/${myChatId}`).catch(() => null);
+            const r = await fetch(`${API_BASE}/agent-conversations/${myChatId}`).catch(() => null);
             if (!r || !r.ok) return;
             const data = await r.json();
             if (currentChatId === myChatId) renderTurnState(data.active_turn, data.turns || []);
@@ -4959,7 +4959,7 @@ async function pollUntilAgentResponse(abortSignal) {
                     finish();
                     if (currentChatId === myChatId) {
                         syncRenderedMessageCountFromDom();
-                        updateChatSettingsDisplay({ title: data.title || 'New Chat',
+                        updateChatSettingsDisplay({ title: data.title || 'New conversation',
             agent_name: data.agent_name, provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint });
                         scrollToBottom();
                     }
@@ -4972,13 +4972,13 @@ async function pollUntilAgentResponse(abortSignal) {
                     } else {
                         syncRenderedMessageCountFromDom();
                     }
-                    updateChatSettingsDisplay({ title: data.title || 'New Chat',
+                    updateChatSettingsDisplay({ title: data.title || 'New conversation',
             agent_name: data.agent_name, provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint });
                     scrollToBottom();
                 }
             } else if (has_new && streamingChatId !== myChatId && currentChatId === myChatId) {
                 renderMessages(messages, false);
-                updateChatSettingsDisplay({ title: data.title || 'New Chat',
+                updateChatSettingsDisplay({ title: data.title || 'New conversation',
             agent_name: data.agent_name, provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint });
                 scrollToBottom();
             }
@@ -4988,7 +4988,7 @@ async function pollUntilAgentResponse(abortSignal) {
             if (pollDone) return;
             finish();
             if (currentChatId !== myChatId) return;
-            const r = await fetch(`${API_BASE}/chats/${myChatId}`).catch(() => null);
+            const r = await fetch(`${API_BASE}/agent-conversations/${myChatId}`).catch(() => null);
             if (r && r.ok) {
                 const d = await r.json();
                 renderTurnState(d.active_turn, d.turns || []);
@@ -4997,7 +4997,7 @@ async function pollUntilAgentResponse(abortSignal) {
                 const lastPlain = lastAssistant ? _normalizeMsgPlain(lastAssistant.content) : '';
                 if (lastPlain && !hasRenderedMessagePlain('assistant', lastPlain)) {
                     renderMessages(msgs, false);
-                    updateChatSettingsDisplay({ title: d.title || 'New Chat', provider: d.provider || '-', model_name: d.model_name || '-', voice_provider: d.voice_provider, voice_model: d.voice_model, voice_model_display: d.voice_model_display, context_stats: d.context_stats, compact_checkpoint: d.compact_checkpoint });
+                    updateChatSettingsDisplay({ title: d.title || 'New conversation', provider: d.provider || '-', model_name: d.model_name || '-', voice_provider: d.voice_provider, voice_model: d.voice_model, voice_model_display: d.voice_model_display, context_stats: d.context_stats, compact_checkpoint: d.compact_checkpoint });
                     scrollToBottom();
                 }
             }
@@ -5050,7 +5050,7 @@ async function sendToAgentAndPoll(message, abortSignal) {
         pollInterval = setInterval(async () => {
             if (pollDone || (abortSignal && abortSignal.aborted)) return;
             if (_streamToken !== myToken) { done(); reject(new DOMException('Aborted', 'AbortError')); return; }
-            const r = await fetch(`${API_BASE}/chats/${myChatId}`).catch(() => null);
+            const r = await fetch(`${API_BASE}/agent-conversations/${myChatId}`).catch(() => null);
             if (!r || !r.ok) return;
             const data = await r.json();
             if (currentChatId === myChatId) renderTurnState(data.active_turn, data.turns || []);
@@ -5065,7 +5065,7 @@ async function sendToAgentAndPoll(message, abortSignal) {
                     finish();
                     if (currentChatId === myChatId) {
                         syncRenderedMessageCountFromDom();
-                        updateChatSettingsDisplay({ title: data.title || 'New Chat',
+                        updateChatSettingsDisplay({ title: data.title || 'New conversation',
             agent_name: data.agent_name, provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint });
                         scrollToBottom();
                     }
@@ -5078,13 +5078,13 @@ async function sendToAgentAndPoll(message, abortSignal) {
                     } else {
                         syncRenderedMessageCountFromDom();
                     }
-                    updateChatSettingsDisplay({ title: data.title || 'New Chat',
+                    updateChatSettingsDisplay({ title: data.title || 'New conversation',
             agent_name: data.agent_name, provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint });
                     scrollToBottom();
                 }
             } else if (has_new && streamingChatId !== myChatId && currentChatId === myChatId) {
                 renderMessages(messages, false);
-                updateChatSettingsDisplay({ title: data.title || 'New Chat',
+                updateChatSettingsDisplay({ title: data.title || 'New conversation',
             agent_name: data.agent_name, provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint });
                 scrollToBottom();
             }
@@ -5094,7 +5094,7 @@ async function sendToAgentAndPoll(message, abortSignal) {
             if (pollDone) return;
             finish();
             if (currentChatId !== myChatId) return;
-            const r = await fetch(`${API_BASE}/chats/${myChatId}`).catch(() => null);
+            const r = await fetch(`${API_BASE}/agent-conversations/${myChatId}`).catch(() => null);
             if (r && r.ok) {
                 const d = await r.json();
                 renderTurnState(d.active_turn, d.turns || []);
@@ -5103,7 +5103,7 @@ async function sendToAgentAndPoll(message, abortSignal) {
                 const lastPlain = lastAssistant ? _normalizeMsgPlain(lastAssistant.content) : '';
                 if (lastPlain && !hasRenderedMessagePlain('assistant', lastPlain)) {
                     renderMessages(msgs, false);
-                    updateChatSettingsDisplay({ title: d.title || 'New Chat', provider: d.provider || '-', model_name: d.model_name || '-', voice_provider: d.voice_provider, voice_model: d.voice_model, voice_model_display: d.voice_model_display, context_stats: d.context_stats, compact_checkpoint: d.compact_checkpoint });
+                    updateChatSettingsDisplay({ title: d.title || 'New conversation', provider: d.provider || '-', model_name: d.model_name || '-', voice_provider: d.voice_provider, voice_model: d.voice_model, voice_model_display: d.voice_model_display, context_stats: d.context_stats, compact_checkpoint: d.compact_checkpoint });
                     scrollToBottom();
                 }
             }
@@ -5118,7 +5118,7 @@ async function sendToAgentAndPoll(message, abortSignal) {
 function cancelStream() {
     if (!canStopActiveWork()) return;
     const turnId = encodeURIComponent(currentActiveTurn.turn_id);
-    fetch(`${API_BASE}/chats/${loadedChatId}/cancel?turn_id=${turnId}`, { method: 'POST' }).catch(() => {});
+    fetch(`${API_BASE}/agent-conversations/${loadedChatId}/cancel?turn_id=${turnId}`, { method: 'POST' }).catch(() => {});
     if (streamAbortController) {
         streamAbortController.abort();
     }
@@ -5176,8 +5176,8 @@ function addErrorMessage(text) {
 // Delete Chat — when deleting the loaded or current chat, load the first remaining chat and select it
 async function deleteChat(chatId) {
     const confirmed = await window.DecisionsAPI.confirm({
-        title: "Delete chat",
-        message: "Delete this chat? This cannot be undone.",
+        title: "Delete conversation",
+        message: "Delete this conversation? This cannot be undone.",
         confirmLabel: "Delete",
         danger: true,
     });
@@ -5190,7 +5190,7 @@ async function deleteChat(chatId) {
     if (wasLoaded && streamAbortController) { streamAbortController.abort(); streamAbortController = null; }
     if (wasLoaded) { _streamToken++; isStreaming = false; setSendButtonStreaming(false); }
     try {
-        await fetch(`${API_BASE}/chats/${chatId}`, { method: 'DELETE' });
+        await fetch(`${API_BASE}/agent-conversations/${chatId}`, { method: 'DELETE' });
         currentChatId = null;
         loadedChatId = null;
         chatMessages.innerHTML = '';
@@ -5220,11 +5220,11 @@ async function renameChat(chatId) {
     const item = document.querySelector(`.chat-item[data-chat-id="${chatId}"]`);
     const titleEl = item ? item.querySelector('.chat-item-title') : null;
     const currentTitle = item?.dataset.chatTitle || '';
-    const newTitle = prompt('Rename chat', currentTitle || 'New Chat');
+    const newTitle = prompt('Rename conversation', currentTitle || 'New conversation');
     if (newTitle === null) return;
     const trimmed = newTitle.trim();
     try {
-        const response = await fetch(`${API_BASE}/chats/${chatId}`, {
+        const response = await fetch(`${API_BASE}/agent-conversations/${chatId}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title: trimmed || null })
@@ -5234,7 +5234,7 @@ async function renameChat(chatId) {
             throw new Error(err.detail || response.statusText);
         }
         const data = await response.json();
-        const displayTitle = data.title || 'New Chat';
+        const displayTitle = data.title || 'New conversation';
         if (item) item.dataset.chatTitle = displayTitle;
         if (currentChatId === chatId) {
             const headerTitle = document.getElementById('chatTitle');
@@ -5249,7 +5249,7 @@ async function renameChat(chatId) {
         }
     } catch (error) {
         console.error('Error renaming chat:', error);
-        alert('Could not rename chat: ' + (error.message || 'Please try again.'));
+        alert('Could not rename conversation: ' + (error.message || 'Please try again.'));
     }
 }
 
@@ -5774,7 +5774,7 @@ async function createNewChatWithSettings() {
     modalCancel.disabled = true;
     const background = document.getElementById('modalOracleBackground');
     try {
-        const response = await fetch(`${API_BASE}/chats`, {
+        const response = await fetch(`${API_BASE}/agent-conversations`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({agent_name: name, agent_role: roleEl.value.trim(), title: name,
                 skin_name: _modalSkinSelection, provider, model_name: model,
@@ -5925,7 +5925,7 @@ async function openChatConfigModal(chatId) {
         await _ensureTTSProviders();
         const [providersRes, chatRes] = await Promise.all([
             fetch('/api/llms/available-providers'),
-            fetch(`${API_BASE}/chats/${targetId}`)
+            fetch(`${API_BASE}/agent-conversations/${targetId}`)
         ]);
         const providersData = providersRes.ok ? await providersRes.json() : { providers: [] };
         const chatData = chatRes.ok ? await chatRes.json() : currentChatSettings || {};
@@ -5977,7 +5977,7 @@ async function openChatConfigModal(chatId) {
     } catch (e) {
         console.error('Open chat config failed:', e);
         _chatConfigBaseline = null;
-        if (chatConfigStatus) chatConfigStatus.textContent = 'Could not load chat configuration.';
+        if (chatConfigStatus) chatConfigStatus.textContent = 'Could not load agent configuration.';
     } finally {
         if (chatConfigSave) chatConfigSave.disabled = false;
     }
@@ -6147,7 +6147,7 @@ async function refreshHeaderUsageStatus(settings) {
             voice_provider: wantsVoice ? voiceProvider : '',
             llm_provider: wantsLlm ? llmProvider : ''
         });
-        const response = await fetch(`${API_BASE}/chats/usage-status?${qs.toString()}`);
+        const response = await fetch(`${API_BASE}/agent-conversations/usage-status?${qs.toString()}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         if (wantsVoice) renderVoiceUsageStatus(data.voice);
@@ -6224,25 +6224,25 @@ async function persistChatSettingsPatch(body, { fromModal = true } = {}) {
     if (fromModal && chatConfigSave) chatConfigSave.disabled = true;
     if (fromModal && chatConfigStatus) chatConfigStatus.textContent = 'Saving...';
     try {
-        const response = await fetch(`${API_BASE}/chats/${currentChatId}`, {
+        const response = await fetch(`${API_BASE}/agent-conversations/${currentChatId}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.detail || data.error || 'Failed to save chat settings');
+        if (!response.ok) throw new Error(data.detail || data.error || 'Failed to save agent settings');
         if (loadedChatId === currentChatId) {
-            await fetch(`${API_BASE}/chats/${currentChatId}/load-in-agent`, { method: 'POST' }).catch(() => {});
+            await fetch(`${API_BASE}/agent-conversations/${currentChatId}/load-in-agent`, { method: 'POST' }).catch(() => {});
         }
-        const refreshedRes = await fetch(`${API_BASE}/chats/${currentChatId}`);
+        const refreshedRes = await fetch(`${API_BASE}/agent-conversations/${currentChatId}`);
         const refreshed = await refreshedRes.json().catch(() => ({}));
         if (!refreshedRes.ok) {
-            throw new Error(refreshed.detail || refreshed.error || 'Failed to reload chat settings');
+            throw new Error(refreshed.detail || refreshed.error || 'Failed to reload agent settings');
         }
         setViewedChatAppearance(refreshed);
         await loadAssistantAvatarSkin(true);
         updateChatSettingsDisplay({
-            title: refreshed.title || 'New Chat',
+            title: refreshed.title || 'New conversation',
             provider: refreshed.provider || '-',
             model_name: refreshed.model_name || '-',
             voice_provider: refreshed.voice_provider,
@@ -6257,7 +6257,7 @@ async function persistChatSettingsPatch(body, { fromModal = true } = {}) {
         return refreshed;
     } catch (e) {
         console.error('Save chat settings failed:', e);
-        const msg = e.message || 'Could not save chat settings.';
+        const msg = e.message || 'Could not save agent settings.';
         if (fromModal && chatConfigStatus) chatConfigStatus.textContent = msg;
         else showChatSnackbar(msg, 'error');
         return null;
@@ -6304,7 +6304,7 @@ async function maybeAutoCompactChat(settings) {
     if (_lastAutoCompactKey === autoCompactKey) return;
     _autoCompactInFlight = true;
     try {
-        const response = await fetch(`${API_BASE}/chats/${chatId}/compact`, {
+        const response = await fetch(`${API_BASE}/agent-conversations/${chatId}/compact`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -6331,7 +6331,7 @@ async function compactCurrentChat(chatId) {
     const targetId = chatId || currentChatId;
     if (!targetId || isStreaming) return;
     try {
-        const response = await fetch(`${API_BASE}/chats/${targetId}/compact`, {
+        const response = await fetch(`${API_BASE}/agent-conversations/${targetId}/compact`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ reason: 'manual' })
@@ -6345,7 +6345,7 @@ async function compactCurrentChat(chatId) {
         await loadChats();
     } catch (e) {
         console.error('Compact chat failed:', e);
-        alert(e.message || 'Could not compact chat.');
+        alert(e.message || 'Could not compact conversation.');
     }
 }
 
@@ -6353,7 +6353,7 @@ async function forkCurrentChat(chatId) {
     const targetId = chatId || currentChatId;
     if (!targetId || isStreaming) return;
     try {
-        const response = await fetch(`${API_BASE}/chats/${targetId}/fork`, {
+        const response = await fetch(`${API_BASE}/agent-conversations/${targetId}/fork`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -6367,7 +6367,7 @@ async function forkCurrentChat(chatId) {
         await loadChat(data.id, { skipLoadInAgent: true });
     } catch (e) {
         console.error('Fork chat failed:', e);
-        alert(e.message || 'Could not fork chat.');
+        alert(e.message || 'Could not fork conversation.');
     } finally {
     }
 }
@@ -6389,7 +6389,7 @@ function updateContextRing(stats) {
 
 function applyHeaderStatsPayload(data) {
     if (!data || currentChatId == null) return;
-    const title = data.agent_name || (currentChatId === primaryAgentData?.main_conversation_id ? primaryAgentData.name : '') || currentChatSettings?.agent_name || document.querySelector(`.chat-item[data-chat-id="${currentChatId}"]`)?.dataset.agentName || data.title || 'New Chat';
+    const title = data.agent_name || (currentChatId === primaryAgentData?.main_conversation_id ? primaryAgentData.name : '') || currentChatSettings?.agent_name || document.querySelector(`.chat-item[data-chat-id="${currentChatId}"]`)?.dataset.agentName || data.title || 'New conversation';
     if (currentChatSettings) {
         currentChatSettings.title = title;
         if (data.context_stats) currentChatSettings.context_stats = data.context_stats;
@@ -6420,13 +6420,13 @@ async function refreshChatHeaderStats({ checkTitle = false } = {}) {
     if (!chatId) return;
     try {
         if (checkTitle) {
-            const titleRes = await fetch(`${API_BASE}/chats/${chatId}/refresh-title`, { method: 'POST' });
+            const titleRes = await fetch(`${API_BASE}/agent-conversations/${chatId}/refresh-title`, { method: 'POST' });
             if (titleRes.ok) {
                 applyHeaderStatsPayload(await titleRes.json());
                 return;
             }
         }
-        const response = await fetch(`${API_BASE}/chats/${chatId}/header-stats`);
+        const response = await fetch(`${API_BASE}/agent-conversations/${chatId}/header-stats`);
         if (!response.ok) return;
         const data = await response.json();
         applyHeaderStatsPayload(data);
@@ -6436,7 +6436,7 @@ async function refreshChatHeaderStats({ checkTitle = false } = {}) {
             const last = Number(auto.last_refresh_message_count || 0);
             const interval = Number(auto.interval || 5);
             if (count - last >= interval) {
-                const titleRes = await fetch(`${API_BASE}/chats/${chatId}/refresh-title`, { method: 'POST' });
+                const titleRes = await fetch(`${API_BASE}/agent-conversations/${chatId}/refresh-title`, { method: 'POST' });
                 if (titleRes.ok) applyHeaderStatsPayload(await titleRes.json());
             }
         }
@@ -6459,7 +6459,7 @@ function updateChatSettingsDisplay(settings) {
     };
 
     applyHeaderStatsPayload({
-        title: settings.title || 'New Chat',
+        title: settings.title || 'New conversation',
         context_stats: settings.context_stats,
         compact_checkpoint: settings.compact_checkpoint,
         title_auto: settings.title_auto
@@ -7032,7 +7032,7 @@ async function refreshPrimaryAgentActivity() {
     primaryBadgePollInFlight = true;
     const revision = primaryActivityRevision;
     try {
-        const response = await fetch(`${API_BASE}/chats/${chatId}/turns?limit=1`);
+        const response = await fetch(`${API_BASE}/agent-conversations/${chatId}/turns?limit=1`);
         if (!response.ok) return;
         const data = await response.json();
         if (revision !== primaryActivityRevision || chatId !== primaryAgentData?.main_conversation_id) return;
@@ -7260,7 +7260,7 @@ async function moveSidebarChat(dragged, target, after) {
     if (keepFocus) dragged.focus();
     const chatIds = [...chatList.querySelectorAll(':scope > .chat-item')].map(row => Number(row.dataset.chatId));
     try {
-        const response = await fetch(`${API_BASE}/chats/sidebar/order`, {
+        const response = await fetch(`${API_BASE}/agent-conversations/sidebar/order`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ chat_ids: chatIds }),

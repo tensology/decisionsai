@@ -211,20 +211,20 @@ def _mutation_keys(tool_name: str, arguments: dict[str, Any]) -> tuple[str, str]
 
 
 NEW_CHAT_BLOCK_REASON = (
-    "Blocked: the assistant never creates a new chat while handling an instruction. New chats come "
-    "only from the user's own 'New chat' button. Finish one-shot actions in the current chat; send "
+    "Blocked: the assistant never starts a new agent conversation while handling an instruction. New conversations come "
+    "only from the user's action in Agents. Finish one-shot actions in the active conversation; send "
     "project work to the current or named project's Development thread with development_control "
     "(send_instruction for an existing thread, create_thread for a new one)."
 )
 
-_NEW_CHAT_PAGES = {"new chat", "new conversation", "new_chat", "new-chat", "fresh chat"}
+_NEW_CHAT_PAGES = {"new agent", "create agent", "new agent conversation", "new chat", "new conversation", "new_chat", "new-chat", "fresh chat"}
 
 
 def is_new_chat_tool_call(tool_name: str, arguments: dict[str, Any] | None = None) -> bool:
     """True for any tool call whose effect is spawning a new Oracle chat."""
     name = str(tool_name or "").strip().lower()
     args = arguments if isinstance(arguments, dict) else {}
-    if name in {"new_chat", "start_new_chat", "create_chat"}:
+    if name in {"new_agent_conversation", "new_chat", "start_new_chat", "create_chat"}:
         return True
     if name == "open_page":
         page = str(args.get("page") or args.get("page_name") or "").strip().lower()

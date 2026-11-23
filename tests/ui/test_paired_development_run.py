@@ -126,7 +126,7 @@ def test_completed_workflow_shows_only_its_unresolved_queue_hold(
     if surface == "desktop":
         _install_api(page, [])
         page.route_web_socket("**/api/ws?*", lambda socket: socket.on_message(lambda _: None))
-        page.route("**/api/chats/17?surface=development", lambda route: route.fulfill(json=chat))
+        page.route("**/api/agent-conversations/17?surface=development", lambda route: route.fulfill(json=chat))
         page.route(f"**{EXECUTION}", lambda route: route.fulfill(json=client.get(EXECUTION).json()))
         url = f"{fixture_base}/development/threads/17/"
     else:
@@ -145,7 +145,7 @@ def test_completed_workflow_shows_only_its_unresolved_queue_hold(
                     result = {}
                     if path.startswith("/api/workflows/studio/incoming/proposals/review?"):
                         result = {"status": "thread", "chat_id": 17}
-                    elif path == "/api/chats/17?surface=development":
+                    elif path == "/api/agent-conversations/17?surface=development":
                         result = chat
                     elif path == EXECUTION:
                         result = client.get(path).json()
@@ -325,7 +325,7 @@ def test_paired_telegram_closing_reply_tracks_the_exact_receipt(page, review, mo
                 status, result = 200, {}
                 if path.startswith("/api/workflows/studio/incoming/proposals/review?"):
                     result = {"status": "thread", "chat_id": 17}
-                elif path == "/api/chats/17?surface=development":
+                elif path == "/api/agent-conversations/17?surface=development":
                     result = {"title": "Delivery proposal", "project_id": 9, "messages": []}
                 elif path == EXECUTION:
                     response = client.get(path)
@@ -435,7 +435,7 @@ def test_paired_workflow_shows_scoped_client_reply_state(page, review, monkeypat
                 status = 200
                 if path.startswith("/api/workflows/studio/incoming/proposals/review?"):
                     result = {"status": "thread", "chat_id": 17}
-                elif path == "/api/chats/17?surface=development":
+                elif path == "/api/agent-conversations/17?surface=development":
                     result = {"title": "Delivery proposal", "project_id": 9, "messages": []}
                 elif path == EXECUTION or path.startswith(f"{EXECUTION}/client-reply?"):
                     if path != EXECUTION and not held_previews:
@@ -630,7 +630,7 @@ def test_linked_thread_shows_and_stops_only_the_exact_run(page, monkeypatch, wid
                 requests.append((method, path, body))
                 if path == f"/api/workflows/studio/incoming/proposals/review?review_key={key}":
                     data = {"status": "thread", "chat_id": 17}
-                elif path == "/api/chats/17?surface=development":
+                elif path == "/api/agent-conversations/17?surface=development":
                     data = {"title": "Delivery proposal", "project_id": 7,
                             "messages": [{"role": "user", "content": "Verify the handoff."}]}
                 elif path == EXECUTION and read_unavailable:
@@ -863,7 +863,7 @@ def test_paired_run_reports_ticket_move_before_worker_start(page, monkeypatch, s
                 result, status = {}, 200
                 if path.startswith("/api/workflows/studio/incoming/proposals/review?"):
                     result = {"status": "thread", "chat_id": scope.chat_id}
-                elif path == f"/api/chats/{scope.chat_id}?surface=development":
+                elif path == f"/api/agent-conversations/{scope.chat_id}?surface=development":
                     result = {"title": "Review this proposal", "project_id": scope.project_id, "messages": []}
                 elif path == execution_path:
                     response = client.get(path)

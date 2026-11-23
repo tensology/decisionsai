@@ -36,9 +36,9 @@ def playback_chat(page):
         path = urlparse(route.request.url).path
         if path == "/chat/":
             route.fulfill(content_type="text/html", body=html)
-        elif path == "/api/chats":
+        elif path == "/api/agent-conversations":
             route.fulfill(json={"chats": [{"id": CHAT_ID, "agent_name": "QA Agent"}, {"id": 164, "agent_name": "Other Agent"}]})
-        elif path in (f"/api/chats/{CHAT_ID}", "/api/chats/164"):
+        elif path in (f"/api/agent-conversations/{CHAT_ID}", "/api/agent-conversations/164"):
             route.fulfill(json={
                 "title": "Plan review" if path.endswith(str(CHAT_ID)) else "Second conversation",
                 "provider": "Ollama",
@@ -74,7 +74,7 @@ def playback_chat(page):
                     window.playbackPosts.push(url);
                     return Promise.resolve(new Response('{}'));
                 }
-                if (url === '/api/chats/tts/generate') {
+                if (url === '/api/agent-conversations/tts/generate') {
                     const response = () => new Response(Uint8Array.from(atob(sample), c => c.charCodeAt(0)), {
                         headers: {'Content-Type': 'audio/wav'}
                     });
@@ -124,7 +124,7 @@ def test_playback_controls_leave_active_work_running(playback_chat, tmp_path, wi
     page.screenshot(path=tmp_path / "closed.png")
 
     work_stop.click()
-    assert page.evaluate("window.playbackPosts") == [f"/api/chats/{CHAT_ID}/cancel?turn_id=184"]
+    assert page.evaluate("window.playbackPosts") == [f"/api/agent-conversations/{CHAT_ID}/cancel?turn_id=184"]
     page.evaluate("selectChat(164)")
     expect(page.locator("#chatTitle")).to_have_text("Other Agent")
     expect(work_stop).to_be_hidden()

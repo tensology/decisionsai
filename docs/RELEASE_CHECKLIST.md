@@ -23,7 +23,7 @@ a fresh clean-tree verification record.
 - [x] Telegram text creates or updates a project ticket with correct context.
 - [x] Telegram voice is transcribed and can approve, decline, continue, stop, or steer a run.
 - [x] A Telegram attachment travels outbound and back inbound with its caption and project context intact.
-- [x] Desktop chat can start and steer the same workflow contract.
+- [x] The desktop Agents surface can start and steer the same workflow contract.
 - [x] At least one local worker and one remote worker complete a ticket and return normalized artifacts, diagnostics, memory delta, and next actions.
 - [x] Provider timeout, invalid credentials, quota failure, malformed output, and cancellation each produce a useful terminal state.
 

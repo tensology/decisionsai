@@ -15,7 +15,7 @@ export function createThreadSession({ api, workflowForChat, runForWorkflow, dire
         try {
             const summary = workflowForChat(chatId, previousChat);
             const [chat, linkedWorkflow, artifacts, plans, execution, time] = await Promise.all([
-                includeChat ? get(`/chats/${chatId}?surface=development`) : null,
+                includeChat ? get(`/agent-conversations/${chatId}?surface=development`) : null,
                 summary ? get(`/workflows/${summary.id}`) : null,
                 get(`/workflows/studio/tasks/${chatId}/artifacts`),
                 get(`/workflows/studio/tasks/${chatId}/plans`),

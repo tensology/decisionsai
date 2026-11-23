@@ -196,7 +196,7 @@ def test_resume_saved_merge_after_reload_does_not_start_work(page, fixture_base,
             'messages': [{'role': 'user', 'content': 'Merged proposal scope.', 'attachments': [file]}],
         })
 
-    page.route('**/api/chats/17?*', thread)
+    page.route('**/api/agent-conversations/17?*', thread)
     page.reload()
     button = page.get_by_role('button', name='Resume merge', exact=True)
     expect(button).to_be_visible()
@@ -266,8 +266,8 @@ def test_open_thread_refreshes_telegram_receipt_without_reloading_transcript(pag
         detail_reads.append(route.request.url)
         route.fulfill(json={**summary, 'messages': [{'role': 'assistant', 'content': 'The work is ready.', 'chat_row_id': 28}]})
 
-    page.route('**/api/chats?*', lambda route: route.fulfill(json={'chats': [summary]}))
-    page.route('**/api/chats/17?*', thread)
+    page.route('**/api/agent-conversations?*', lambda route: route.fulfill(json={'chats': [summary]}))
+    page.route('**/api/agent-conversations/17?*', thread)
     page.route_web_socket('**/api/ws?*', lambda socket: socket.on_message(lambda message: None))
     page.goto(fixture_base + '/development/threads/17/')
     banner = page.locator('#thread-telegram-status')
@@ -301,7 +301,7 @@ def test_open_thread_refreshes_telegram_receipt_without_reloading_transcript(pag
     assert draft.evaluate('(node) => node.selectionStart') == 0
     assert message.evaluate('(node) => node === window.originalResult')
     assert len(detail_reads) == reads
-    assert ('POST', '/api/chats/17/message') not in requests
+    assert ('POST', '/api/agent-conversations/17/message') not in requests
     page.screenshot(path=SHOTS / f'telegram-duplicate-confirmed-{width}.png', animations='disabled')
 
 
@@ -335,7 +335,7 @@ def test_development_merge_conflict_keeps_draft_for_retry(page, fixture_base, wi
         accepted = True
         return route.fulfill(json={'success': True, 'started': True, 'turn_id': 21})
 
-    page.route('**/api/chats/17?*', chat)
+    page.route('**/api/agent-conversations/17?*', chat)
     page.route('**/api/workflows/studio/tasks/17/execution', lambda route: route.fulfill(json={}))
     page.route('**/api/workflows/studio/tasks/17/messages', submit)
     page.goto(f'{fixture_base}/development/threads/17/')
@@ -391,7 +391,7 @@ def test_linked_workflow_rejection_and_retry_use_real_message_route(page, fixtur
     api = TestClient(app)
     _install_api(page, [], current_board_linked=True, direct_execution=True, terminal_session=False)
     page.set_viewport_size({'width': width, 'height': 960})
-    page.route('**/api/chats/17?*', lambda route: route.fulfill(json={
+    page.route('**/api/agent-conversations/17?*', lambda route: route.fulfill(json={
         "id": 17, "title": "Linked review", "development": True, "messages": ChatService.get_chat_history(chat_id),
     }))
     page.route('**/api/workflows/studio/tasks/17/execution', lambda route: route.fulfill(json={}))

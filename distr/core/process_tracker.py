@@ -261,9 +261,30 @@ def _atexit_cleanup():
         pass
 
 
+def _record_signal_exit_intent(signum):
+    try:
+        from distr.core.runtime_lifecycle import (
+            append_runtime_event,
+            read_exit_intent,
+            write_exit_intent,
+        )
+
+        append_runtime_event("signal_received", source="process_tracker.signal", signum=int(signum))
+        if not read_exit_intent():
+            write_exit_intent(
+                "signal",
+                source="process_tracker.SIGTERM" if signum == signal.SIGTERM else "process_tracker.signal",
+                expected_restart=False,
+                signum=int(signum),
+            )
+    except Exception:
+        pass
+
+
 def _signal_handler(signum, frame):
     """Route termination through app shutdown, with a non-GUI fallback."""
     logger.info("process_tracker: caught signal %d", signum)
+    _record_signal_exit_intent(signum)
     if _shutdown_callback is not None:
         try:
             _shutdown_callback()

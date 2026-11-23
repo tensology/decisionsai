@@ -1561,7 +1561,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 65_000);
         try {
             if (cached?.source === text) {
-                const result = await actions.api('/chats/speak-spoken', { method: 'POST', body: { text: cached.spoken }, signal: controller.signal });
+                const result = await actions.api('/agent-conversations/speak-spoken', { method: 'POST', body: { text: cached.spoken }, signal: controller.signal });
                 if (result?.ok !== true) throw new Error('Speech is unavailable. Check that the Oracle is running and try again.');
                 return;
             }

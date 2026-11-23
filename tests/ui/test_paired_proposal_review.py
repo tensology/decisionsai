@@ -62,7 +62,7 @@ def test_paired_incoming_resumes_saved_merge_without_starting_work(page, width, 
                 request = frame["data"]
                 path = request["path"]
                 status, result = 200, {"items": [], "chats": []}
-                if request["method"] == "POST" and path == "/api/chats/17/acknowledge-ready":
+                if request["method"] == "POST" and path == "/api/agent-conversations/17/acknowledge-ready":
                     assert request.get("body") == {}
                     result = {"ready_acknowledged_at": "2026-11-12T12:00:00Z"}
                 elif request["method"] == "POST":
@@ -78,7 +78,7 @@ def test_paired_incoming_resumes_saved_merge_without_starting_work(page, width, 
                     }
                 elif path.startswith(PREFIX + "/review?"):
                     result = {"status": "thread", "chat_id": 17}
-                elif path == "/api/chats/17?surface=development":
+                elif path == "/api/agent-conversations/17?surface=development":
                     result = {"title": "Merged delivery", "messages": [{"role": "assistant", "content": "Saved merge thread."}],
                               "unavailable_attachment_names": unavailable, "telegram_proposal_update_status": telegram}
                 data = {"status": status, "response": result}
@@ -250,7 +250,7 @@ def test_paired_app_view_uses_native_proposal_review(page, monkeypatch, tmp_path
                     return
                 if path in {PREFIX + "/details", PREFIX + "/project"}:
                     assert data["body"]["reviewed_proposal"] == scope["snapshot"]
-                if path == "/api/chats/17?surface=development":
+                if path == "/api/agent-conversations/17?surface=development":
                     reply["data"] = {"status": 200, "response": {
                         "title": "Linked Development thread", "messages": [
                             {"role": "assistant", "content": "Review started on this thread."},

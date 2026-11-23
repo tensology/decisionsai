@@ -77,9 +77,9 @@ def install_thread_api(page):
     install_responsive_api(page)
     _install_api(page, [], direct_execution=True, terminal_session=False)
     page.route('**/api/workflows/studio/sidebar/pins', lambda route: route.fulfill(json={}))
-    page.route('**/api/chats?*', lambda route: route.fulfill(json={'chats': [{'id': 17, 'title': 'Review implementation', 'project_id': 7, 'development': True, 'development_source_type': 'prompt'}]}))
-    page.route('**/api/chats', lambda route: route.fulfill(json={'chats': [{'id': 17, 'title': 'Review implementation', 'project_id': 7, 'development': True, 'development_source_type': 'prompt'}]}))
-    page.route('**/api/chats/17?*', lambda route: route.fulfill(json={
+    page.route('**/api/agent-conversations?*', lambda route: route.fulfill(json={'chats': [{'id': 17, 'title': 'Review implementation', 'project_id': 7, 'development': True, 'development_source_type': 'prompt'}]}))
+    page.route('**/api/agent-conversations', lambda route: route.fulfill(json={'chats': [{'id': 17, 'title': 'Review implementation', 'project_id': 7, 'development': True, 'development_source_type': 'prompt'}]}))
+    page.route('**/api/agent-conversations/17?*', lambda route: route.fulfill(json={
         'id': 17, 'title': 'Review implementation', 'project_id': 7, 'provider': 'OpenAI',
         'model_name': 'gpt-5.3-codex', 'backend': 'codex', 'route_mode': 'manual', 'execution_profile': 'code',
         'autonomy_level': 'full', 'development': True, 'development_source_type': 'prompt',

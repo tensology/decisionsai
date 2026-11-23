@@ -33,14 +33,14 @@ The Oracle is the small desktop avatar that stays above your windows. It is the 
 
 - Hold **Option + Command** on macOS to speak to the agent.
 - Hold **Control + Command** to dictate into the app in front of you.
-- Drop in a file, ask about the screen, run an action, or open Chat.
+- Drop in a file, ask about the screen, run an action, or open Agents at `/agents/`.
 - Change shortcuts, audio devices, models, and voices in Preferences.
 
 Voice can run through local speech recognition and text-to-speech, or through configured cloud providers. Push-to-talk, dictation, and continuous conversation are separate modes, so you can use only the parts you need.
 
 ## Give work a project
 
-Quick questions stay in Chat. Substantial work belongs in **Development**, where it keeps a durable identity and the correct project context.
+Quick questions stay in Agents. Substantial work belongs in **Development**, where it keeps a durable identity and the correct project context.
 
 Development brings these surfaces together:
 
@@ -65,7 +65,7 @@ WhatsApp can feed selected contacts or groups into project intake. DecisionsAI c
 ## How it fits together
 
 ```text
-Oracle, Chat, Telegram, WhatsApp, mobile remote
+Oracle, Agents, Telegram, WhatsApp, mobile remote
                          |
                   Decisions agent
                          |

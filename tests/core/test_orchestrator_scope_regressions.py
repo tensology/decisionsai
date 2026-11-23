@@ -1185,7 +1185,7 @@ def test_proactive_ide_callback_finalizes_the_exact_approved_turn(work, tmp_path
         assert db.get(Chat, task.turn_id).response == (proactive.PROACTIVE_RESULT_HELD if held else output)
         assert db.query(Chat).filter_by(parent_id=task.chat_id).count() == 1
     assert feedback.call_count == (0 if held else 1)
-    transcript = client.get(f"/api/chats/{task.chat_id}?surface=development")
+    transcript = client.get(f"/api/agent-conversations/{task.chat_id}?surface=development")
     assert transcript.status_code == 200
     assert (output in transcript.text) == (not held)
     message = next(message for message in transcript.json()["messages"]

@@ -1,14 +1,14 @@
 """select_thread / open_thread: point the web UI's left panel at one thread.
 
-Shared by the Oracle tools (agent/tools/chat/select_thread.py) and the
+Shared by the Oracle thread selection tools and the
 development agent toolset (workflow/dev_agent_tools.py -> Pi/Claude/Codex/Cursor MCP).
 
 * resolve  : 'latest' | numeric id | title query -> one root thread (parent_id NULL),
-             from the same /api/chats list the sidebars render.
+             from the same /api/agent-conversations list the sidebars render.
 * select   : POST /api/events/ui/select-thread. The server pushes ui.thread.select over
-             the SSE stream; open Chat/Development tabs select + highlight the row and ack.
+             the SSE stream; open Agents/Development tabs select + highlight the row and ack.
              The server waits ~1.5s and returns the ack count.
-* open     : open /development/threads/<id>/ or /chat/?id=<id> in the DEFAULT browser
+* open     : open /development/threads/<id>/ or /agents/?id=<id> in the DEFAULT browser
              (macOS `open`, never the dev Chrome profile). An already-open tab is
              reused (select + focus) instead of opening a duplicate.
 select_thread falls back to open by itself when no tab acks.
@@ -32,7 +32,7 @@ _LATEST_RE = re.compile(r"^(?:the\s+)?(?:latest|newest|most\s+recent|last|recent
 
 def norm_surface(surface: Optional[str]) -> str:
     s = str(surface or "").strip().lower()
-    if s in {"chat", "chats", "oracle", "conversation", "conversations"}:
+    if s in {"agent", "agents", "chat", "chats", "oracle", "conversation", "conversations"}:
         return "chat"
     return "development"
 
@@ -62,7 +62,8 @@ def _token_headers() -> dict[str, str]:
 
 
 def fetch_threads(surface: str, base: str) -> list[dict[str, Any]]:
-    url = f"{base}/api/chats?surface={urllib.parse.quote(surface)}"
+    api_surface = "agents" if surface == "chat" else surface
+    url = f"{base}/api/agent-conversations?surface={urllib.parse.quote(api_surface)}"
     req = urllib.request.Request(url, headers=_token_headers())
     with urllib.request.urlopen(req, timeout=5) as resp:
         data = json.loads(resp.read().decode("utf-8") or "{}")
@@ -99,7 +100,7 @@ def resolve_thread(thread: Any, threads: list[dict[str, Any]]) -> Optional[dict[
 
 
 def thread_path(surface: str, thread_id: int) -> str:
-    return f"/development/threads/{int(thread_id)}/" if surface == "development" else f"/chat/?id={int(thread_id)}"
+    return f"/development/threads/{int(thread_id)}/" if surface == "development" else f"/agents/?id={int(thread_id)}"
 
 
 def emit_select(surface: str, thread_id: int, base: str, *, title: str = "", focus: bool = False,
@@ -123,10 +124,10 @@ def _resolve(thread: Any, surface: str, base: str, fetch: Callable) -> tuple[Opt
     try:
         threads = fetch(surface, base)
     except Exception as exc:
-        return None, f"could not list {surface} threads: {exc}"
+        return None, f"could not list {'Agents' if surface == 'chat' else 'Development'} threads: {exc}"
     hit = resolve_thread(thread, threads)
     if hit is None:
-        return None, f"no {surface} thread matches '{thread}'"
+        return None, f"no {'Agents' if surface == 'chat' else 'Development'} thread matches '{thread}'"
     return hit, ""
 
 
@@ -158,12 +159,12 @@ def open_thread(thread: Any = "latest", surface: Optional[str] = None, *, base: 
         except Exception:
             acks = 0
         if acks:
-            return _result(True, "selected", surface, hit, f"Selected {surface} thread {tid} '{title}' in the open tab.", url=url, acked=acks)
+            return _result(True, "selected", surface, hit, f"Selected {'Agents' if surface == 'chat' else 'Development'} thread {tid} '{title}' in the open tab.", url=url, acked=acks)
     try:
         accepted = bool(opener(url))
     except Exception as exc:
         return _result(False, "none", surface, hit, f"could not open browser: {exc}", url=url)
-    return _result(accepted, "opened", surface, hit, f"Opened {surface} thread {tid} '{title}' in the browser.", url=url)
+    return _result(accepted, "opened", surface, hit, f"Opened {'Agents' if surface == 'chat' else 'Development'} thread {tid} '{title}' in the browser.", url=url)
 
 
 def select_thread(thread: Any = "latest", surface: Optional[str] = None, *, base: Optional[str] = None,
@@ -183,7 +184,7 @@ def select_thread(thread: Any = "latest", surface: Optional[str] = None, *, base
         acks = 0
     if acks:
         return _result(True, "selected", surface, hit,
-                       f"Selected {surface} thread {tid} '{title}' in {acks} open tab(s).", acked=acks)
+                       f"Selected {'Agents' if surface == 'chat' else 'Development'} thread {tid} '{title}' in {acks} open tab(s).", acked=acks)
     res = open_thread(thread, surface, base=base, fetch=fetch, emit=emit, opener=opener, _hit=hit)
     res["summary"] = "No open web UI tab acknowledged the selection, so I opened it. " + res["summary"]
     return res
@@ -194,5 +195,5 @@ def spoken(result: dict[str, Any]) -> str:
         return f"Couldn't do that: {result.get('summary')}"
     t = result.get("title") or f"thread {result.get('thread_id')}"
     verb = "Selected" if result.get("path") == "selected" else "Opened"
-    where = "Chat" if result.get("surface") == "chat" else "Development"
+    where = "Agents" if result.get("surface") == "chat" else "Development"
     return f"{verb} '{t}' in {where}. (path: {result.get('path')})"

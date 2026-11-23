@@ -93,13 +93,13 @@ def test_primary_api_avatar_activation_and_message_routing(primary_app, monkeypa
         count = session.query(ChatAgent).count()
     assert client.patch('/api/agents/primary/avatar', json={'skin_name':'missing'}).status_code == 422
     assert client.patch('/api/agents/primary/avatar', json={'skin_name':'rusty'}).status_code == 200
-    assert client.post(f'/api/chats/{second}/load-in-agent').status_code == 200
+    assert client.post(f'/api/agent-conversations/{second}/load-in-agent').status_code == 200
     restore_chat_skin(second)
     # The loaded conversation's own agent skin wins, not the primary's.
     assert load()['selected_oracle'] == 'hayley'
     restore_chat_skin(first)
     assert load()['selected_oracle'] == 'rusty'
-    response = client.post(f'/api/chats/{second}/send-to-agent', json={'message':'Reply only pong', 'speak':False})
+    response = client.post(f'/api/agent-conversations/{second}/send-to-agent', json={'message':'Reply only pong', 'speak':False})
     assert response.status_code == 200, response.text
     assert signals.web_send_to_agent_requested.emit.call_args.args[0] == second
     assert signals.web_send_to_agent_requested.emit.call_args.args[2] is False
@@ -113,8 +113,8 @@ def test_primary_api_avatar_activation_and_message_routing(primary_app, monkeypa
         assert chat_skin(session.get(Chat, first)) == 'rusty'
         assert session.query(PrimaryChatAgent).count() == 1
         assert session.query(ChatAgent).count() == count
-    assert client.delete(f'/api/chats/{second}').status_code == 409
-    assert client.delete(f'/api/chats/{first}').status_code != 409
+    assert client.delete(f'/api/agent-conversations/{second}').status_code == 409
+    assert client.delete(f'/api/agent-conversations/{first}').status_code != 409
 
 
 def test_oracle_background_is_saved_per_agent_and_survives_skin_changes(primary_app):
@@ -127,16 +127,16 @@ def test_oracle_background_is_saved_per_agent_and_survives_skin_changes(primary_
     select = lambda index: OracleWindow._select_skin_by_shortcut_index(desktop, index)
     assert client.get('/api/agents/primary').json()['primary_agent']['main_conversation_id'] == first
     assert client.put('/api/skins/oracle/background', json={'filename':'1.webm'}).status_code == 200
-    assert client.post(f'/api/chats/{second}/load-in-agent').status_code == 200
+    assert client.post(f'/api/agent-conversations/{second}/load-in-agent').status_code == 200
     select(1)
     assert client.put('/api/skins/oracle/background', json={'filename':'2.webm'}).status_code == 200
     assert client.put('/api/skins/oracle/background', json={'filename':'../2.webm'}).status_code == 422
     assert client.get('/api/skins/oracle/background').json()['filename'] == '2.webm'
-    assert client.get(f'/api/chats/{first}').json()['oracle_background'] == '1.webm'
-    assert client.get(f'/api/chats/{second}').json()['oracle_background'] == '2.webm'
-    assert client.post(f'/api/chats/{first}/load-in-agent').status_code == 200
+    assert client.get(f'/api/agent-conversations/{first}').json()['oracle_background'] == '1.webm'
+    assert client.get(f'/api/agent-conversations/{second}').json()['oracle_background'] == '2.webm'
+    assert client.post(f'/api/agent-conversations/{first}/load-in-agent').status_code == 200
     select(2)
-    rows = {row['id']: row for row in client.get('/api/chats').json()['chats']}
+    rows = {row['id']: row for row in client.get('/api/agent-conversations').json()['chats']}
     assert (rows[first]['skin_name'], rows[first]['oracle_background']) == ('hayley', '1.webm')
     assert (rows[second]['skin_name'], rows[second]['oracle_background']) == ('oracle', '2.webm')
     select(1)
@@ -146,7 +146,7 @@ def test_oracle_background_is_saved_per_agent_and_survives_skin_changes(primary_
     desktop._skin_config = SimpleNamespace(events={'idle': SimpleNamespace(animation='1.webm')})
     OracleWindow._cycle_oracle_background(desktop, -1)
     assert client.get('/api/skins/oracle/background').json()['filename'] == '0.webm'
-    assert client.get(f'/api/chats/{second}').json()['oracle_background'] == '2.webm'
+    assert client.get(f'/api/agent-conversations/{second}').json()['oracle_background'] == '2.webm'
     assert config.read_bytes() == original
 
 
@@ -154,43 +154,43 @@ def test_chat_config_background_updates_only_its_appearance_owner(primary_app):
     from distr.core.db import Chat, Settings
 
     client, sessions, _, _, first, second = primary_app
-    first_background = client.get(f'/api/chats/{first}').json()['oracle_background']
-    assert client.patch(f'/api/chats/{second}', json={
+    first_background = client.get(f'/api/agent-conversations/{first}').json()['oracle_background']
+    assert client.patch(f'/api/agent-conversations/{second}', json={
         'skin_name': 'oracle', 'oracle_background': '../1.webm',
     }).status_code == 422
-    assert client.get(f'/api/chats/{second}').json()['skin_name'] == 'hayley'
-    saved = client.patch(f'/api/chats/{second}', json={
+    assert client.get(f'/api/agent-conversations/{second}').json()['skin_name'] == 'hayley'
+    saved = client.patch(f'/api/agent-conversations/{second}', json={
         'skin_name': 'oracle', 'oracle_background': '1.webm',
     })
     assert saved.status_code == 200
     assert saved.json()['oracle_background'] == '1.webm'
-    assert client.get(f'/api/chats/{first}').json()['oracle_background'] == first_background
-    assert client.patch(f'/api/chats/{second}', json={'skin_name': 'hayley'}).status_code == 200
-    assert client.get(f'/api/chats/{second}').json()['oracle_background'] == '1.webm'
-    assert client.patch(f'/api/chats/{second}', json={'oracle_background': None}).status_code == 200
-    assert client.get(f'/api/chats/{second}').json()['oracle_background'] is None
+    assert client.get(f'/api/agent-conversations/{first}').json()['oracle_background'] == first_background
+    assert client.patch(f'/api/agent-conversations/{second}', json={'skin_name': 'hayley'}).status_code == 200
+    assert client.get(f'/api/agent-conversations/{second}').json()['oracle_background'] == '1.webm'
+    assert client.patch(f'/api/agent-conversations/{second}', json={'oracle_background': None}).status_code == 200
+    assert client.get(f'/api/agent-conversations/{second}').json()['oracle_background'] is None
 
     with sessions() as session:
         legacy = Chat(title='Standalone')
         session.add(legacy)
         session.flush()
         legacy_id = legacy.id
-    assert client.patch(f'/api/chats/{legacy_id}', json={'oracle_background': '2.webm'}).status_code == 200
-    assert client.get(f'/api/chats/{legacy_id}').json()['oracle_background'] == '2.webm'
+    assert client.patch(f'/api/agent-conversations/{legacy_id}', json={'oracle_background': '2.webm'}).status_code == 200
+    assert client.get(f'/api/agent-conversations/{legacy_id}').json()['oracle_background'] == '2.webm'
 
     with sessions() as session:
         session.query(Settings).one().default_oracle_background = '1.webm'
     creation = {'agent_name': 'New Oracle', 'skin_name': 'oracle'}
-    assert client.post('/api/chats', json={**creation, 'oracle_background': '../2.webm'}).status_code == 422
+    assert client.post('/api/agent-conversations', json={**creation, 'oracle_background': '../2.webm'}).status_code == 422
     for options, expected in (({}, '1.webm'), ({'oracle_background': None}, None),
                               ({'oracle_background': '2.webm'}, '2.webm')):
-        created = client.post('/api/chats', json={**creation, **options})
+        created = client.post('/api/agent-conversations', json={**creation, **options})
         assert created.status_code == 200
-        assert client.get(f"/api/chats/{created.json()['id']}").json()['oracle_background'] == expected
+        assert client.get(f"/api/agent-conversations/{created.json()['id']}").json()['oracle_background'] == expected
 
-    thread = client.post('/api/chats', json={'skin_name': 'oracle', 'oracle_background': '2.webm'})
+    thread = client.post('/api/agent-conversations', json={'skin_name': 'oracle', 'oracle_background': '2.webm'})
     assert thread.status_code == 200
-    assert client.get(f"/api/chats/{thread.json()['id']}").json()['oracle_background'] == '2.webm'
+    assert client.get(f"/api/agent-conversations/{thread.json()['id']}").json()['oracle_background'] == '2.webm'
 
 
 def test_compacting_viewed_chat_keeps_runtime_active_and_preserves_new_voice_turn(primary_app, monkeypatch):
@@ -208,10 +208,10 @@ def test_compacting_viewed_chat_keeps_runtime_active_and_preserves_new_voice_tur
     monkeypatch.setattr(routes, "_summarize_chat_with_model", summarize)
     monkeypatch.setattr(routes, "_maybe_refresh_chat_title", lambda *args, **kwargs: None)
     monkeypatch.setattr("distr.core.orchestrator.emit_event", lambda **kwargs: None)
-    result = client.post(f"/api/chats/{second}/compact", json={})
+    result = client.post(f"/api/agent-conversations/{second}/compact", json={})
 
     assert result.status_code == 200
-    assert client.get("/api/chats").json()["agent_current_chat_id"] == first
+    assert client.get("/api/agent-conversations").json()["agent_current_chat_id"] == first
     signals.web_load_chat_in_agent_requested.emit.assert_not_called()
     signals.web_chat_compacted.emit.assert_called_once_with(second)
     history = ChatService.get_chat_history(second)
@@ -235,7 +235,7 @@ def test_primary_star_roster_and_switching(width, primary_app, tmp_path):
             route.fulfill(json={'skins':[{'name':name.title(),'folder_name':name,'preview_image':'idle.webp'} for name in ('oracle','hayley','rusty')], 'selected_skin':load()['selected_oracle']})
         elif '/preview/' in path:
             route.fulfill(path=str(ROOT/'assets/avatars/hayley/idle.webp'), content_type='image/webp')
-        elif path.startswith(('/api/chats','/api/agents')):
+        elif path.startswith(('/api/agent-conversations','/api/agents')):
             r=client.request(request.method,path,content=request.post_data,headers={'content-type':'application/json'})
             route.fulfill(status=r.status_code,content_type='application/json',body=r.content)
         else:
@@ -277,5 +277,5 @@ def test_primary_star_roster_and_switching(width, primary_app, tmp_path):
         assert client.get('/api/agents/primary').json()['primary_agent']['main_conversation_id']==second
         assert page.locator(f'#chatList .chat-item[data-chat-id="{first}"] .agent-star').inner_text()=='☆'
         # The old primary can now be deleted; the new primary cannot.
-        assert client.delete(f'/api/chats/{second}').status_code == 409
+        assert client.delete(f'/api/agent-conversations/{second}').status_code == 409
         browser.close()

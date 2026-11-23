@@ -7,7 +7,7 @@ export function createCatalogLoader(api) {
         sidebarPins: ['/workflows/studio/sidebar/pins', {}],
         boards: ['/tickets/boards', []],
         externalBoards: ['/tickets/external-boards', {}],
-        chatsData: ['/chats?include_archived=true&surface=development', { chats: [] }],
+        chatsData: ['/agent-conversations?include_archived=true&surface=development', { chats: [] }],
         workflows: ['/workflows?limit=200', []],
         runs: ['/workflows/active-runs?limit=100', []],
         inboxData: ['/workflows/intake/inbox?limit=100', { items: [] }],

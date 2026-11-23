@@ -1429,7 +1429,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             from distr.core.chat import resolve_voice_model_from_global_settings
 
             voice_model = resolve_voice_model_from_global_settings(vp, settings)
-            ChatService.create_new_chat(llm_provider=provider, llm_model=model_name, tts_provider=voice_provider, tts_voice=voice_model, title="New Chat", starting_question=None)
+            ChatService.create_new_chat(llm_provider=provider, llm_model=model_name, tts_provider=voice_provider, tts_voice=voice_model, title="New conversation", starting_question=None)
             logger.info("Created default chat on launch (no chats existed)")
         except Exception as e:
             logger.warning("Could not ensure default chat on launch: %s", e)

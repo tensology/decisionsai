@@ -23,6 +23,11 @@ _ollama_tags_cache: Tuple[float, Optional[set[str]]] = (0.0, None)
 _OLLAMA_TAGS_TTL_SECONDS = 60.0
 
 
+def public_conversation_title(title: Optional[str]) -> str:
+    title = (title or "").strip()
+    return "New conversation" if title in ("", "New Chat", "New Conversation") else title
+
+
 def _chat_additional_context(raw: Optional[str]) -> Dict[str, Any]:
     if not raw:
         return {}
@@ -92,7 +97,7 @@ def _fallback_chat_title(messages: List[Dict[str, Any]]) -> str:
         if len(first_line) > 60:
             return first_line[:57].rstrip() + "..."
         return first_line
-    return "New Chat"
+    return "New conversation"
 
 
 def _ollama_installed_models(settings: dict) -> set[str]:
@@ -169,7 +174,7 @@ def suggest_chat_title(messages: List[Dict[str, Any]], *, settings: dict) -> str
             transcript.append(f"{role.upper()}: {content[:400]}")
     transcript_text = "\n".join(transcript)
     if not transcript_text:
-        return "New Chat"
+        return "New conversation"
 
     try:
         from distr.core.litellm_utils import litellm_completion

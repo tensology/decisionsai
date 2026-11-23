@@ -172,6 +172,7 @@ from distr.core.agent.constants import normalize_voice_provider
 from distr.core.agent.services.tts.registry import tts_registry
 from distr.core.chat_title_auto import (
     TITLE_REFRESH_MESSAGE_INTERVAL,
+    public_conversation_title,
     maybe_refresh_chat_title as _maybe_refresh_chat_title,
     _title_auto_meta,
 )
@@ -798,7 +799,7 @@ def _chat_header_stats_payload(
     )
     title_auto = _title_auto_meta(additional_context)
     return {
-        "title": root_chat.title or "New Chat",
+        "title": public_conversation_title(root_chat.title),
         "context_stats": context_stats,
         "compact_checkpoint": compact_checkpoint,
         "title_auto": {
@@ -1159,7 +1160,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
         delivered = await broadcast_chat_event(body)
         return JSONResponse({"ok": True, "delivered": delivered})
 
-    @router.put("/chats/sidebar/order")
+    @router.put("/chats/sidebar/order", include_in_schema=False)
+    @router.put("/agent-conversations/sidebar/order", summary="Update agent conversation sidebar order")
     async def update_chat_sidebar_order(body: ChatSidebarOrderRequest):
         """Save the visible chat rows in manual order, including older agentless chats."""
         from distr.core.agent_groups import group_chat_ids
@@ -1184,15 +1186,18 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             session.commit()
         return {"chat_ids": ids}
 
-    @router.get("/chats")
-    async def get_chats(include_archived: bool = False, surface: str = "chat"):
+    @router.get("/chats", include_in_schema=False)
+    @router.get("/agent-conversations", summary="List agent conversations")
+    async def get_chats(include_archived: bool = False, surface: str = "agents"):
         """Get root conversations for exactly one owning surface."""
         from distr.core.incoming.telegram_updates import public_proposal_update_status
 
         try:
-            normalized_surface = str(surface or "chat").strip().lower()
+            normalized_surface = str(surface or "agents").strip().lower()
+            if normalized_surface == "agents":
+                normalized_surface = "chat"
             if normalized_surface not in {"chat", "development"}:
-                raise HTTPException(status_code=422, detail="surface must be chat or development")
+                raise HTTPException(status_code=422, detail="surface must be agents or development")
             with get_session() as session:
                 # Get root chats (parent_id is None) that are not archived or hidden
                 query = session.query(Chat).filter(Chat.parent_id == None, Chat.is_hidden == False)
@@ -1220,7 +1225,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     result.append(
                         {
                             "id": chat.id,
-                            "title": chat.title or "New Chat",
+                            "title": public_conversation_title(chat.title),
                             **(sidebar_state(session, chat, settings) if not owned_by_development else {}),
                             "voice_name": _voice_model_to_display_name(chat.voice_provider, chat.voice_model, settings),
                             "created_date": chat.created_date.isoformat()
@@ -1294,7 +1299,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.error(f"Failed to load chats: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    @router.get("/chats/agent-setup")
+    @router.get("/chats/agent-setup", include_in_schema=False)
+    @router.get("/agent-conversations/agent-setup", summary="Get agent setup")
     async def get_agent_setup():
         """Default agent setup (model + voice) from settings for empty-state callout when no chat is selected."""
         try:
@@ -1335,12 +1341,14 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 }
             )
 
-    @router.get("/chats/qualification-capabilities")
+    @router.get("/chats/qualification-capabilities", include_in_schema=False)
+    @router.get("/agent-conversations/qualification-capabilities", summary="Get agent conversation qualification capabilities")
     async def get_chat_qualification_capabilities():
         """Versioned handshake for channel-authentic qualification clients."""
         return JSONResponse({"intake_identity_version": 1})
 
-    @router.get("/chats/usage-status")
+    @router.get("/chats/usage-status", include_in_schema=False)
+    @router.get("/agent-conversations/usage-status", summary="Get agent conversation usage status")
     async def get_chat_usage_status(
         voice_provider: str = "",
         llm_provider: str = "",
@@ -1372,26 +1380,29 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.debug("Usage status failed: %s", e, exc_info=True)
             return JSONResponse({"voice": None, "llm": None}, status_code=200)
 
-    @router.get("/chats/{chat_id}")
-    async def get_chat(chat_id: int, surface: str = "chat"):
-        """Get a specific chat with all its messages"""
+    @router.get("/chats/{chat_id}", include_in_schema=False)
+    @router.get("/agent-conversations/{chat_id}", summary="Get an agent conversation")
+    async def get_chat(chat_id: int, surface: str = "agents"):
+        """Get an agent conversation with its messages"""
         try:
-            normalized_surface = str(surface or "chat").strip().lower()
+            normalized_surface = str(surface or "agents").strip().lower()
+            if normalized_surface == "agents":
+                normalized_surface = "chat"
             if normalized_surface not in {"chat", "development"}:
-                raise HTTPException(status_code=422, detail="surface must be chat or development")
+                raise HTTPException(status_code=422, detail="surface must be agents or development")
             with get_session() as session:
                 from distr.core.chat import _thread_root_chat_id
 
                 root_id = _thread_root_chat_id(session, chat_id)
                 root_chat = session.get(Chat, root_id)
                 if not root_chat:
-                    raise HTTPException(status_code=404, detail="Chat not found")
+                    raise HTTPException(status_code=404, detail="Conversation not found")
                 owned_by_development = is_development_thread(session, root_chat)
                 if owned_by_development != (normalized_surface == "development"):
                     detail = (
-                        "This thread belongs to Development, not Chat."
+                        "Open this thread in Development."
                         if owned_by_development
-                        else "This thread belongs to Chat, not Development."
+                        else "Open this conversation in Agents."
                     )
                     raise HTTPException(status_code=409, detail=detail)
 
@@ -1607,7 +1618,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.error(f"Failed to load chat: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    @router.post("/chats")
+    @router.post("/chats", include_in_schema=False)
+    @router.post("/agent-conversations", summary="Start an agent conversation")
     async def create_chat(request_data: CreateChatRequest):
         """Create a new chat via central chat_service; interrupt TTS, reload agent, optionally send starting question to LLM.
         Prefer provider/model/voice_provider/voice_model from request (web UI selection) over system settings."""
@@ -1734,12 +1746,12 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 chat = session.get(Chat, chat_id)
                 if not chat:
                     raise HTTPException(
-                        status_code=500, detail="Chat created but not found"
+                        status_code=500, detail="Conversation created but not found"
                     )
                 chat_dict = {
                     "id": chat.id,
                     **agent_identity(session, chat.id),
-                    "title": chat.title or "New Chat",
+                    "title": public_conversation_title(chat.title),
                     "skin_name": chat_skin(chat),
                     "provider": chat.provider,
                     "model_name": chat.model_name,
@@ -1809,7 +1821,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 {
                     **chat_dict,
                     "starting_question": first_message,
-                    "message": "Chat created successfully",
+                    "message": "Conversation created successfully",
                 }
             )
         except HTTPException:
@@ -1818,7 +1830,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.error(f"Failed to create chat: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    @router.patch("/chats/{chat_id}")
+    @router.patch("/chats/{chat_id}", include_in_schema=False)
+    @router.patch("/agent-conversations/{chat_id}", summary="Update an agent conversation")
     async def update_chat(chat_id: int, request_data: UpdateChatRequest):
         """Update a chat. Persist title and thread settings (provider, model_name, voice)
         so the chat row is the source of truth. Also update global settings defaults so the
@@ -1830,7 +1843,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             with get_session() as session:
                 chat = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not chat:
-                    raise HTTPException(status_code=404, detail="Chat not found")
+                    raise HTTPException(status_code=404, detail="Conversation not found")
                 _reject_development_lifecycle(session, chat)
                 previous_settings = {
                     "provider": chat.provider,
@@ -1930,7 +1943,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 # Read ORM fields before the session closes (avoids DetachedInstanceError).
                 response_payload = {
                     "id": int(chat.id),
-                    "title": chat.title or "New Chat",
+                    "title": public_conversation_title(chat.title),
                     **chat_appearance(session, chat),
                     "provider": chat.provider,
                     "model_name": chat.model_name,
@@ -1971,21 +1984,22 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     current=current_settings,
                 )
 
-            return JSONResponse({**response_payload, "message": "Chat updated"})
+            return JSONResponse({**response_payload, "message": "Conversation updated"})
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"Failed to update chat: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    @router.get("/chats/{chat_id}/header-stats")
+    @router.get("/chats/{chat_id}/header-stats", include_in_schema=False)
+    @router.get("/agent-conversations/{chat_id}/header-stats", summary="Get agent conversation header stats")
     async def get_chat_header_stats(chat_id: int):
         """Lightweight header payload: title + context pressure (for live UI updates)."""
         try:
             with get_session() as session:
                 root_chat = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not root_chat:
-                    raise HTTPException(status_code=404, detail="Chat not found")
+                    raise HTTPException(status_code=404, detail="Conversation not found")
                 _reject_development_lifecycle(session, root_chat)
                 rows = _thread_rows_for_compaction(session, chat_id)
                 messages = _messages_from_rows(rows)
@@ -2015,7 +2029,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.error("Header stats failed: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    @router.post("/chats/{chat_id}/refresh-title")
+    @router.post("/chats/{chat_id}/refresh-title", include_in_schema=False)
+    @router.post("/agent-conversations/{chat_id}/refresh-title", summary="Refresh agent conversation title")
     async def refresh_chat_title(chat_id: int, force: bool = False):
         """Suggest and persist a short title from recent conversation intent."""
         try:
@@ -2023,7 +2038,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             with get_session() as session:
                 root_chat = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not root_chat:
-                    raise HTTPException(status_code=404, detail="Chat not found")
+                    raise HTTPException(status_code=404, detail="Conversation not found")
                 _reject_development_lifecycle(session, root_chat)
                 rows = _thread_rows_for_compaction(session, chat_id)
                 messages = _messages_from_rows(sorted(rows, key=lambda row: row.id))
@@ -2067,7 +2082,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.error("Refresh chat title failed: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    @router.post("/chats/{chat_id}/compact")
+    @router.post("/chats/{chat_id}/compact", include_in_schema=False)
+    @router.post("/agent-conversations/{chat_id}/compact", summary="Compact an agent conversation")
     async def compact_chat(chat_id: int, request_data: CompactChatRequest):
         """Create a visible, orchestrator-backed compact checkpoint for this chat."""
         try:
@@ -2075,7 +2091,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             with get_session() as session:
                 root = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not root:
-                    raise HTTPException(status_code=404, detail="Chat not found")
+                    raise HTTPException(status_code=404, detail="Conversation not found")
                 _reject_development_lifecycle(session, root)
                 rows = _thread_rows_for_compaction(session, chat_id)
                 messages = _messages_from_rows(rows)
@@ -2101,7 +2117,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             with get_session() as session:
                 root = session.get(Chat, chat_id)
                 if not root:
-                    raise HTTPException(status_code=404, detail="Chat not found")
+                    raise HTTPException(status_code=404, detail="Conversation not found")
                 _reject_development_lifecycle(session, root)
                 context = _chat_additional_context(root.additional_context)
                 if context.get("compact_checkpoint") != previous_checkpoint:
@@ -2109,7 +2125,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 latest_rows = _thread_rows_for_compaction(session, chat_id)
                 covered_rows = [row for row in latest_rows if int(row.id) <= covered_row_id]
                 if _messages_from_rows(covered_rows) != messages:
-                    raise HTTPException(status_code=409, detail="Chat history changed during compaction. Retry to include those changes.")
+                    raise HTTPException(status_code=409, detail="Conversation history changed during compaction. Retry to include those changes.")
                 stats = _context_stats(messages, provider, model_name)
                 compact_reason = (request_data.reason or "manual").strip() or "manual"
                 notice = (
@@ -2205,7 +2221,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.error("Compact chat failed: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    @router.post("/chats/{chat_id}/fork")
+    @router.post("/chats/{chat_id}/fork", include_in_schema=False)
+    @router.post("/agent-conversations/{chat_id}/fork", summary="Fork an agent conversation")
     async def fork_chat(chat_id: int, request_data: ForkChatRequest):
         """Compact current chat, then create a new chat with the same settings and checkpoint context."""
         try:
@@ -2222,7 +2239,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             with get_session() as session:
                 source = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not source:
-                    raise HTTPException(status_code=404, detail="Chat not found")
+                    raise HTTPException(status_code=404, detail="Conversation not found")
                 source_title = (source.title or "").strip() or f"Chat #{chat_id}"
                 title = (request_data.title or "").strip() or f"{source_title} fork"
                 fork = Chat(
@@ -2337,14 +2354,15 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.error("Fork chat failed: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    @router.delete("/chats/{chat_id}")
+    @router.delete("/chats/{chat_id}", include_in_schema=False)
+    @router.delete("/agent-conversations/{chat_id}", summary="Delete an agent conversation")
     async def delete_chat(chat_id: int):
         """Delete a chat and every thread-owned Development relationship."""
         try:
             with get_session() as session:
                 chat = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not chat:
-                    raise HTTPException(status_code=404, detail="Chat not found")
+                    raise HTTPException(status_code=404, detail="Conversation not found")
                 from distr.core.chat_agents import primary_agent
 
                 primary = primary_agent(session)
@@ -2364,36 +2382,38 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 from distr.core.chat import remove_chat_transcript_audit_events
 
                 remove_chat_transcript_audit_events(chat_id)
-                return JSONResponse({"message": "Chat deleted successfully"})
+                return JSONResponse({"message": "Conversation deleted successfully"})
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"Failed to delete chat: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    @router.post("/chats/{chat_id}/read")
+    @router.post("/chats/{chat_id}/read", include_in_schema=False)
+    @router.post("/agent-conversations/{chat_id}/read", summary="Mark agent conversation read")
     async def mark_chat_read(chat_id: int, request_data: ReadChatRequest):
         with get_session() as session:
             root = session.get(Chat, chat_id)
             if not root:
-                raise HTTPException(404, "Chat not found")
+                raise HTTPException(404, "Conversation not found")
             _reject_development_lifecycle(session, root)
             result = sidebar_state(session, root, load_settings_from_db(), mark_read=request_data.reply_id)
             session.commit()
         return JSONResponse(result)
 
-    @router.post("/chats/{chat_id}/load-in-agent")
+    @router.post("/chats/{chat_id}/load-in-agent", include_in_schema=False)
+    @router.post("/agent-conversations/{chat_id}/load-in-agent", summary="Load an agent conversation")
     async def load_chat_in_agent(chat_id: int):
         """Load this chat into the agent (set as current). Persist last_chat_id so the agent picks up this chat's voice on reload."""
         try:
             with get_session() as session:
                 root = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not root:
-                    raise HTTPException(status_code=404, detail="Chat not found")
+                    raise HTTPException(status_code=404, detail="Conversation not found")
                 if is_development_thread(session, root):
                     raise HTTPException(
                         status_code=409,
-                        detail="Development tasks cannot be loaded into the Chat agent.",
+                        detail="Development tasks cannot be loaded in Agents.",
                     )
             # Persist last_chat_id and agent_current_chat_id so: (1) agent picks up this chat's voice on reload,
             # (2) web sidebar can show which chat is "In agent" (loadChats returns agent_current_chat_id).
@@ -2437,7 +2457,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.error("Load-in-agent failed: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    @router.post("/chat-images")
+    @router.post("/chat-images", include_in_schema=False)
+    @router.post("/agent-attachments", summary="Upload agent conversation image")
     async def upload_chat_image(file: UploadFile = File(...)):
         """Store one Oracle chat image (jpeg/png/gif/webp, <=8 MB, magic-byte checked)."""
         from distr.core.chat_images import MAX_CHAT_IMAGE_BYTES, ChatImageError, REJECT_MESSAGE, store_chat_image
@@ -2452,7 +2473,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
         stored["original_name"] = Path(str(file.filename or "image")).name[:255]
         return JSONResponse(stored)
 
-    @router.get("/chat-images/{name}")
+    @router.get("/chat-images/{name}", include_in_schema=False)
+    @router.get("/agent-attachments/{name}", summary="Get agent conversation image")
     async def get_chat_image(name: str):
         from distr.core.chat_images import resolve_chat_image
 
@@ -2461,7 +2483,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             raise HTTPException(status_code=404, detail="Image not found")
         return FileResponse(str(path))
 
-    @router.post("/chats/{chat_id}/send-to-agent")
+    @router.post("/chats/{chat_id}/send-to-agent", include_in_schema=False)
+    @router.post("/agent-conversations/{chat_id}/send-to-agent", summary="Send a message to an agent")
     async def send_to_agent(chat_id: int, request_data: SendMessageRequest, wait: bool = False, timeout: Optional[float] = None):
         """Send the message to the agent. Persist the user message to the DB immediately so it survives refresh; then emit to agent for LLM + TTS.
         Always use this chat's provider/model from DB when not provided in request."""
@@ -2469,11 +2492,11 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             with get_session() as session:
                 root = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not root:
-                    raise HTTPException(status_code=404, detail="Chat not found")
+                    raise HTTPException(status_code=404, detail="Conversation not found")
                 if is_development_thread(session, root):
                     raise HTTPException(
                         status_code=409,
-                        detail="Development tasks cannot receive Chat agent messages.",
+                        detail="Development tasks cannot receive messages from Agents.",
                     )
                 provider = (
                     getattr(request_data, "provider", None) or ""
@@ -2667,11 +2690,11 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             except Exception:
                 logger.debug("Send-to-agent: turn resolution failed", exc_info=True)
                 response_payload.update({"turn_id": None, "turn_pending": True, "after_row_id": after_row_id})
-            # Stateless reply handle: GET /api/chat/replies/{reply_id}?wait=N (token-gated).
+            # Stateless reply handle: GET /api/agent-conversation-audit/replies/{reply_id}?wait=N (token-gated).
             from distr.gui.web.routes.api_audit import make_reply_id
 
             response_payload["reply_id"] = make_reply_id(chat_id, after_row_id, agent_message)
-            response_payload["reply_url"] = f"/api/chat/replies/{response_payload['reply_id']}"
+            response_payload["reply_url"] = f"/api/agent-conversation-audit/replies/{response_payload['reply_id']}"
             return JSONResponse(response_payload)
         except HTTPException:
             raise
@@ -2679,7 +2702,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.error("Send to agent failed: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    @router.post("/chats/{chat_id}/turns/{turn_id}/steer")
+    @router.post("/chats/{chat_id}/turns/{turn_id}/steer", include_in_schema=False)
+    @router.post("/agent-conversations/{chat_id}/turns/{turn_id}/steer", summary="Steer agent conversation turn")
     async def steer_chat_turn(chat_id: int, turn_id: int, request_data: SteerTurnRequest):
         """Persist guidance now and route delegated work through its live steer path."""
         guidance = (request_data.message or "").strip()
@@ -2688,7 +2712,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
         with get_session() as session:
             chat = session.query(Chat).filter(Chat.id == chat_id).first()
             if not chat:
-                raise HTTPException(status_code=404, detail="Chat not found")
+                raise HTTPException(status_code=404, detail="Conversation not found")
             _reject_development_lifecycle(session, chat)
         from distr.core.chat_turns import get_turns, steer_turn
 
@@ -2721,7 +2745,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             break
         return JSONResponse({"accepted": True, "event": event, "delegated": delegated})
 
-    @router.post("/chats/restore-speaker")
+    @router.post("/chats/restore-speaker", include_in_schema=False)
+    @router.post("/agent-conversations/restore-speaker", summary="Restore speaker")
     async def restore_speaker():
         """Re-enable agent TTS after a web message sent with speaker off."""
         try:
@@ -2748,13 +2773,14 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.debug("Stop TTS: interrupt_tts emit failed: %s", e)
         return JSONResponse({"ok": True})
 
-    @router.post("/chats/{chat_id}/cancel")
+    @router.post("/chats/{chat_id}/cancel", include_in_schema=False)
+    @router.post("/agent-conversations/{chat_id}/cancel", summary="Cancel stream")
     async def cancel_stream(chat_id: int, turn_id: int | None = None):
         """Cancel the active turn belonging to this conversation."""
         with get_session() as session:
             chat = session.query(Chat).filter(Chat.id == chat_id).first()
             if not chat:
-                raise HTTPException(status_code=404, detail="Chat not found")
+                raise HTTPException(status_code=404, detail="Conversation not found")
             _reject_development_lifecycle(session, chat)
         try:
             from distr.core.chat_turns import latest_active_turn_id, terminal_turn
@@ -2774,7 +2800,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.debug("Could not request chat turn cancellation", exc_info=True)
         return JSONResponse({"message": "Cancel requested"})
 
-    @router.post("/chats/tts/generate")
+    @router.post("/chats/tts/generate", include_in_schema=False)
+    @router.post("/agent-conversations/tts/generate", summary="Generate tts")
     async def generate_tts(request_data: TTSGenerateRequest):
         """Generate TTS audio for the given text; returns WAV or MP3. Uses chat voice when chat_id given and provider/voice not provided."""
         try:
@@ -2823,7 +2850,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.error("TTS generate error: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    @router.post("/chats/{chat_id}/read-response", dependencies=[Depends(require_internal_token_dependency)])
+    @router.post("/chats/{chat_id}/read-response", dependencies=[Depends(require_internal_token_dependency)], include_in_schema=False)
+    @router.post("/agent-conversations/{chat_id}/read-response", dependencies=[Depends(require_internal_token_dependency)], summary="Read response")
     async def read_response(chat_id: int, request_data: ReadResponseRequest):
         """Rewrite an assistant reply for speech with the chat/oracle model and store it in the thread."""
         from distr.core import read_response as rr
@@ -2848,7 +2876,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
         with get_session() as session:
             chat = session.query(Chat).filter(Chat.id == chat_id).first()
             if not chat:
-                raise HTTPException(status_code=404, detail="Chat not found")
+                raise HTTPException(status_code=404, detail="Conversation not found")
             # Race guard: another click may have stored one while the model ran.
             existing = rr.find_existing_spoken(session, chat_id, request_data.chat_row_id)
             if existing:
@@ -2859,7 +2887,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             )
         return JSONResponse({"spoken_text": spoken, "chat_row_id": row_id, "provider": provider, "model": model})
 
-    @router.post("/chats/speak-spoken", dependencies=[Depends(require_internal_token_dependency)])
+    @router.post("/chats/speak-spoken", dependencies=[Depends(require_internal_token_dependency)], include_in_schema=False)
+    @router.post("/agent-conversations/speak-spoken", dependencies=[Depends(require_internal_token_dependency)], summary="Speak spoken")
     async def speak_spoken(request_data: SpeakSpokenRequest, request: Request):
         """User-clicked playback of a spoken response via the oracle's speak_text_directly path.
 

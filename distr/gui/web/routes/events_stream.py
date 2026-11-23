@@ -107,7 +107,7 @@ async def events_stream(request: Request) -> StreamingResponse:
 
 
 # ---------------------------------------------------------------- select_thread (2026-10-22)
-# The select_thread / open_thread tools POST here; open Chat/Development tabs receive
+# The select_thread / open_thread tools POST here; open Agents/Development tabs receive
 # ui.thread.select over the SSE stream above, select + highlight the row, and POST an ack.
 _pending_acks: dict[str, int] = {}
 _ack_lock = threading.Lock()

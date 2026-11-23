@@ -91,7 +91,7 @@ def test_paired_reply_keeps_definite_no_send_and_unknown_outcomes_distinct(page,
                 status = 200
                 if path.startswith("/api/workflows/studio/incoming/proposals/review?"):
                     result = {"status": "thread", "chat_id": chat_id}
-                elif path == f"/api/chats/{chat_id}?surface=development":
+                elif path == f"/api/agent-conversations/{chat_id}?surface=development":
                     result = {"id": chat_id, "title": "Linked Development thread", "has_reply_source": True,
                               "messages": [{"role": "assistant", "chat_row_id": mode["response_id"],
                                             "content": "The delivery check is complete."}]}

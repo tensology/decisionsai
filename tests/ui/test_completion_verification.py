@@ -22,8 +22,8 @@ def test_incomplete_verification_is_not_shown_as_completed(page, width):
         'development_execution': execution, 'development_source_type': 'prompt', 'autonomy_level': 'full',
         'messages': [{'role': 'user', 'content': 'Fix the feature and run tests.', 'chat_row_id': 17},
             {'role': 'assistant', 'chat_row_id': 18, 'content': 'Verification incomplete: Required verification has not passed.\n\nAgent report (not independently verified):\nImplemented and verified. Everything passed.'}]}
-    page.route('**/api/chats/17', lambda route: route.fulfill(json=chat))
-    page.route('**/api/chats/17?*', lambda route: route.fulfill(json=chat))
+    page.route('**/api/agent-conversations/17', lambda route: route.fulfill(json=chat))
+    page.route('**/api/agent-conversations/17?*', lambda route: route.fulfill(json=chat))
     page.route('**/api/workflows/studio/tasks/17/execution', lambda route: route.fulfill(json=execution))
     page.goto(URL)
     expect(page.get_by_text('Needs input', exact=True)).to_be_visible()

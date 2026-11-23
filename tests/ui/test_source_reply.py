@@ -19,8 +19,8 @@ def install(page, *, sources=2, linked=True, failure=False, url=URL, later_messa
             'messages': [{'role': 'user', 'content': 'Please add per-byte billing.', 'chat_row_id': 17},
                          {'role': 'assistant', 'content': 'Per-byte billing is implemented. It has not been deployed.', 'chat_row_id': 18},
                          *later_messages]}
-    page.route('**/api/chats/17', lambda route: route.fulfill(json=chat))
-    page.route('**/api/chats/17?*', lambda route: route.fulfill(json=chat))
+    page.route('**/api/agent-conversations/17', lambda route: route.fulfill(json=chat))
+    page.route('**/api/agent-conversations/17?*', lambda route: route.fulfill(json=chat))
     state = {'drafts': 0, 'sent': [], 'cancelled': [], 'fail': failure}
     choices = [{'key': 'whatsapp:group', 'channel': 'whatsapp', 'label': 'Client project group'},
                {'key': 'gmail:thread', 'channel': 'gmail', 'label': 'Client billing email'},
@@ -254,7 +254,7 @@ def test_merged_reply_isolates_unreadable_claim(page, width, surface, fixture_ba
                     request_path = data['path']
                     if request_path.startswith('/api/workflows/studio/incoming/proposals/review?'):
                         response = {'status': 'thread', 'chat_id': chat_id}
-                    elif request_path == f'/api/chats/{chat_id}?surface=development':
+                    elif request_path == f'/api/agent-conversations/{chat_id}?surface=development':
                         response = chat
                     elif request_path == f'/api/workflows/studio/tasks/{chat_id}/execution':
                         response = execution
@@ -272,7 +272,7 @@ def test_merged_reply_isolates_unreadable_claim(page, width, surface, fixture_ba
         dialog_root = page.frame_locator('iframe[title="Development source reply"]')
     else:
         _install_api(page, [], current_board_linked=True, direct_execution=True, terminal_session=False)
-        page.route(f'**/api/chats/{chat_id}**', lambda route: route.fulfill(json=chat))
+        page.route(f'**/api/agent-conversations/{chat_id}**', lambda route: route.fulfill(json=chat))
         page.route(f'**/api/workflows/studio/tasks/{chat_id}/execution', lambda route: route.fulfill(json=execution))
         page.route(f'**{path}**', bridge)
         page.goto(f'{fixture_base}/development/threads/{chat_id}/')
@@ -367,7 +367,7 @@ def test_merged_reply_isolates_unreadable_claim(page, width, surface, fixture_ba
         _add_proactive_turn_event(db, chat_id, warning_id, "turn_failed", "failed", PROACTIVE_RESULT_HELD)
         db.commit()
     monkeypatch.setattr(chat_routes, "get_session", session)
-    transcript = _client().get(f'/api/chats/{chat_id}?surface=development')
+    transcript = _client().get(f'/api/agent-conversations/{chat_id}?surface=development')
     assert transcript.status_code == 200
     chat['messages'] = transcript.json()['messages']
     execution.update(status='idle')
@@ -388,7 +388,7 @@ def test_merged_reply_isolates_unreadable_claim(page, width, surface, fixture_ba
         waiting_id = waiting.id
         _add_proactive_turn_event(db, chat_id, waiting_id, "turn_completed", "waiting", waiting_text)
         db.commit()
-    transcript = _client().get(f'/api/chats/{chat_id}?surface=development')
+    transcript = _client().get(f'/api/agent-conversations/{chat_id}?surface=development')
     assert transcript.status_code == 200
     chat['messages'] = transcript.json()['messages']
     execution.update(status='blocked', waiting_kind='human_review', can_stop=False,

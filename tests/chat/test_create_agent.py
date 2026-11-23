@@ -50,13 +50,13 @@ def test_create_agent_dialog_persistence_and_failure_recovery(width, tmp_path, m
         if "/preview/" in path:
             route.fulfill(path=str(ROOT / "assets/avatars/hayley/idle.webp"), content_type="image/webp")
             return
-        if path == "/api/chats" and request.method == "POST":
+        if path == "/api/agent-conversations" and request.method == "POST":
             posted.append(request.post_data_json)
             if fail_next[0]:
                 fail_next[0] = False
                 route.fulfill(status=503, json={"detail": "Storage unavailable. Please try again."})
                 return
-        if path.startswith("/api/chats"):
+        if path.startswith("/api/agent-conversations"):
             response = client.request(request.method, path, content=request.post_data, headers={"content-type": "application/json"})
             route.fulfill(status=response.status_code, content_type="application/json", body=response.content)
         else:

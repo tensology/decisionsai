@@ -106,7 +106,8 @@ def register_routes(router, templates):
         return await _plan_call(_read_scoped_plan, get_conversation, workspace_id, board_id, project_id, chat_id)
 
     # Multi-chat (N3 Option A). Delete is a soft archive; stale expected_revision -> 409.
-    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/chats")
+    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/chats", include_in_schema=False)
+    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/conversations", summary="Plan conversations")
     async def plan_chats(workspace_id: int):
         from distr.core.planning.chats import list_chats
         from distr.core.planning.conversation import _workspace
@@ -116,30 +117,35 @@ def register_routes(router, templates):
             return {"chats": list_chats(workspace_id)}
         return await _plan_call(run)
 
-    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/chats")
+    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/chats", include_in_schema=False)
+    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/conversations", summary="Plan conversation create")
     async def plan_chat_create(workspace_id: int, data: PlanChatCreateRequest):
         from distr.core.planning.chats import create_chat
         return await _plan_call(create_chat, workspace_id, data.title)
 
-    @router.patch("/workflows/studio/plan-workspaces/{workspace_id}/chats/{chat_id}")
+    @router.patch("/workflows/studio/plan-workspaces/{workspace_id}/chats/{chat_id}", include_in_schema=False)
+    @router.patch("/workflows/studio/plan-workspaces/{workspace_id}/conversations/{chat_id}", summary="Plan conversation rename")
     async def plan_chat_rename(workspace_id: int, chat_id: int, data: PlanChatUpdateRequest):
         from distr.core.planning.chats import rename_chat
         return await _plan_call(rename_chat, workspace_id, chat_id, title=data.title, expected_revision=data.expected_revision)
 
     # Chat memory (N2): view / switch on-off / forget (chat or project). Opt-in, local, redacted.
-    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/chats/{chat_id}/memory")
+    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/chats/{chat_id}/memory", include_in_schema=False)
+    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/conversations/{chat_id}/memory", summary="Plan conversation memory")
     async def plan_chat_memory(workspace_id: int, chat_id: int):
         from distr.core.planning.plan_memory import memory_view
         return await _plan_call(memory_view, workspace_id, chat_id)
 
-    @router.put("/workflows/studio/plan-workspaces/{workspace_id}/chats/{chat_id}/memory")
+    @router.put("/workflows/studio/plan-workspaces/{workspace_id}/chats/{chat_id}/memory", include_in_schema=False)
+    @router.put("/workflows/studio/plan-workspaces/{workspace_id}/conversations/{chat_id}/memory", summary="Plan conversation memory set")
     async def plan_chat_memory_set(workspace_id: int, chat_id: int, data: PlanMemoryRequest):
         from distr.core.planning.plan_memory import set_enabled
         if data.enabled is None:
             return JSONResponse({"detail": "enabled is required."}, status_code=422)
         return await _plan_call(set_enabled, workspace_id, chat_id, bool(data.enabled))
 
-    @router.delete("/workflows/studio/plan-workspaces/{workspace_id}/chats/{chat_id}/memory")
+    @router.delete("/workflows/studio/plan-workspaces/{workspace_id}/chats/{chat_id}/memory", include_in_schema=False)
+    @router.delete("/workflows/studio/plan-workspaces/{workspace_id}/conversations/{chat_id}/memory", summary="Plan conversation memory forget")
     async def plan_chat_memory_forget(workspace_id: int, chat_id: int, scope: str = "chat"):
         from distr.core.planning.plan_memory import forget
         return await _plan_call(forget, workspace_id, chat_id, scope=scope)
@@ -162,12 +168,14 @@ def register_routes(router, templates):
         except ValueError as e:
             return JSONResponse({"detail": str(e)}, status_code=422)
 
-    @router.delete("/workflows/studio/plan-workspaces/{workspace_id}/chats/{chat_id}")
+    @router.delete("/workflows/studio/plan-workspaces/{workspace_id}/chats/{chat_id}", include_in_schema=False)
+    @router.delete("/workflows/studio/plan-workspaces/{workspace_id}/conversations/{chat_id}", summary="Plan conversation delete")
     async def plan_chat_delete(workspace_id: int, chat_id: int):
         from distr.core.planning.chats import delete_chat
         return await _plan_call(delete_chat, workspace_id, chat_id)
 
-    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/chats/{chat_id}/{action}")
+    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/chats/{chat_id}/{action}", include_in_schema=False)
+    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/conversations/{chat_id}/{action}", summary="Plan conversation action")
     async def plan_chat_action(workspace_id: int, chat_id: int, action: str, data: PlanChatActionRequest):
         from distr.core.planning import chats
         handler = {"archive": chats.archive_chat, "restore": chats.restore_chat,

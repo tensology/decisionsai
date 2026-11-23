@@ -67,7 +67,7 @@ export function createPlanConversation(host, root) {
         const was = body.classList.contains('plan-chat-collapsed');
         body.classList.toggle('plan-chat-collapsed', session.chatCollapsed);
         toggle.setAttribute('aria-expanded', String(!session.chatCollapsed));
-        toggle.title = session.chatCollapsed ? 'Show chat' : 'Hide chat';
+        toggle.title = session.chatCollapsed ? 'Show conversation' : 'Hide conversation';
         toggle.setAttribute('aria-label', toggle.title);
         const icon = session.chatCollapsed ? CHAT_ICON_EXPAND : CHAT_ICON_COLLAPSE;
         const label = toggle.querySelector('.plan-chat-toggle-label');
@@ -515,7 +515,7 @@ export function createPlanConversation(host, root) {
             <div class="plan-detail-body">
                 <section class="plan-artifacts" id="plan-artifacts" aria-label="Artifacts"></section>
                 <section class="plan-conversation" id="plan-conversation" aria-label="Plan conversation">
-                    <header class="plan-chat-header" id="plan-chat-header" aria-label="Chat"><button type="button" class="plan-chat-toggle" id="plan-chat-toggle" aria-controls="plan-conversation" aria-expanded="true" title="Hide chat" aria-label="Hide chat">${CHAT_ICON_COLLAPSE}<span class="plan-chat-toggle-label">Chat</span></button></header>
+                    <header class="plan-chat-header" id="plan-chat-header" aria-label="Conversation"><button type="button" class="plan-chat-toggle" id="plan-chat-toggle" aria-controls="plan-conversation" aria-expanded="true" title="Hide conversation" aria-label="Hide conversation">${CHAT_ICON_COLLAPSE}<span class="plan-chat-toggle-label">Conversation</span></button></header>
                     <div class="composer-drop-overlay plan-drop-overlay" id="plan-drop-overlay" hidden><strong>Drop images to attach</strong><span>PNG, JPEG or WebP, up to 10 MB each</span></div>
                     <div class="plan-messages" id="plan-messages" role="log" aria-label="Messages" aria-live="polite"></div>
                     <div id="plan-operation-status" role="status" aria-live="polite"></div>
@@ -2663,8 +2663,8 @@ export function createPlanConversation(host, root) {
         rememberPlanChat(session);
     }
     async function newChat(session) {
-        await chatRequest(session, 'Starting a new chat...', async () => {
-            const created = await api(path(session, '/chats'), { method: 'POST', body: {} });
+        await chatRequest(session, 'Starting a new conversation...', async () => {
+            const created = await api(path(session, '/conversations'), { method: 'POST', body: {} });
             await openChat(session, created.chat_id);
         });
         refresh(session);
@@ -2674,7 +2674,7 @@ export function createPlanConversation(host, root) {
         if (!chatId || !chat) return;
         if (!confirm(`Delete "${chat.title || 'chat'}"?`)) return;
         await chatRequest(session, 'Deleting chat...', async () => {
-            const result = await api(path(session, `/chats/${encodeURIComponent(chatId)}`), { method: 'DELETE' });
+            const result = await api(path(session, `/conversations/${encodeURIComponent(chatId)}`), { method: 'DELETE' });
             const remaining = (result.chats || []).filter((row) => !row.archived);
             const next = remaining.some((row) => row.id === session.chatId)
                 ? session.chatId

@@ -60,7 +60,7 @@ def test_select_falls_back_to_open_when_no_tab():
     r = Recorder(acked=0)
     res = uts.select_thread("latest", "chat", base=BASE, fetch=fetch, emit=r.emit, opener=r.opener)
     assert res["ok"] and res["path"] == "opened"
-    assert r.opened == [f"{BASE}/chat/?id=1789"]
+    assert r.opened == [f"{BASE}/agents/?id=1789"]
     assert len(r.emits) == 1  # no second focus emit on fallback
 
 

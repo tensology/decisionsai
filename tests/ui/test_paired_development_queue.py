@@ -92,7 +92,7 @@ def test_desktop_queue_scope_is_visible_in_both_apps(page, development_db, fixtu
                 result = {}
                 if path.startswith("/api/workflows/studio/incoming/proposals/review?"):
                     result = {"status": "thread", "chat_id": chat_id}
-                elif path.startswith(f"/api/chats/{chat_id}"):
+                elif path.startswith(f"/api/agent-conversations/{chat_id}"):
                     result = {"id": chat_id, "title": "Review queued instructions", "project_id": project_id,
                               "development_scope": [project_id, "", "", None, ""], "messages": []}
                 elif path == f"{task}/execution":
@@ -159,7 +159,7 @@ def test_moved_ticket_result_is_held_on_desktop_and_paired_view(page, monkeypatc
             "development": True, "development_board_key": "decisions:70", "messages": transcript}
     page.set_viewport_size({"width": width, "height": 900})
     _install_api(page, [], current_board_linked=True, direct_execution=True, run_status="failed", terminal_session=False)
-    page.route("**/api/chats/17**", lambda route: route.fulfill(json=chat))
+    page.route("**/api/agent-conversations/17**", lambda route: route.fulfill(json=chat))
     page.route("**/api/workflows/studio/tasks/17/execution", lambda route: route.fulfill(json=run_response.json()))
     page.goto(f"{fixture_base}/development/threads/17/")
     expect(page.get_by_text(notice, exact=False).first).to_be_visible()
@@ -179,7 +179,7 @@ def test_moved_ticket_result_is_held_on_desktop_and_paired_view(page, monkeypatc
                 path = frame["data"]["path"]
                 if path.startswith("/api/workflows/studio/incoming/proposals/review?"):
                     result = {"status": "thread", "chat_id": scope.chat_id}
-                elif path.startswith(f"/api/chats/{scope.chat_id}"):
+                elif path.startswith(f"/api/agent-conversations/{scope.chat_id}"):
                     result = {**chat, "id": scope.chat_id}
                 elif path == run_path:
                     result = run_response.json()
@@ -272,7 +272,7 @@ def test_followup_queue_recovers_an_unknown_receipt_and_does_not_interrupt(page,
                 requests.append((method, path, body))
                 if path == f"/api/workflows/studio/incoming/proposals/review?review_key={key}":
                     data = {"status": "thread", "chat_id": chat_id}
-                elif path.startswith(f"/api/chats/{chat_id}"):
+                elif path.startswith(f"/api/agent-conversations/{chat_id}"):
                     response = client.get(path)
                     status, data = response.status_code, response.json()
                 elif path.startswith(f"{task}/"):
@@ -609,7 +609,7 @@ def test_followup_startup_rejection_restores_the_reviewed_item(page, monkeypatch
                 status, result = 200, {}
                 if path.startswith("/api/workflows/studio/incoming/proposals/review?"):
                     result = {"status": "thread", "chat_id": scope.chat_id}
-                elif path.startswith(f"/api/chats/{scope.chat_id}"):
+                elif path.startswith(f"/api/agent-conversations/{scope.chat_id}"):
                     result = {"title": "Queued proposal evidence", "project_id": scope.project_id, "messages": []}
                 elif path.startswith(f"{task}/"):
                     response = client.request(method, path, json=request["data"].get("body"))
@@ -751,7 +751,7 @@ def test_desktop_manual_queue_retries_same_destination(page, development_db, fix
 
     page.route("**/api/workflows/studio/control-state?*", controls)
     page.route(f"**/api/workflows/studio/commands/{item['id']}/run", launch)
-    page.route("**/api/chats/88?*", fork)
+    page.route("**/api/agent-conversations/88?*", fork)
     page.route("**/api/workflows/studio/tasks/88/execution", lambda route: route.fulfill(json={
         **development_harness.development_execution_state(receipts[-1]["chat_id"]), "chat_id": 88,
     }))

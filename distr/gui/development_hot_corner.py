@@ -1511,7 +1511,7 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
         value = item.data(0, QtCore.Qt.ItemDataRole.UserRole) if item else None
         if isinstance(value, dict) and value.get("kind") == "thread":
             # Open the Development thread itself, not the plain chat view.
-            # /chat/?id= lands on a different page, which is why the panel and
+            # /agents/?id= lands on a different page, which is why the panel and
             # the opened view looked out of sync.
             self._open_path(f"/development/threads/{int(value['chat_id'])}/")
 

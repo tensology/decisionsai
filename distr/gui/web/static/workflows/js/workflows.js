@@ -461,10 +461,10 @@
                 return Promise.resolve(direct);
             }
         }
-        return workflowApiFetch("/api/chats").then(function (data) {
+        return workflowApiFetch("/api/agent-conversations").then(function (data) {
             var cid = pickWorkflowChatIdFromList(data);
             if (cid != null) return cid;
-            return workflowApiFetch("/api/chats", {
+            return workflowApiFetch("/api/agent-conversations", {
                 method: "POST",
                 body: {},
             }).then(function (created) {

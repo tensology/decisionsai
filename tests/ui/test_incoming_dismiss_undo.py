@@ -206,7 +206,7 @@ def test_reconnect_reopens_a_proposal_reserved_by_an_upstream_merge(page, fixtur
         return route.fulfill(json={'chat_id': 17, 'review_key': 'a' * 64})
 
     page.route('**/api/workflows/studio/incoming/proposals/merge', retry_merge)
-    page.route('**/api/chats/17?*', lambda route: route.fulfill(json={
+    page.route('**/api/agent-conversations/17?*', lambda route: route.fulfill(json={
         'id': 17, 'title': 'Recovered proposal', 'project_id': 7, 'development': True,
         'development_board_key': 'decisions:70', 'messages': [],
     }))

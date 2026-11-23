@@ -80,7 +80,7 @@ def test_folder_returns_to_default_colour_after_its_ready_thread_is_viewed(page:
     page.reload()
     expect(page.locator("#incoming-workspace")).to_be_visible()
     expect(page.locator('[data-board-group="decisions:70"]')).not_to_have_class(READY)
-    assert ("POST", "/api/chats/17/acknowledge-ready") in requests
+    assert ("POST", "/api/agent-conversations/17/acknowledge-ready") in requests
 
 
 def test_opening_the_ready_thread_directly_clears_its_folder(page: Page):
@@ -126,7 +126,7 @@ def test_section_mark_all_as_read_includes_hidden_threads_and_preserves_other_se
     rows[32] = {**rows[31], "id": 32, "title": "Automation running",
                 "development_execution": {"status": "running"}}
     rows[33] = {**rows[21], "id": 33, "title": "Other board result", "development_board_key": "decisions:80"}
-    page.route("**/api/chats?*", lambda route: route.fulfill(json={"chats": list(rows.values())}))
+    page.route("**/api/agent-conversations?*", lambda route: route.fulfill(json={"chats": list(rows.values())}))
     writes = []
     blocked = {21}
 
@@ -138,7 +138,7 @@ def test_section_mark_all_as_read_includes_hidden_threads_and_preserves_other_se
         rows[thread_id]["ready_acknowledged_at"] = "2026-11-12T09:00:00"
         return route.fulfill(json={"acknowledged": True, "ready_acknowledged_at": rows[thread_id]["ready_acknowledged_at"]})
 
-    page.route("**/api/chats/*/acknowledge-ready", acknowledge)
+    page.route("**/api/agent-conversations/*/acknowledge-ready", acknowledge)
     page.goto(INCOMING)
 
     pinned = page.get_by_role("button", name="Mark all as read in Pinned")

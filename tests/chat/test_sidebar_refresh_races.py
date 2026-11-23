@@ -27,7 +27,7 @@ def sidebar_page():
             applyChatsData = () => {};
             window.pendingLists = [];
             window.fetch = async url => {
-                if (url === '/api/chats') return await new Promise(resolve => pendingLists.push(resolve));
+                if (url === '/api/agent-conversations') return await new Promise(resolve => pendingLists.push(resolve));
                 return {ok:true,json:async()=>({primary_agent:null})};
             };
         }''')
@@ -50,7 +50,7 @@ def test_primary_lookup_failure_does_not_hide_other_agents(sidebar_page):
     page.evaluate('''() => {
         primaryAgentData = {main_conversation_id:1, name:'Primary'};
         window.fetch = async url => {
-            if (url === '/api/chats') return {ok:true,json:async()=>({chats:[{id:1},{id:2}]})};
+            if (url === '/api/agent-conversations') return {ok:true,json:async()=>({chats:[{id:1},{id:2}]})};
             throw new Error('Offline');
         };
     }''')
@@ -66,7 +66,7 @@ def test_late_primary_lookup_cannot_undo_saved_avatar(sidebar_page):
         primaryAgentData = {main_conversation_id:1, name:'Primary',skin_name:'oracle'};
         loadAssistantAvatarSkin = async () => {};
         window.fetch = async (url, options) => {
-            if (url === '/api/chats') return {ok:true,json:async()=>({chats:[]})};
+            if (url === '/api/agent-conversations') return {ok:true,json:async()=>({chats:[]})};
             if (options?.method === 'PATCH') return {ok:true,json:async()=>({primary_agent:{
                 main_conversation_id:1,name:'Primary',skin_name:'hayley'
             }})};

@@ -6,14 +6,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 class NewChatTool(BaseTool):
-    """Tool for starting a new chat conversation."""
+    """Direct requests for a new agent conversation to the Agents UI."""
     
-    name: str = "new_chat"
+    name: str = "new_agent_conversation"
     description: str = (
-        "Start a new, empty Oracle chat conversation. Use this ONLY when the user says 'New Chat', "
-        "'Start over', 'New conversation', or similar. NEVER use it for Development threads or project work "
-        "('put this in the Decisions thread', 'create a new thread in project X'): use development_control "
-        "send_instruction (existing thread) or create_thread (new thread) instead."
+        "Direct an explicit request to start a fresh agent conversation to the New agent control in Agents. "
+        "Use development_control send_instruction or create_thread for project work in Development."
     )
     
     chat_manager: Optional[Any] = Field(default=None, exclude=True)
@@ -33,7 +31,7 @@ class NewChatTool(BaseTool):
     def _create_new_chat(self, last_user_message: str = "") -> str:
         import json
         # Hard guard (routee2e 2026-10-22): an instruction never spawns a chat. Only the
-        # user's own New chat button (POST /api/chats from the UI) creates one.
+        # user's own New chat button (POST /api/agent-conversations from the UI) creates one.
         from distr.core.agent.services.llm.tool_execution_policy import NEW_CHAT_BLOCK_REASON
 
         logger.warning("NewChatTool: refused (new chats only come from the user's New chat button)")
@@ -52,8 +50,8 @@ class NewChatTool(BaseTool):
                 ),
             })
         if not self._chat_manager:
-            logger.error("NewChatTool: Chat manager not available")
-            return "Error: Chat manager not available"
+            logger.error("NewChatTool: Agent conversation manager unavailable")
+            return "Error: Agent conversation manager unavailable"
             
         try:
             # Create a new chat with a temporary title and is_new=True
@@ -64,7 +62,7 @@ class NewChatTool(BaseTool):
                 origin_chat_id = self._chat_manager.get_current_chat()
             except Exception:
                 origin_chat_id = None
-            new_chat_id = self._chat_manager.create_chat("New Chat", input_text="", is_new=True)
+            new_chat_id = self._chat_manager.create_chat("New conversation", input_text="", is_new=True)
             # The reply now goes to the new chat, so close the originating turn instead of
             # leaving its "Preparing the answer" card spinning forever.
             if origin_chat_id and origin_chat_id != new_chat_id:

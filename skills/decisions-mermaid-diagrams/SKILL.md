@@ -82,7 +82,7 @@ show_mermaid_diagram(
     participant W as Web UI
     participant A as Agent
     U->>W: send message
-    W->>A: POST /api/chats/{id}/messages
+    W->>A: POST /api/agent-conversations/{id}/messages
     A-->>W: stream tokens
     W-->>U: render reply'''
 )

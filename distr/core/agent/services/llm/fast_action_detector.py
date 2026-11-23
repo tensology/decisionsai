@@ -39,8 +39,8 @@ class ActionType(Enum):
     ACTION_START_RECORDING = "action_start_recording"  # Start recording action
     ACTION_STOP_RECORDING = "action_stop_recording"    # Stop recording action
     TYPE_TEXT = "type_text"                   # Type/dictate text as keyboard input
-    CLEAR_CHAT = "clear_chat"                 # Clear chat history
-    NEW_CHAT = "new_chat"                     # Start new chat
+    CLEAR_CHAT = "clear_agent_conversation"                 # Clear chat history
+    NEW_CHAT = "new_agent_conversation"                     # Start new chat
     EXIT_APP = "exit_app"                     # Exit application
     OPEN_WINDOW = "open_window"                # Open/focus application or URL
     CHANGE_ORACLE = "change_oracle"           # Change oracle/globe image
@@ -635,17 +635,17 @@ class FastActionDetector:
              ActionType.OPEN_WINDOW, "create_ticket",
              {"action": "open_board", "text": "__ORIGINAL_TEXT__", "board_name": "__BOARD_NAME_MATCH__", "source_provider": "__BOARD_SOURCE_MATCH__"}, False, "done"),
 
-            # === CHAT MANAGEMENT ===
+            # === AGENT CONVERSATIONS ===
             (re.compile(r'\b(clear|reset|wipe)\b.*\b(chat|history|conversation)\b', re.IGNORECASE), 
-             ActionType.CLEAR_CHAT, "clear_chat", {"confirm": True}, False, "done"),
+             ActionType.CLEAR_CHAT, "clear_agent_conversation", {"confirm": True}, False, "done"),
             (re.compile(
                 r'^\s*(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?'
-                r'(?:(?:start|begin)\s+(?:a\s+)?(?:new|fresh)|(?:new|fresh))\s+'
-                r'(?:chat|conversation)(?:\s+please)?\s*[.?!]?\s*$',
+                r'(?:(?:start|begin|create)\s+(?:a\s+)?(?:new|fresh)|(?:new|fresh))\s+'
+                r'(?:agent(?:\s+conversation)?|chat|conversation)(?:\s+please)?\s*[.?!]?\s*$',
                 re.IGNORECASE),
-             ActionType.NEW_CHAT, "new_chat", {}, False, "done"),
+             ActionType.NEW_CHAT, "new_agent_conversation", {}, False, "done"),
             (re.compile(r'^(start\s+)?over\.?$', re.IGNORECASE), 
-             ActionType.NEW_CHAT, "new_chat", {}, False, "done"),
+             ActionType.NEW_CHAT, "new_agent_conversation", {}, False, "done"),
 
             # === WORKFLOW CONTINUATION (must be explicit and short) ===
             # Prevents "Can you continue?" from being treated as generic conversation

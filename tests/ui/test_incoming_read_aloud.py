@@ -32,7 +32,7 @@ def install_reader(page, *, delay=False):
         route.fulfill(json={"ok": state["replay_ok"]})
 
     page.route("**/api/workflows/studio/incoming/proposals**", proposals)
-    page.route("**/api/chats/speak-spoken", replay)
+    page.route("**/api/agent-conversations/speak-spoken", replay)
     if delay:
         page.add_init_script("""const originalFetch = window.fetch.bind(window);
           window.fetch = async (...args) => {

@@ -2022,7 +2022,7 @@
 
     var DISCUSS_PROMPT_MAX_CHARS = 14000;
 
-    /** Keep Ticket Board in sync with Chat tab when sessionStorage was never set (Kanban page does not load chat.js). */
+    /** Keep Ticket Board in sync with the Agents tab when sessionStorage was never set (Kanban page does not load chat.js). */
     function persistSourceChatIdForTickets(chatId) {
         if (chatId == null || chatId < 1) return;
         try {
@@ -2061,8 +2061,8 @@
 
     /**
      * Resolve which chat should receive ticket-discussion messages.
-     * Uses the same source as the Chat tab when available; otherwise GET /api/chats (agent + last + newest);
-     * if there are no chats, POST /api/chats to create one so "Let's talk about it" always has a target.
+     * Uses the same source as the Agents tab when available; otherwise GET /api/agent-conversations (agent + last + newest);
+     * if there are no chats, POST /api/agent-conversations to create one so "Let's talk about it" always has a target.
      */
     function resolveChatIdForTicketDiscuss() {
         var direct =
@@ -2073,11 +2073,11 @@
             persistSourceChatIdForTickets(direct);
             return Promise.resolve(direct);
         }
-        return apiFetch("/api/chats")
+        return apiFetch("/api/agent-conversations")
             .then(function (data) {
                 var cid = pickChatIdFromChatsListPayload(data);
                 if (cid != null) return cid;
-                return apiFetch("/api/chats", {
+                return apiFetch("/api/agent-conversations", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({}),
@@ -3453,7 +3453,7 @@
                 confirmLabel: "Delete all",
                 danger: true,
                 onConfirm: function() {
-                    apiFetch("/api/tickets/whatsapp/chats", { method: "DELETE" }).then(function(resp) {
+                    apiFetch("/api/tickets/whatsapp/agent-conversations", { method: "DELETE" }).then(function(resp) {
                         hideKanbanConfirm();
                         waSidebarChatListMode = false;
                         waSelectedChatPhones = {};

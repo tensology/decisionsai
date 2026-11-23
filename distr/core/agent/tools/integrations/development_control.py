@@ -62,7 +62,7 @@ class DevelopmentControlTool(BaseTool):
         "Create a Development thread only for an instruction that changes or produces project work. "
         "To continue an EXISTING Development thread (e.g. 'put this in the Decisions thread'), call "
         "send_instruction with its thread_id (use the current Development thread from the Oracle context, or list_threads). "
-        "create_thread with an instruction starts the run immediately. Never use new_chat for Development threads. "
+        "create_thread with an instruction starts the run immediately. Never use new_agent_conversation for Development threads. "
         "Questions, stories, and status checks stay in the current chat, even when they mention a project."
     )
     args_schema: type[BaseModel] = DevelopmentControlInput

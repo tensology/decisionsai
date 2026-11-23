@@ -74,7 +74,7 @@ def test_proposal_links_reopen_distinct_telegram_groups_with_the_same_message_nu
                     result = {}
                     if path.startswith('/api/workflows/studio/incoming/proposals/review?'):
                         result = review(path)
-                    elif path.startswith('/api/chats/'):
+                    elif path.startswith('/api/agent-conversations/'):
                         result = chats.get(int(urlparse(path).path.split('/')[3]), {})
                     elif urlparse(path).path.endswith('/commands'):
                         queue_reads.append(int(urlparse(path).path.split('/')[-2]))
@@ -96,7 +96,7 @@ def test_proposal_links_reopen_distinct_telegram_groups_with_the_same_message_nu
             else:
                 route.fallback()
 
-        page.route('**/api/chats/*?*', chat_route)
+        page.route('**/api/agent-conversations/*?*', chat_route)
         page.route('**/api/workflows/studio/tasks/*/*', lambda route: route.fulfill(json={'items': []}))
 
     page.set_viewport_size({'width': width, 'height': 900})
@@ -413,8 +413,8 @@ def test_submitted_thread_opens_its_saved_source_and_cancels_when_switching(page
         route.fulfill(json={'id': chat_id, 'project_id': 7, 'title': titles[chat_id], 'messages': [], 'development': True,
                             'proposal_source_review_key': keys.get(chat_id)})
 
-    page.route('**/api/chats/*?surface=development', chat_route)
-    page.route('**/api/chats?*', lambda route: route.fulfill(json={'chats': [
+    page.route('**/api/agent-conversations/*?surface=development', chat_route)
+    page.route('**/api/agent-conversations?*', lambda route: route.fulfill(json={'chats': [
         {'id': chat_id, 'project_id': 7, 'title': title, 'development': True}
         for chat_id, title in titles.items()
     ]}))

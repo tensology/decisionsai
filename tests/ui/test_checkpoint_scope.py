@@ -113,8 +113,8 @@ def test_development_thread_reviews_interrupted_workflow(page, fixture_base, res
             "/api/tickets/boards": [{"id": 70, "name": project['name'], "default_project_id": 9}],
             "/api/projects": [project],
             "/api/projects/9": project,
-            "/api/chats?surface=development": [chat],
-            "/api/chats/17?surface=development": chat,
+            "/api/agent-conversations?surface=development": [chat],
+            "/api/agent-conversations/17?surface=development": chat,
             "/api/workflows/studio/tasks/17/commands?include_terminal=false": {"items": []},
         }
 
@@ -271,7 +271,7 @@ def test_paired_checkpoint_review_recovers_lost_decisions(page, paired_checkpoin
                 path = call["path"]
                 if path.startswith("/api/workflows/studio/incoming/proposals/review?"):
                     data = {"status": "thread", "chat_id": 17}
-                elif path == "/api/chats/17?surface=development":
+                elif path == "/api/agent-conversations/17?surface=development":
                     data = {"title": "Delivery proposal", "project_id": 9, "messages": []}
                 elif path == execution:
                     data = frozen if wait_for_check else scope.client.get(path).json()

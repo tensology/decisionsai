@@ -48,7 +48,7 @@ export function toolCardsHtml(message, items, esc, dismissed = new Set()) {
 
 export function memoryPanelHtml(view, esc) {
     const rows = (view.records || []).slice().reverse().map((row) => `<li><p>${esc(row.text)}</p>${row.at ? `<small>${esc(new Date(row.at).toLocaleString())}</small>` : ''}</li>`).join('');
-    return `<h2>Chat memory</h2>
+    return `<h2>Conversation memory</h2>
         <p class="plan-memory-state">${view.enabled ? 'On: finished turns are saved (redacted) and other chats of this project can recall them.' : 'Off: nothing from this chat is saved or recalled.'}</p>
         <label class="plan-memory-toggle"><input type="checkbox" id="plan-memory-enabled"${view.enabled ? ' checked' : ''}> Remember this chat</label>
         <ol class="plan-memory-list">${rows || '<li class="plan-memory-empty">No saved memory for this chat.</li>'}</ol>

@@ -152,11 +152,11 @@ def test_paired_approval_recovers_the_exact_workflow_without_automatic_retry(
                 data = {**board, "lanes": [{"id": lane_id, "name": "Backlog", "tickets": [ticket_row]}]}
             elif path == ticket_path:
                 data = ticket_row
-            elif path in ("/api/projects", "/api/workflows", "/api/chats"):
+            elif path in ("/api/projects", "/api/workflows", "/api/agent-conversations"):
                 data = []
-            elif path.startswith("/api/chats/") and "surface=development" in path:
+            elif path.startswith("/api/agent-conversations/") and "surface=development" in path:
                 receipt = client.get(review_path).json()
-                assert path == f"/api/chats/{receipt['chat_id']}?surface=development"
+                assert path == f"/api/agent-conversations/{receipt['chat_id']}?surface=development"
                 data = {"title": "Delivery proposal", "project_id": ids.project_id,
                         "messages": [{"role": "user", "content": "Approved delivery workflow."}]}
             elif path.startswith("/api/workflows/studio/tasks/") and path.endswith("/execution"):
@@ -348,7 +348,7 @@ def test_paired_approval_recovers_the_exact_workflow_without_automatic_retry(
     execution = page.get_by_role("region", name="Development execution")
     expect(execution.get_by_text("Failed", exact=True)).to_be_visible()
     expect(execution.get_by_text(warning, exact=True)).to_be_visible()
-    assert any(method == "GET" and path == f"/api/chats/{run.chat_id}?surface=development" for method, path, _ in requests)
+    assert any(method == "GET" and path == f"/api/agent-conversations/{run.chat_id}?surface=development" for method, path, _ in requests)
     page.screenshot(path=EVIDENCE / f"{width}-{'folder-' if folder_changed else ''}thread.png", animations="disabled")
     page.get_by_role("button", name="Back", exact=True).click()
     page.get_by_role("textbox").first.fill("Updated delivery title")

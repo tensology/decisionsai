@@ -115,7 +115,7 @@ def test_view_only_chat_keeps_composer_visible_with_load_affordance():
 
     assert "inputContainer.style.display = 'block';" in show_block
     assert "messageInput.disabled = !isLoaded || chatActivationInFlight;" in show_block
-    assert "Load this chat to reply" in show_block
+    assert "Load this agent to reply" in show_block
     assert "setViewOnlyChrome(!isLoaded);" in show_block
 
 
@@ -149,7 +149,7 @@ def test_send_guard_refuses_viewed_unloaded_chat():
     )[0]
 
     assert "if (!loadedChatId || loadedChatId !== currentChatId)" in send_block
-    assert "Please load a chat to reply." in send_block
+    assert "Please load the agent to reply." in send_block
     assert "setViewOnlyChrome(true);" in send_block
 
 
@@ -172,7 +172,7 @@ def test_chat_activation_locks_composer_until_agent_handoff_finishes():
     assert "chatActivationInFlight = false;" in load_block
     assert "loadedChatId = null;" in load_block
     assert "sendButton.disabled = chatActivationInFlight" in composer_block
-    assert "Loading chat into agent" in composer_block
+    assert "Loading agent" in composer_block
     assert "sendButton.disabled = chatActivationInFlight ||" in input_block
     assert "messageInput.disabled = chatActivationInFlight;" in streaming_block
 
@@ -229,7 +229,7 @@ def test_chat_loading_copy_distinguishes_agent_configuration_from_starting_a_cha
 
     assert "Configure agent" in html
     assert "Loading agent settings..." in html
-    assert "Starting chat..." in combined
+    assert "Starting conversation..." in combined
     assert "Setup your Agent" not in combined
     assert "Agent is Loading" not in combined
     assert "Agent is loading" not in combined
@@ -237,7 +237,7 @@ def test_chat_loading_copy_distinguishes_agent_configuration_from_starting_a_cha
 
 def test_chat_sidebar_orders_by_latest_activity_not_creation_time():
     routes = _chat_routes_source()
-    chats_block = routes.split('@router.get("/chats")', 1)[1].split(
+    chats_block = routes.split('@router.get("/agent-conversations", summary="List agent conversations")', 1)[1].split(
         'settings = load_settings_from_db()',
         1,
     )[0]
@@ -251,7 +251,7 @@ def test_header_icon_buttons_have_visible_tooltip_contract():
     css = _chat_css_source()
 
     for control_id, label in [
-        ("chatMoreButton", "Chat actions"),
+        ("chatMoreButton", "Agent actions"),
         ("contextRing", "Estimated context used"),
         ("configureChatButton", "Configure agent"),
     ]:
@@ -556,7 +556,7 @@ def test_voice_stream_start_repairs_missing_user_transcript_from_chat_state():
         1,
     )[0]
 
-    assert "fetch(`${API_BASE}/chats/${chatId}`)" in repair_block
+    assert "fetch(`${API_BASE}/agent-conversations/${chatId}`)" in repair_block
     assert "mergeChatUpdatedDuringStream(data.messages || []);" in repair_block
     assert "repairMissingUserMessageForStream(msg.chat_id);" in start_block
 

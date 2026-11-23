@@ -66,17 +66,17 @@ def test_all_sidebar_rows_reorder_and_viewed_chat_controls_corner_avatar(tmp_pat
                         {"folder_name": "oracle", "name": "Oracle", "type": "oracle", "idle_animation": "fallback.svg"},
                         {"folder_name": "hayley", "name": "Hayley", "type": "avatar", "idle_animation": "idle.webm", "preview_image": "idle.webp", "chroma_key": [0, 255, 0]},
                     ]})
-                if path == "/api/chats/sidebar/order":
+                if path == "/api/agent-conversations/sidebar/order":
                     saved_order[:] = route.request.post_data_json["chat_ids"]
                     writes.append(saved_order.copy())
                     return route.fulfill(json={"chat_ids": saved_order})
-                if path == "/api/chats":
+                if path == "/api/agent-conversations":
                     return route.fulfill(json={"chats": [
                         dict(row, sidebar_rank=saved_order.index(row["id"])) for row in rows
                     ], "last_chat_id": 44, "agent_current_chat_id": 22})
                 if path.endswith("/load-in-agent"):
                     loads.append(path)
-                if re.fullmatch(r"/api/chats/\d+", path):
+                if re.fullmatch(r"/api/agent-conversations/\d+", path):
                     record = next(row for row in rows if row["id"] == int(path.rsplit("/", 1)[1]))
                     return route.fulfill(json=dict(record, messages=[], title="Test conversation"))
                 return route.fulfill(json={})
@@ -100,13 +100,13 @@ def test_all_sidebar_rows_reorder_and_viewed_chat_controls_corner_avatar(tmp_pat
             row = lambda chat_id: page.locator(f'.chat-item[data-chat-id="{chat_id}"]')
             order = lambda: page.locator(".chat-item").evaluate_all("rows => rows.map(row => Number(row.dataset.chatId))")
             expect(row(44)).to_have_attribute("aria-selected", "true")
-            with page.expect_response("**/api/chats/sidebar/order"):
+            with page.expect_response("**/api/agent-conversations/sidebar/order"):
                 row(44).locator(".chat-thread-avatar").drag_to(row(11), target_position={"x": 90, "y": 5})
             assert writes[-1] == [44, 11, 22, 33]
             expect(row(44)).to_have_attribute("aria-selected", "true")
             expect(row(22)).to_have_class(re.compile(r"\bloaded\b"))
             page.wait_for_function("!sidebarOrderSaving")
-            with page.expect_response("**/api/chats/sidebar/order"):
+            with page.expect_response("**/api/agent-conversations/sidebar/order"):
                 row(33).drag_to(row(11), target_position={"x": 90, "y": 5})
             assert writes[-1] == [44, 33, 11, 22]
             page.reload()

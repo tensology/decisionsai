@@ -456,7 +456,7 @@ def _install_api(
                 payload = {**projects[1], "startup_instructions": "", "context_items": [], "files": []}
         elif path in {"/api/projects/8/startup-sessions", "/api/projects/8/shell-terminal"}:
             payload = {"sessions": []}
-        elif path == "/api/chats":
+        elif path == "/api/agent-conversations":
             recent = ([{
                 "id": 19,
                 "title": "Open-ended development",
@@ -551,9 +551,9 @@ def _install_api(
             payload = trello_board
         elif path == "/api/tickets/external-boards/trello/trello-1/register":
             payload = {"success": True}
-        elif path == "/api/chats/17" and request.method == "GET":
+        elif path == "/api/agent-conversations/17" and request.method == "GET":
             payload = chat
-        elif path == '/api/chats/88' and request.method == 'GET' and 88 in forked_chats:
+        elif path == '/api/agent-conversations/88' and request.method == 'GET' and 88 in forked_chats:
             payload = forked_chats[88]
         elif path in {f'/api/workflows/studio/tasks/88/{suffix}' for suffix in ('execution', 'time', 'artifacts', 'plans')} and 88 in forked_chats:
             if path.endswith('/execution'):
@@ -640,13 +640,13 @@ def _install_api(
             startup_sessions[:] = [session for session in startup_sessions if session["process_id"] != killed_process_id]
             shell_sessions[:] = [session for session in shell_sessions if session["process_id"] != killed_process_id]
             payload = {"success": True}
-        elif path == "/api/chats/17" and request.method == "PATCH":
+        elif path == "/api/agent-conversations/17" and request.method == "PATCH":
             body = json.loads(request.post_data or "{}")
             chat.update(body)
             payload = chat
-        elif path == "/api/chats/17" and request.method == "DELETE":
+        elif path == "/api/agent-conversations/17" and request.method == "DELETE":
             payload = {"message": "Chat deleted successfully"}
-        elif path == "/api/chats/17/fork":
+        elif path == "/api/agent-conversations/17/fork":
             payload = {"ok": True, "id": 18, "checkpoint": {"summary": "Fork checkpoint"}}
         elif path == "/api/workflows/skills":
             payload = {"skills": [
@@ -1214,7 +1214,7 @@ def test_recents_section_appears_when_an_open_ended_thread_exists(page: Page):
 def test_open_ended_thread_does_not_inherit_the_previous_board(page: Page, width):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests, current_board_linked=True, unassigned_recent=True)
-    page.route("**/api/chats/19?*", lambda route: route.fulfill(json={
+    page.route("**/api/agent-conversations/19?*", lambda route: route.fulfill(json={
         "id": 19, "title": "Open-ended development", "project_id": None, "development": True,
         "messages": [{"role": "assistant", "content": "Ready to continue without a linked project."}],
     }))
@@ -1307,7 +1307,7 @@ def test_recent_more_and_less_stay_in_the_current_thread_view(page: Page):
     _install_api(page, requests, recent_project_count=6)
     older = {"id": 100, "title": "Older development thread", "project_id": 7,
              "development_board_key": "decisions:70", "development": True, "messages": []}
-    page.route("**/api/chats/100?*", lambda route: route.fulfill(json=older))
+    page.route("**/api/agent-conversations/100?*", lambda route: route.fulfill(json=older))
     page.route(re.compile(r"/api/workflows/studio/tasks/100/(artifacts|plans)$"),
                lambda route: route.fulfill(json={"items": []}))
     page.goto(URL)
@@ -1346,7 +1346,7 @@ def test_sidebar_sections_keep_background_work_separate_and_toggle_both_ways(pag
          "pinned": i == 7, "development_execution": {"status": "running" if i < 6 else "completed"}}
         for i in range(8)
     ]
-    page.route("**/api/chats?*", lambda route: route.fulfill(json={"chats": [manual, *background]}))
+    page.route("**/api/agent-conversations?*", lambda route: route.fulfill(json={"chats": [manual, *background]}))
     boards = [{"id": 70 + i, "name": f"Board {i + 1}", "source": "database"} for i in range(14)]
     page.route("**/api/tickets/boards", lambda route: route.fulfill(json=boards))
     page.route("**/api/workflows/studio/sidebar/pins", lambda route: route.fulfill(
@@ -1395,7 +1395,7 @@ def test_new_thread_wins_over_a_stale_thread_load(page: Page):
         const nativeFetch = window.fetch.bind(window);
         window.fetch = async (...args) => {
             const target = String(args[0]?.url || args[0] || '');
-            if (target.includes('/api/chats/17')) {
+            if (target.includes('/api/agent-conversations/17')) {
                 await new Promise((resolve) => setTimeout(resolve, 300));
             }
             return nativeFetch(...args);
@@ -1421,7 +1421,7 @@ def test_thread_composer_waits_for_the_url_thread_before_submitting(page: Page):
         const nativeFetch = window.fetch.bind(window);
         window.fetch = async (...args) => {
             const target = String(args[0]?.url || args[0] || '');
-            if (target.includes('/api/chats/17')) {
+            if (target.includes('/api/agent-conversations/17')) {
                 await new Promise((resolve) => setTimeout(resolve, 350));
             }
             return nativeFetch(...args);
@@ -1913,7 +1913,7 @@ def test_development_never_restores_or_opens_an_ordinary_chat(page: Page):
     page.goto(TEST_BASE_URL + "/development/threads/1/", wait_until="domcontentloaded")
     expect(page).to_have_url(TEST_BASE_URL + "/development/threads/17/")
     expect(page.locator("#header-task")).to_have_text("Implement ticket DEV-42")
-    assert ("GET", "/api/chats/1") not in requests
+    assert ("GET", "/api/agent-conversations/1") not in requests
 
 
 def test_sidebar_hover_highlights_the_complete_row_without_boxing_the_add_action(page: Page):
@@ -2377,10 +2377,10 @@ def test_planning_waits_for_the_selected_projects_thread(page: Page):
     ]
     for thread in threads:
         thread.update(development=True, archived=False)
-    page.route("**/api/chats?*", lambda route: route.fulfill(json={"chats": threads, "last_chat_id": 17}))
+    page.route("**/api/agent-conversations?*", lambda route: route.fulfill(json={"chats": threads, "last_chat_id": 17}))
     page.route("**/api/workflows/studio/sidebar/pins", lambda route: route.fulfill(json={"board_keys": ["decisions:70", "decisions:80"]}))
     held = []
-    page.route("**/api/chats/18?*", lambda route: held.append(route))
+    page.route("**/api/agent-conversations/18?*", lambda route: held.append(route))
     page.route(re.compile(r"/api/workflows/studio/tasks/18/(artifacts|plans)$"),
                lambda route: route.fulfill(json={"items": []}))
     opened = []
@@ -2394,7 +2394,7 @@ def test_planning_waits_for_the_selected_projects_thread(page: Page):
     page.route("**/api/workflows/studio/plan-workspaces", plan)
     page.goto(URL)
     expect(page.locator("#task-prompt")).to_be_enabled()
-    with page.expect_request("**/api/chats/18?*"):
+    with page.expect_request("**/api/agent-conversations/18?*"):
         page.get_by_role("button", name="Empty delivery", exact=True).click()
     page.get_by_role("group", name="Board view").get_by_role("button", name="Planning", exact=True).click()
     held[0].fulfill(json={**threads[1], "messages": []})
@@ -2407,8 +2407,8 @@ def test_mobile_project_drawer_stays_open_during_initial_thread_restore(page: Pa
     _install_api(page, [])
     page.set_viewport_size({"width": 390, "height": 844})
     restoring = []
-    page.route("**/api/chats/17?*", lambda route: restoring.append(route))
-    with page.expect_request("**/api/chats/17?*"):
+    page.route("**/api/agent-conversations/17?*", lambda route: restoring.append(route))
+    with page.expect_request("**/api/agent-conversations/17?*"):
         page.goto(TEST_BASE_URL + "/development/")
 
     opener = page.get_by_role("button", name="Open development boards")

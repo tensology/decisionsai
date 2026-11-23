@@ -499,7 +499,7 @@ class OllamaResponseMixin:
     SIMPLE_TOOLS = frozenset([
         'text_editing', 'mouse_movement', 'mouse_actions', 'caret_movement',
         'special_key', 'function_key', 'media_control', 'open_window', 'open_file_menu',
-        'keyboard_shortcut', 'oracle_control', 'oracle_globe', 'new_chat',
+        'keyboard_shortcut', 'oracle_control', 'oracle_globe', 'new_agent_conversation',
     ])
 
     async def _handle_post_tool_execution(self, tool_calls, tool_results, current_chat_id,
@@ -537,7 +537,7 @@ class OllamaResponseMixin:
                 break
 
         # --- clear_chat ---
-        if any(tc.get('function', {}).get('name') == 'clear_chat' for tc in tool_calls):
+        if any(tc.get('function', {}).get('name') == 'clear_agent_conversation' for tc in tool_calls):
             system_prompt = self._messages[0] if self._messages else None
             self._messages = [system_prompt] if system_prompt else []
             if not self._cancelled:
@@ -597,7 +597,7 @@ class OllamaResponseMixin:
             return await self._trigger_llm_followup(full_response)
 
         # new_chat
-        if any(tc.get('function', {}).get('name') == 'new_chat' for tc in tool_calls):
+        if any(tc.get('function', {}).get('name') == 'new_agent_conversation' for tc in tool_calls):
             return await self._handle_new_chat_result(tool_calls, tool_results, full_response)
 
         # exit_app already handled above
@@ -626,7 +626,7 @@ class OllamaResponseMixin:
             return await self._speak_tool_errors(errors, current_chat_id)
 
         # --- default: say "Done" ---
-        if any(tc.get('function', {}).get('name') == 'clear_chat' for tc in tool_calls):
+        if any(tc.get('function', {}).get('name') == 'clear_agent_conversation' for tc in tool_calls):
             return full_response, True
 
         brief = self._determine_brief_confirmation(tool_calls, tool_results)

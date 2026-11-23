@@ -33,7 +33,7 @@ def install(page):
         payload = None
         if path == '/api/workflows/studio/control-state':
             payload = {'commands': rows, 'interactions': [], 'channels': {}, 'controls': {}}
-        elif path == '/api/chats/18':
+        elif path == '/api/agent-conversations/18':
             payload = {'id': 18, 'title': 'Forked queued request', 'project_id': 7, 'development': True,
                        'route_mode': 'auto', 'execution_profile': 'code', 'autonomy_level': 'full',
                        'messages': [{'role': 'user', 'content': 'Review these files'}]}

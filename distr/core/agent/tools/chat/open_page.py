@@ -19,15 +19,16 @@ logger = logging.getLogger(__name__)
 
 # Canonical page map: alias(es) → path on the unified web server
 _PAGE_MAP = {
-    # Chat
-    "chat":           "/chat/",
-    "chats":          "/chat/",
+    # Agents
+    "agents":         "/agents/",
+    "chat":           "/agents/",
+    "chats":          "/agents/",
     # Development workspace
     "development":    "/development/",
     "development threads": "/development/",
-    "web ui":         "/chat/",
-    "webui":          "/chat/",
-    "web interface":  "/chat/",
+    "web ui":         "/agents/",
+    "webui":          "/agents/",
+    "web interface":  "/agents/",
     "incoming":       "/development/incoming/",
     "automations":    "/development/automations/",
     "automation":     "/development/automations/",
@@ -108,7 +109,7 @@ _PAGE_MAP = {
 
 # Build a nice list for the tool description
 _KNOWN_PAGES = ", ".join(sorted({
-    "chat", "settings/preferences", "general & audio", "initiative", "audio",
+    "agents", "settings/preferences", "general & audio", "initiative", "audio",
     "third party/providers/api keys", "llms/models", "skins/avatar",
     "advanced", "actions", "skills", "projects", "development",
     "incoming", "automations", "terminals", "reports",
@@ -120,7 +121,7 @@ _KNOWN_PAGES = ", ".join(sorted({
 def resolve_open_page_key(raw: str) -> Optional[str]:
     """Pick one known page from a name or a full spoken request.
 
-    "chat web ui" and a bare "web ui" both open Chat.
+    "chat web ui" and a bare "web ui" both open Agents.
     Whole-phrase matches only, longest first, so "preferences" is not
     chosen just because a shorter alias sits inside another word.
     """
@@ -148,7 +149,7 @@ def resolve_open_page_key(raw: str) -> Optional[str]:
         r"\bweb\s*ui\b|\bwebui\b|\bweb\s+interface\b",
         text,
     ):
-        return "chat"
+        return "agents"
     for key in sorted(_PAGE_MAP, key=len, reverse=True):
         pattern = r"\b" + re.escape(key).replace(r"\ ", r"\s+") + r"\b"
         if re.search(pattern, text):
@@ -160,8 +161,8 @@ def _confirmation_for_path(path: str) -> str:
     """Short conversational confirmation for chat/TTS (no URLs — TTS strips http links)."""
     if not path:
         return "I've opened that page in your browser."
-    if "/chat" in path or path.startswith("/chat"):
-        return "I've opened Chat in your browser."
+    if path == "/agents" or path.startswith("/agents/"):
+        return "I've opened Agents in your browser."
     if path.startswith("/development/incoming"):
         return "I've opened Development Incoming in your browser."
     if path.startswith("/development/automations"):
@@ -220,11 +221,11 @@ class OpenPageTool(BaseTool):
     name: str = "open_page"
     description: str = (
         "Open a DecisionsAI web UI page in the default browser. "
-        "Use when the user says open/show/bring up chat, development, the web UI, preferences, projects, etc. "
+        "Use when the user says open/show/bring up Agents, Development, the web UI, preferences, projects, etc. "
         f"Known pages: {_KNOWN_PAGES}. "
         "Do not use smart_open for these in-app pages. "
         "For a specific ticket board (local, Jira, or Trello), use create_ticket with action='open_board' instead. "
-        "Also handles 'new chat' by creating a fresh chat and opening the chat page."
+        "Use page='agents' to open the Agents workspace."
     )
     args_schema: type[BaseModel] = OpenPageInput
     chat_manager: Optional[Any] = Field(default=None, exclude=True)
@@ -249,7 +250,7 @@ class OpenPageTool(BaseTool):
             return "Error: No page name provided."
 
         # Special case: "new chat" — create a chat then open the chat page
-        if page_lower in ("new chat", "new conversation"):
+        if page_lower in ("new agent", "create agent", "new agent conversation", "new chat", "new conversation"):
             # Hard guard (routee2e 2026-10-22): never spawn a chat from an instruction.
             from distr.core.agent.services.llm.tool_execution_policy import NEW_CHAT_BLOCK_REASON
             return NEW_CHAT_BLOCK_REASON
@@ -349,10 +350,10 @@ class OpenPageTool(BaseTool):
                 chat_id = self._chat_manager.create_chat("New Conversation", is_new=True)
                 logger.info(f"OpenPageTool: Created new chat {chat_id}")
 
-            result = self._open_url("/chat/", "new chat")
+            result = self._open_url("/agents/", "new chat")
             if result.startswith("Error"):
                 return result
-            return "I've started a new conversation and opened Chat in your browser."
+            return "I've started a new conversation and opened Agents in your browser."
         except Exception as e:
             logger.error(f"OpenPageTool: Error creating new chat: {e}", exc_info=True)
             return f"Error creating new chat: {e}"

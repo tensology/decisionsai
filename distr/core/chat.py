@@ -120,7 +120,7 @@ def get_compact_checkpoint_prompt(chat_id: Optional[int]) -> str:
 
 def _title_from_question(question: str, max_len: int = 50) -> str:
     if not question or not question.strip():
-        return "New Chat"
+        return "New conversation"
     line = " ".join(question.strip().split())
     return (line[:max_len] + "\u2026") if len(line) > max_len else line
 
@@ -660,7 +660,7 @@ class ChatService:
         starting_question = (starting_question or "").strip() or None
         if not title and starting_question:
             title = _title_from_question(starting_question)
-        title = (title or "").strip() or "New Chat"
+        title = (title or "").strip() or "New conversation"
         from distr.core.db.time import utc_now_naive
 
         now = utc_now_naive()

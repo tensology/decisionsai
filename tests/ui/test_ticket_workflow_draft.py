@@ -260,7 +260,7 @@ def test_ticket_footer_checks_current_thread_before_navigation(page, fixture_bas
         }]}],
     }))
     if width in (390, 1440):
-        page.route('**/api/chats', lambda route: route.fulfill(json={'chats': []}))
+        page.route('**/api/agent-conversations', lambda route: route.fulfill(json={'chats': []}))
     stale = True
     lookups = []
 

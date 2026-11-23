@@ -2049,7 +2049,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 self._select_skin_by_shortcut_index(index)
             return
         if action_name == "open_chat":
-            self._open_web_url("/chat/")
+            self._open_web_url("/agents/")
             return
         if action_name == "open_projects":
             self._open_web_url("/projects/")
@@ -2484,7 +2484,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     
 
     def handle_new_chat(self):
-        """Create a Chat conversation and open it on the Chat surface."""
+        """Start a conversation and open it in Agents."""
         # Check if EULA is accepted
         if not self._check_eula_accepted():
             return
@@ -2498,13 +2498,13 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         except Exception as e:
             logger.error(f"Error emitting interrupt_tts signal: {e}")
         
-        # Create the conversation through Chat, then keep it on the Chat surface.
+        # Start the conversation in Agents.
         # Development threads are created only by Development actions.
         try:
             if self.chat_manager:
-                new_chat_id = self.chat_manager.create_chat("New Conversation", is_new=True)
-                self._open_web_url(f"/chat/?id={int(new_chat_id)}")
-                logger.info("Oracle: Created chat %s and opened Chat", new_chat_id)
+                new_chat_id = self.chat_manager.create_chat("New conversation", is_new=True)
+                self._open_web_url(f"/agents/?id={int(new_chat_id)}")
+                logger.info("Oracle: Created chat %s and opened Agents", new_chat_id)
             else:
                 logger.warning("Oracle: Cannot create new chat - chat_manager not available")
         except Exception as e:
@@ -2512,9 +2512,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     
 
     def show_chat_window(self, center_on_screen=False):
-        """Open web chat (desktop Chat window removed)."""
+        """Open Agents in the browser."""
         if self._check_eula_accepted():
-            self._open_web_url("/chat/")
+            self._open_web_url("/agents/")
 
     def _has_unsubmitted_new_chat(self):
         """Check if there's a new chat that hasn't been submitted yet (no messages)"""

@@ -51,6 +51,19 @@ def test_board_api_read_with_token_ok(client):
     assert r.status_code in (200, 404, 500)  # auth passed; data depends on tmp DB
 
 
+def test_agents_page_redirect_and_api_alias_access(client):
+    old_page = client.get("/chat/?id=17&from_create=1", follow_redirects=False)
+    assert old_page.status_code == 307
+    assert old_page.headers["location"] == "/agents/?id=17&from_create=1"
+    assert '<title>Agents - Decisions AI</title>' in client.get(old_page.headers["location"]).text
+
+    schema = client.get("/openapi.json").json()["paths"]
+    assert "/api/agent-conversations" in schema
+    assert "/api/chats" not in schema
+    for path in ("/api/agent-conversations/speak-spoken", "/api/chats/speak-spoken"):
+        assert client.post(path, json={"text": "Test"}).status_code == 401
+
+
 def _sign(body: bytes, ts: str, secret: str = SECRET) -> str:
     return "v0=" + hmac.new(secret.encode(), f"v0:{ts}:{body.decode()}".encode(), hashlib.sha256).hexdigest()
 

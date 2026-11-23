@@ -606,7 +606,7 @@ class ChatManagerCore:
             llm_model=final_model,
             tts_provider=voice_provider,
             tts_voice=voice_model,
-            title=title or "New Chat",
+            title=title or "New conversation",
             starting_question=(input_text or "").strip() or None,
         )
 

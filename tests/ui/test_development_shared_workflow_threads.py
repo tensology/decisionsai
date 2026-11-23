@@ -27,7 +27,7 @@ def test_approved_proactive_turn_displays_its_reply_in_development(page, fixture
             {"role": "assistant", "content": reply, "chat_row_id": 19},
         ],
     }
-    page.route("**/api/chats/17?**", lambda route: route.fulfill(json=chat))
+    page.route("**/api/agent-conversations/17?**", lambda route: route.fulfill(json=chat))
     page.route("**/api/workflows/studio/tasks/17/execution", lambda route: route.fulfill(json={"direct": True}))
     page.set_viewport_size({"width": width, "height": 920})
     page.goto(f"{fixture_base}/development/threads/17/")
@@ -106,7 +106,7 @@ def test_proactive_handoff_refreshes_transcript_for_active_followup(page, fixtur
     execution = {"id": 91, "direct": True, "status": "running", "turn_id": 19,
                  "origin": "proactive_orchestrator", "summary": "Checking the checkout.", "can_stop": False}
     commands = [{"id": 62, "chat_id": 17, "status": "queued", "command_type": "followup", "content": followup["content"]}]
-    page.route("**/api/chats/17?**", lambda route: route.fulfill(json=chat))
+    page.route("**/api/agent-conversations/17?**", lambda route: route.fulfill(json=chat))
     page.route("**/api/workflows/studio/tasks/17/execution", lambda route: route.fulfill(json=execution))
     page.route(re.compile(r"/api/workflows/studio/control-state(?:\?|$)"), lambda route: route.fulfill(
         json={"commands": commands, "interactions": [], "channels": {}, "controls": {}},
@@ -156,7 +156,7 @@ def install_shared_workflow(page, *, waiting=False, workflow_message=True):
                  'summary': 'Read-only check: pwd returned the registered project. printf printed TELEGRAM_PROPOSAL_E2E_OK.\n\n```\n/Users/example/development/WORK/CRYSTALLOGIC/www.registered-project.example\n```'}
     other = {'id': 98, 'workflow_id': 44, 'chat_id': 18, 'status': 'waiting', 'current_step_id': 1, 'waiting_kind': 'verification_review'}
     own = {'id': 99, 'workflow_id': 44, 'chat_id': 17, 'status': status, 'current_step_id': 1}
-    page.route('**/api/chats/17?**', lambda route: route.fulfill(json=chat))
+    page.route('**/api/agent-conversations/17?**', lambda route: route.fulfill(json=chat))
     page.route('**/api/workflows/studio/tasks/17/execution', lambda route: route.fulfill(json=execution))
     page.route('**/api/workflows/active-runs**', lambda route: route.fulfill(json=[other, own] if waiting else [other]))
 
@@ -180,7 +180,7 @@ def test_workflow_completion_stays_above_a_newer_prompt(page, fixture_base, widt
         'development': True, 'development_workflow_id': 44,
         'messages': _merge_thread_rows_with_tool_and_workflow_events(rows, root),
     }
-    page.route('**/api/chats/17?**', lambda route: route.fulfill(json=chat))
+    page.route('**/api/agent-conversations/17?**', lambda route: route.fulfill(json=chat))
     page.set_viewport_size({'width': width, 'height': 920})
     page.goto(f'{fixture_base}/development/threads/17/')
     disclosure = page.locator('details.turn-activity-disclosure > summary').filter(has_text='View workflow')

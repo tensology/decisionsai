@@ -319,17 +319,17 @@ def get_tool_parameters(tool_name: str) -> dict:
             },
             "required": []
         },
-        "clear_chat": {
+        "clear_agent_conversation": {
             "type": "object",
             "properties": {
                 "confirm": {
                     "type": "boolean",
-                    "description": "Confirmation to clear the chat (default: true). Always set to true when user requests to clear chat."
+                    "description": "Confirmation to clear the conversation (default: true). Always set to true when user requests to clear chat."
                 }
             },
             "required": []
         },
-        "new_chat": {
+        "new_agent_conversation": {
             "type": "object",
             "properties": {},
             "required": []

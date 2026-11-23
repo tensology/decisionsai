@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from 'chat/partials/configure_chat_fields.html' import configure_chat_fields, voice_select_fields, oracle_background_field %}
 
-{% block title %}Chat{% endblock %}
+{% block title %}Agents{% endblock %}
 
 {% block extra_head %}
 <link rel="stylesheet" href="{{ base_path }}/static/css/chat.css?v={{ app_version or 'dev' }}-20261123-agent-oracle-preview">
@@ -37,7 +37,7 @@
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"></path></svg>
                 </button>
             </div>
-            <div class="group-list" id="groupList" role="listbox" aria-label="Group chats"></div>
+            <div class="group-list" id="groupList" role="listbox" aria-label="Agent groups"></div>
         </section>
     </aside>
 
@@ -54,15 +54,15 @@
                         <span id="contextRingValue">0%</span>
                     </button>
                     <div class="chat-settings-title-wrap">
-                        <h1 class="chat-settings-title" id="chatTitle" title="New Chat">New Chat</h1>
+                        <h1 class="chat-settings-title" id="chatTitle" title="New conversation">New conversation</h1>
                     </div>
                 </div>
                 <div class="chat-settings-controls" id="chatSettingsControls">
-                    <div class="chat-header-summary-group" title="LLM for this chat">
+                    <div class="chat-header-summary-group" title="LLM for this agent">
                         <span class="chat-header-control-label">LLM</span>
                         <span class="chat-header-summary" id="headerLlmSummary" aria-label="LLM provider and model">—</span>
                     </div>
-                    <div class="chat-header-summary-group" id="headerVoiceGroup" title="Voice for this chat">
+                    <div class="chat-header-summary-group" id="headerVoiceGroup" title="Voice for this agent">
                         <span class="chat-header-control-label">Voice</span>
                         <span class="chat-header-summary" id="headerVoiceSummary" aria-label="Voice provider and voice">—</span>
                     </div>
@@ -76,7 +76,7 @@
                         <button type="button" class="header-icon-btn chat-header-tooltip" id="configureChatButton" aria-label="Configure agent" data-tooltip="Configure agent">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                         </button>
-                        <button type="button" class="header-icon-btn chat-header-tooltip" id="chatMoreButton" aria-label="Chat actions" data-tooltip="Chat actions" aria-haspopup="menu" aria-controls="chatContextMenu" aria-expanded="false">
+                        <button type="button" class="header-icon-btn chat-header-tooltip" id="chatMoreButton" aria-label="Agent actions" data-tooltip="Agent actions" aria-haspopup="menu" aria-controls="chatContextMenu" aria-expanded="false">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
                         </button>
                     </div>
@@ -100,7 +100,7 @@
                     <p class="empty-state-prompt" id="emptyStatePrompt" style="display:none;">How can I help you today?</p>
                 </div>
                 <div class="empty-state-agent-loading" id="emptyStateAgentLoading" style="display: none;">
-                    <p class="empty-state-agent-loading-text">Starting chat...</p>
+                    <p class="empty-state-agent-loading-text">Starting conversation...</p>
                     <div class="empty-state-agent-loading-spinner" aria-hidden="true"></div>
                 </div>
             </div>
@@ -144,7 +144,7 @@
         </div>
 
         <!-- Input Area -->
-        <section class="group-view" id="groupView" hidden aria-label="Group chat">
+        <section class="group-view" id="groupView" hidden aria-label="Group conversation">
             <header class="group-view-header">
                 <h1 class="group-view-title" id="groupViewTitle"></h1>
                 <div class="group-view-members" id="groupViewMembers"></div>
@@ -179,7 +179,7 @@
                     placeholder="Send message..."
                     rows="1"
                 ></textarea>
-                <button class="input-load-button" id="inputLoadButton" type="button" style="display: none;" title="Load this chat to reply">Load</button>
+                <button class="input-load-button" id="inputLoadButton" type="button" style="display: none;" title="Load this agent to reply">Load</button>
                 <button class="speaker-toggle" id="speakerToggle" type="button" title="Read response aloud (TTS)" aria-pressed="true">
                     <svg class="speaker-on" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                         <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
@@ -207,7 +207,7 @@
 </div>
 
 <!-- Chat item context menu (View, Load, Rename, Delete) -->
-<div id="chatContextMenu" class="chat-context-menu" role="menu" aria-label="Chat actions" style="display: none;">
+<div id="chatContextMenu" class="chat-context-menu" role="menu" aria-label="Agent actions" style="display: none;">
     <button type="button" role="menuitem" tabindex="-1" class="chat-context-menu-item flex items-center gap-2" data-action="view"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>View</button>
     <button type="button" role="menuitem" tabindex="-1" class="chat-context-menu-item flex items-center gap-2" data-action="load"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>Load</button>
     <hr class="chat-context-menu-separator" role="separator">

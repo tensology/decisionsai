@@ -53,14 +53,14 @@ export const imageLabel = (asset) => `Image ${asset.id}`;
 export function chatHeaderHtml(session, esc) {
     const chats = (session.conversation.chats || []).filter((chat) => !chat.archived);
     const current = chats.find((chat) => chat.id === session.chatId) || (session.conversation.chat && !session.conversation.chat.archived ? session.conversation.chat : null);
-    const title = current?.title || 'New chat';
+    const title = current?.title || 'New conversation';
     const trash = '<svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14"><path d="M3.5 4.5h9M6.5 4.5V3.2h3v1.3M5.2 6.2l.4 7.1h4.8l.4-7.1" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-    const row = (chat) => `<div class="plan-chat-menu-row" role="none"><button type="button" role="menuitemradio" aria-checked="${chat.id === session.chatId}" data-chat-switch="${esc(chat.id)}"><span class="plan-chat-menu-title">${esc(chat.title || 'Chat')}</span></button><button type="button" class="plan-chat-delete" data-chat-delete="${esc(chat.id)}" title="Delete chat" aria-label="Delete ${esc(chat.title || 'chat')}">${trash}</button></div>`;
-    return `<button type="button" class="plan-chat-switch" id="plan-chat-switch" aria-haspopup="menu" aria-expanded="false" aria-controls="plan-chat-menu" title="Switch chat"><span class="plan-chat-title">${esc(title)}</span><span aria-hidden="true" class="plan-chat-caret">▾</span></button>
-        <div class="board-context-menu plan-chat-menu hidden" id="plan-chat-menu" role="menu" aria-label="Chats">
+    const row = (chat) => `<div class="plan-chat-menu-row" role="none"><button type="button" role="menuitemradio" aria-checked="${chat.id === session.chatId}" data-chat-switch="${esc(chat.id)}"><span class="plan-chat-menu-title">${esc(chat.title || 'Conversation')}</span></button><button type="button" class="plan-chat-delete" data-chat-delete="${esc(chat.id)}" title="Delete conversation" aria-label="Delete ${esc(chat.title || 'conversation')}">${trash}</button></div>`;
+    return `<button type="button" class="plan-chat-switch" id="plan-chat-switch" aria-haspopup="menu" aria-expanded="false" aria-controls="plan-chat-menu" title="Switch conversation"><span class="plan-chat-title">${esc(title)}</span><span aria-hidden="true" class="plan-chat-caret">▾</span></button>
+        <div class="board-context-menu plan-chat-menu hidden" id="plan-chat-menu" role="menu" aria-label="Conversations">
             ${chats.map(row).join('') || '<p class="plan-chat-menu-empty">No chats yet</p>'}
         </div>
-        <span class="plan-chat-actions" role="group" aria-label="Chat actions">
-            <button type="button" class="icon-button" id="plan-chat-new" title="New chat" aria-label="New chat">+</button>
+        <span class="plan-chat-actions" role="group" aria-label="Conversation actions">
+            <button type="button" class="icon-button" id="plan-chat-new" title="New conversation" aria-label="New conversation">+</button>
         </span>`;
 }

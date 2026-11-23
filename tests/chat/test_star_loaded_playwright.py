@@ -80,7 +80,7 @@ def test_star_stays_on_live_agent_until_load(tmp_path):
                         const live = window.__liveId || 11;
                         return json({ primary_agent: { agent_id: live === 11 ? 1 : 2, name: live === 11 ? 'Ada' : 'Ben', main_conversation_id: live } });
                     }
-                    if (href.includes('/api/chats') && method === 'GET' && /\\/api\\/chats\\/?(\\?|$)/.test(href.split('?')[0])) {
+                    if (href.includes('/api/agent-conversations') && method === 'GET' && href.split('?')[0].replace(/\\/$/, '').endsWith('/api/agent-conversations')) {
                         return json({
                             chats: [
                                 { id: 11, title: 'Ada thread', agent_id: 1, agent_name: 'Ada', is_primary: (window.__liveId || 11) === 11, agent_rank: 0, latest_message: 'Hello from Ada', unread: false, provider: 'ollama', model_name: 'kimi' },
@@ -90,21 +90,21 @@ def test_star_stays_on_live_agent_until_load(tmp_path):
                             agent_current_chat_id: window.__liveId || 11
                         });
                     }
-                    if (href.includes('/api/chats/11') && method === 'GET') {
+                    if (href.includes('/api/agent-conversations/11') && method === 'GET') {
                         return json({ id: 11, title: 'Ada thread', agent_name: 'Ada', provider: 'ollama', model_name: 'kimi', messages: [], voice_provider: 'kokoro', voice_model: 'af_heart' });
                     }
-                    if (href.includes('/api/chats/22') && method === 'GET') {
+                    if (href.includes('/api/agent-conversations/22') && method === 'GET') {
                         return json({ id: 22, title: 'Ben thread', agent_name: 'Ben', provider: 'openai', model_name: 'gpt-5.2', messages: [], voice_provider: 'kokoro', voice_model: 'af_heart' });
                     }
                     if (href.includes('/agents/2/primary') && method === 'POST') {
                         window.__liveId = 22;
                         return json({ primary_agent: { agent_id: 2, name: 'Ben', main_conversation_id: 22 } });
                     }
-                    if (href.includes('/chats/22/load-in-agent') && method === 'POST') {
+                    if (href.includes('/agent-conversations/22/load-in-agent') && method === 'POST') {
                         window.__liveId = 22;
                         return json({ ok: true });
                     }
-                    if (href.includes('/last-chat-id') && method === 'PUT') {
+                    if (href.includes('/last-agent-conversation') && method === 'PUT') {
                         return json({ success: true });
                     }
                     return json({});

@@ -3,9 +3,9 @@
 Adds the client-facing pieces the GUI never needed:
 
 * turn status / reply retrieval for Oracle chats and Development threads
-  (``GET /api/chats/{chat_id}/turns[/{turn_id}]``, ``?wait=true&timeout=N``)
-* message-level history editing (``/api/chats/{chat_id}/messages/{message_id}``)
-* ``GET /api/chats/current``
+  (``GET /api/agent-conversations/{chat_id}/turns[/{turn_id}]``, ``?wait=true&timeout=N``)
+* message-level history editing (``/api/agent-conversations/{chat_id}/messages/{message_id}``)
+* ``GET /api/agent-conversations/current``
 * aggregated settings (``GET /api/settings``, ``GET /api/settings/schema``,
   ``PATCH /api/settings/{section}``) that delegate to the existing section routes
 * ``POST /api/skills/{skill_id}/invoke`` (Development threads only)
@@ -227,7 +227,7 @@ async def turn_response_fields(
     started = time.monotonic()
     if turn_id is None and after_row_id is not None:
         # Without wait the GUI must not be slowed down: one immediate lookup only.
-        # Clients poll GET /api/chats/{id}/turns?after_row_id=N for the id later.
+        # Clients poll GET /api/agent-conversations/{id}/turns?after_row_id=N for the id later.
         resolve_budget = budget if wait else 0.0
         turn_id = await resolve_new_turn_id(chat_id, after_row_id, message, resolve_budget)
     out: Dict[str, Any] = {"turn_id": turn_id, "after_row_id": after_row_id}
@@ -362,9 +362,10 @@ def create_router() -> APIRouter:
     router = APIRouter(dependencies=[Depends(require_token)])
 
     # ---- current chat ---------------------------------------------------
-    @router.get("/chats/current")
+    @router.get("/chats/current", include_in_schema=False)
+    @router.get("/agent-conversations/current", summary="Get current agent conversation")
     async def get_current_chat():
-        """Oracle's current chat. Set it with POST /api/chats/{chat_id}/load-in-agent."""
+        """Oracle's current chat. Set it with POST /api/agent-conversations/{chat_id}/load-in-agent."""
         from distr.core.chat import ChatService
         from distr.core.db import Chat, get_session
 
@@ -382,10 +383,11 @@ def create_router() -> APIRouter:
                     "model_name": chat.model_name,
                     "modified_date": _iso(chat.modified_date),
                 }
-        return JSONResponse({"chat_id": int(chat_id), "chat": info, "set_via": "POST /api/chats/{chat_id}/load-in-agent"})
+        return JSONResponse({"chat_id": int(chat_id), "chat": info, "set_via": "POST /api/agent-conversations/{chat_id}/load-in-agent"})
 
     # ---- turns ----------------------------------------------------------
-    @router.get("/chats/{chat_id}/turns")
+    @router.get("/chats/{chat_id}/turns", include_in_schema=False)
+    @router.get("/agent-conversations/{chat_id}/turns", summary="List turns")
     async def list_turns(chat_id: int, after_row_id: Optional[int] = None, limit: int = 20):
         from distr.core.db import get_session
 
@@ -393,7 +395,7 @@ def create_router() -> APIRouter:
             root_id = thread_root_id(session, chat_id)
             rows = thread_rows(session, root_id)
             if not rows:
-                raise HTTPException(status_code=404, detail="Chat not found")
+                raise HTTPException(status_code=404, detail="Conversation not found")
             ids = [int(r.id) for r in rows if (r.input or "").strip()]
         if after_row_id is not None:
             ids = [i for i in ids if i > int(after_row_id)]
@@ -401,7 +403,8 @@ def create_router() -> APIRouter:
         turns = [t for t in (await asyncio.to_thread(lambda: [turn_status(root_id, i) for i in ids])) if t]
         return JSONResponse({"chat_id": root_id, "turns": turns})
 
-    @router.get("/chats/{chat_id}/turns/{turn_id}")
+    @router.get("/chats/{chat_id}/turns/{turn_id}", include_in_schema=False)
+    @router.get("/agent-conversations/{chat_id}/turns/{turn_id}", summary="Get turn")
     async def get_turn(chat_id: int, turn_id: int, wait: bool = False, timeout: Optional[float] = None):
         """Status, assistant text and timestamps for one turn. ``wait=true`` blocks until done (cap 300 s)."""
         if wait:
@@ -409,7 +412,7 @@ def create_router() -> APIRouter:
         else:
             status = await asyncio.to_thread(turn_status, chat_id, turn_id)
         if status is None:
-            raise HTTPException(status_code=404, detail="Turn not found in this chat")
+            raise HTTPException(status_code=404, detail="Turn not found in this conversation")
         return JSONResponse(status)
 
     # ---- message-level history -------------------------------------------
@@ -420,7 +423,7 @@ def create_router() -> APIRouter:
         root = session.get(Chat, root_id)
         row = session.get(Chat, int(message_id))
         if root is None or row is None or thread_root_id(session, int(row.id)) != root_id:
-            raise HTTPException(status_code=404, detail="Message not found in this chat")
+            raise HTTPException(status_code=404, detail="Message not found in this conversation")
         return root_id, root, row
 
     def _reject_active(root, message_ids: List[int]) -> None:
@@ -445,7 +448,8 @@ def create_router() -> APIRouter:
         await _broadcast_chat_updated(root_id, reason=reason)
         return reloaded
 
-    @router.get("/chats/{chat_id}/messages")
+    @router.get("/chats/{chat_id}/messages", include_in_schema=False)
+    @router.get("/agent-conversations/{chat_id}/messages", summary="List messages")
     async def list_messages(chat_id: int):
         from distr.core.db import get_session
 
@@ -453,10 +457,11 @@ def create_router() -> APIRouter:
             root_id = thread_root_id(session, chat_id)
             rows = thread_rows(session, root_id)
             if not rows:
-                raise HTTPException(status_code=404, detail="Chat not found")
+                raise HTTPException(status_code=404, detail="Conversation not found")
             return JSONResponse({"chat_id": root_id, "messages": [message_payload(r, root_id) for r in rows]})
 
-    @router.get("/chats/{chat_id}/messages/{message_id}")
+    @router.get("/chats/{chat_id}/messages/{message_id}", include_in_schema=False)
+    @router.get("/agent-conversations/{chat_id}/messages/{message_id}", summary="Get message")
     async def get_message(chat_id: int, message_id: int):
         from distr.core.db import get_session
 
@@ -464,7 +469,8 @@ def create_router() -> APIRouter:
             root_id, _root, row = _load_message(session, chat_id, message_id)
             return JSONResponse(message_payload(row, root_id))
 
-    @router.patch("/chats/{chat_id}/messages/{message_id}")
+    @router.patch("/chats/{chat_id}/messages/{message_id}", include_in_schema=False)
+    @router.patch("/agent-conversations/{chat_id}/messages/{message_id}", summary="Patch message")
     async def patch_message(chat_id: int, message_id: int, body: MessagePatch):
         from distr.core.db import get_session
 
@@ -487,7 +493,8 @@ def create_router() -> APIRouter:
         payload["oracle_reloaded"] = await _after_history_change(root_id, "message_updated")
         return JSONResponse(payload)
 
-    @router.delete("/chats/{chat_id}/messages/{message_id}")
+    @router.delete("/chats/{chat_id}/messages/{message_id}", include_in_schema=False)
+    @router.delete("/agent-conversations/{chat_id}/messages/{message_id}", summary="Delete message")
     async def delete_message(chat_id: int, message_id: int):
         from distr.core.db import get_session
 
@@ -496,7 +503,7 @@ def create_router() -> APIRouter:
             if int(row.id) == int(root_id):
                 raise HTTPException(
                     status_code=409,
-                    detail="The first row is the chat itself: PATCH it to clear text, or DELETE /api/chats/{chat_id}",
+                    detail="The first row is the conversation itself: PATCH it to clear text, or DELETE /api/agent-conversations/{chat_id}",
                 )
             _reject_active(root, [int(row.id)])
             deleted = _delete_rows(session, root_id, [row])
@@ -504,7 +511,8 @@ def create_router() -> APIRouter:
         reloaded = await _after_history_change(root_id, "message_deleted")
         return JSONResponse({"deleted": deleted, "chat_id": root_id, "message_id": int(message_id), "oracle_reloaded": reloaded})
 
-    @router.post("/chats/{chat_id}/messages/{message_id}/truncate-after")
+    @router.post("/chats/{chat_id}/messages/{message_id}/truncate-after", include_in_schema=False)
+    @router.post("/agent-conversations/{chat_id}/messages/{message_id}/truncate-after", summary="Truncate after")
     async def truncate_after(chat_id: int, message_id: int, confirm: bool = False):
         """Delete every message after ``message_id`` (keeps ``message_id`` itself). Requires ``?confirm=true``."""
         from distr.core.db import get_session
@@ -610,7 +618,7 @@ def create_router() -> APIRouter:
         with get_session() as session:
             chat = session.get(Chat, int(body.chat_id))
             if chat is None:
-                raise HTTPException(status_code=404, detail="Chat not found")
+                raise HTTPException(status_code=404, detail="Conversation not found")
             if not is_development_thread(session, chat):
                 raise HTTPException(status_code=409, detail="Skills can only be invoked in a Development thread")
         message = (body.message or "").strip() or f"Use the {skill_id} skill."

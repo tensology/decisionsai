@@ -436,7 +436,7 @@ function threadIsReadyUnaddressed(chat) {
 async function acknowledgeReadyThread(chat, { render = true } = {}) {
     if (!threadIsReadyUnaddressed(chat) || !chat?.id) return true;
     try {
-        const data = await api(`/chats/${Number(chat.id)}/acknowledge-ready`, { method: 'POST', body: {} });
+        const data = await api(`/agent-conversations/${Number(chat.id)}/acknowledge-ready`, { method: 'POST', body: {} });
         const ack = data?.ready_acknowledged_at;
         if (data?.acknowledged === false || !ack) return false;
         chat.ready_acknowledged_at = ack;
@@ -1914,7 +1914,7 @@ async function performShellRefresh(options) {
                 && resultTurnId !== state.currentChat.development?.last_proactive_result_turn_id;
             const reloadTranscript = preserveConversation && (runFinished || workflowChanged || turnMissing || resultChanged);
             if (reloadTranscript) {
-                const updatedChat = await api(`/chats/${chatId}?surface=development`);
+                const updatedChat = await api(`/agent-conversations/${chatId}?surface=development`);
                 if (!current()) return chatsData;
                 state.currentChat = updatedChat;
                 state.chats = state.chats.map((chat) => (Number(chat.id) === chatId ? state.currentChat : chat));
@@ -2085,7 +2085,7 @@ async function playSpokenResponse(text, context = {}) {
     if (!spoken) return false;
     try {
         const body = { text: spoken, chat_id: context.chatId ?? state.currentChat?.id ?? null, source_row_id: context.sourceRowId ?? null };
-        const result = await api('/chats/speak-spoken', { method: 'POST', body });
+        const result = await api('/agent-conversations/speak-spoken', { method: 'POST', body });
         return Boolean(result?.ok);
     } catch (error) {
         console.warn('Spoken playback failed', error);
@@ -2132,7 +2132,7 @@ async function readResponse(button, message) {
     button.classList.add('is-loading');
     button.setAttribute('aria-busy', 'true');
     try {
-        const result = await api(`/chats/${chatId}/read-response`, {
+        const result = await api(`/agent-conversations/${chatId}/read-response`, {
             method: 'POST',
             body: { text, chat_row_id: message.chat_row_id ?? null }
         });
@@ -3740,7 +3740,7 @@ window.addEventListener('decisionsai-event', async (event) => {
     ackUiEvent(data.request_id);
     try {
         if (!state.chats.some((chat) => Number(chat.id) === id)) {
-            const rows = await api('/chats?surface=development');
+            const rows = await api('/agent-conversations?surface=development');
             const dev = (rows?.chats || []).filter((chat) => chat.development);
             state.chats = dev.filter((chat) => !chat.archived);
             state.archivedChats = dev.filter((chat) => chat.archived);

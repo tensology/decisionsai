@@ -134,8 +134,8 @@ ROUTING_CASES = [
     ("quit", "exit_app"),
 
     # ── Chat ──
-    ("start a new chat", "new_chat"),
-    ("clear the chat history", "clear_chat"),
+    ("start a new chat", "new_agent_conversation"),
+    ("clear the chat history", "clear_agent_conversation"),
 
     # ── Google ──
     ("upload this to google drive", "upload_doc_to_google"),

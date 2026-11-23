@@ -6,7 +6,7 @@ This document is the definitive reference for adding, removing, or updating a TT
 
 ## Architecture Overview
 
-The voice provider system uses a **descriptor-based architecture** with automatic discovery. Each provider is defined in a single descriptor file that implements the `TTSProviderDescriptor` abstract base class. A central `TTSProviderRegistry` auto-discovers all descriptors at runtime and provides dynamic dispatch to every consumer in the stack — service factory, session management, TTS handler, Telegram integration, chat routes, voice cloning, and the web UI.
+The voice provider system uses a **descriptor-based architecture** with automatic discovery. Each provider is defined in a single descriptor file that implements the `TTSProviderDescriptor` abstract base class. A central `TTSProviderRegistry` auto-discovers all descriptors at runtime and provides dynamic dispatch to every consumer in the stack — service factory, session management, TTS handler, Telegram integration, Agents routes, voice cloning, and the web UI.
 
 **Data flow:**
 
@@ -20,7 +20,7 @@ TTSProviderRegistry (auto-discovers descriptors)
     ├── TTS Handler (tts_handler.py → registry.get(prov).generate_audio())
     ├── Session (session.py → registry.get(engine).create_service() / get_hot_swap_config())
     ├── Telegram (events.py + manager.py → registry.get(prov).get_telegram_voice_id())
-    ├── Chat Routes (chat.py → registry.provider_ids() for validation)
+    ├── Agents Routes (chat.py → registry.provider_ids() for validation)
     ├── Voice Cloning (voice_cloning.py → registry.get(prov).clone_voice())
     └── Constants (constants.py → registry-based normalize_voice_provider())
 ```
@@ -266,7 +266,7 @@ The web UI is fully dynamic. The JavaScript in `distr/gui/web/static/settings/js
 4. Shows/hides the "+ Custom" button based on `supports_custom_voices`
 5. Saves the selected voice using the provider's `settings_key`
 
-The chat UI (`chat.js`) resolves voice keys from the `/api/tts/providers` response `settings_key` field — no hardcoded ternary chains.
+The Agents UI (`chat.js`) resolves voice keys from the `/api/tts/providers` response `settings_key` field — no hardcoded ternary chains.
 
 ---
 
@@ -292,8 +292,8 @@ After adding a provider, verify:
 - [ ] Voices load in the voice dropdown when provider is selected
 - [ ] Voice preview plays correctly (play button in settings)
 - [ ] Saving settings persists the provider and voice selection
-- [ ] Chat creation with the new provider works
-- [ ] Chat voice switching (hot-swap) works without restart
+- [ ] Agent conversation creation with the new provider works
+- [ ] Agent voice switching (hot-swap) works without restart
 - [ ] Telegram voice notes generate with the correct provider/voice
 - [ ] `send_voice_note_to_telegram` tool uses the correct provider
 - [ ] Agent display name resolves correctly from the voice

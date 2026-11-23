@@ -74,13 +74,13 @@ def test_telegram_decision_updates_project_sidebar_without_navigation(page, widt
     })()""")
     created = False
     def chats(route):
-        if urlparse(route.request.url).path != '/api/chats':
+        if urlparse(route.request.url).path != '/api/agent-conversations':
             route.fallback(); return
         rows = [{"id":17,"title":"Implement ticket DEV-42","project_id":7,"development":True,"development_board_key":"decisions:70","modified_date":"2026-10-30T12:00:00Z","archived":False}]
         if created:
             rows.append({"id":88,"title":"Approved from Telegram","project_id":7,"development":True,"development_board_key":"decisions:70","development_source_type":"incoming_proposal","modified_date":"2026-10-30T13:00:00Z","archived":False})
         route.fulfill(json={"last_chat_id":17,"chats":rows})
-    page.route('**/api/chats*', chats)
+    page.route('**/api/agent-conversations*', chats)
     page.set_viewport_size({"width":width,"height":900})
     page.goto(URL)
     expect(page.locator('[data-board-group="decisions:70"] [data-chat-id="88"]')).to_have_count(0)

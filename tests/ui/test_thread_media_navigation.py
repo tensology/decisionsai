@@ -58,10 +58,10 @@ def install_media(page, media_bytes, *, running=False):
     calls = []
     state = {'fail': False}
 
-    page.route('**/api/chats/17', lambda route: route.fulfill(json=chat))
-    page.route('**/api/chats/17?*', lambda route: route.fulfill(json=chat))
-    page.route('**/api/chats', lambda route: route.fulfill(json={'chats': rows, 'last_chat_id': 17}))
-    page.route('**/api/chats?*', lambda route: route.fulfill(json={'chats': rows, 'last_chat_id': 17}))
+    page.route('**/api/agent-conversations/17', lambda route: route.fulfill(json=chat))
+    page.route('**/api/agent-conversations/17?*', lambda route: route.fulfill(json=chat))
+    page.route('**/api/agent-conversations', lambda route: route.fulfill(json={'chats': rows, 'last_chat_id': 17}))
+    page.route('**/api/agent-conversations?*', lambda route: route.fulfill(json={'chats': rows, 'last_chat_id': 17}))
 
     def source(route):
         path = urlsplit(route.request.url).path

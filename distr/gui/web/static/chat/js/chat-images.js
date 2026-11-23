@@ -48,7 +48,7 @@
         const form = new FormData();
         form.append('file', file, file.name || 'image');
         try {
-            const res = await fetch('/api/chat-images', { method: 'POST', body: form });
+            const res = await fetch('/api/agent-attachments', { method: 'POST', body: form });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.detail || REJECT);
             pending = { path: data.path, url: data.url, previewUrl: URL.createObjectURL(file), name: file.name || data.name };

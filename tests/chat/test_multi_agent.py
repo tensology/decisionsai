@@ -105,7 +105,7 @@ def test_new_agents_go_to_bottom_and_reorder_persists_without_changing_primary(m
     agents = ag.list_agents()
     assert [a['name'] for a in agents] == ['Ada', 'Hayley', 'Uncle Roger']
     assert [a['name'] for a in agents if a['is_primary']] == ['Hayley']
-    resp = ma['client'].get('/api/chats')
+    resp = ma['client'].get('/api/agent-conversations')
     rows = [r for r in resp.json()['chats'] if r.get('agent_id')]
     assert sorted(rows, key=lambda r: r['agent_rank'])[0]['agent_name'] == 'Ada'
     assert next(r for r in rows if r['agent_name'] == 'Hayley')['is_primary'] is True
@@ -176,7 +176,7 @@ def test_group_chats_are_hidden_from_the_agent_list(ma):
     from distr.core import agent_groups as ag
 
     group = ag.create_group([ma['ids']['Hayley'], ma['ids']['Ada']], 'Team')
-    chats = ma['client'].get('/api/chats').json()['chats']
+    chats = ma['client'].get('/api/agent-conversations').json()['chats']
     assert group['id'] not in {c['id'] for c in chats}
     assert [g['title'] for g in ma['client'].get('/api/groups').json()['groups']] == ['Team']
 

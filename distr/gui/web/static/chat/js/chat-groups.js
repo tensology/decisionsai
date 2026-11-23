@@ -249,7 +249,7 @@
         if (!reply) { speaking = false; return; }
         speaking = true;
         try {
-            const res = await fetch(`${API}/chats/tts/generate`, {
+            const res = await fetch(`${API}/agent-conversations/tts/generate`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: reply.content, provider: reply.voice_provider || null, voice: reply.voice_model || null })
             });

@@ -120,7 +120,7 @@
 
 ## 6. MemPalace — **met** (flag OFF by design)
 
-**Intent:** Optional MemPalace backend behind `mempalace_memory_backend` (default **OFF**). When ON: dual-write + prefer-read; chromadb installed locally; markdown memory live-tested; both chat + Development surfaces; no delete of legacy stores.
+**Intent:** Optional MemPalace backend behind `mempalace_memory_backend` (default **OFF**). When ON: dual-write + prefer-read; chromadb installed locally; markdown memory live-tested; both Agents and Development surfaces; no delete of legacy stores.
 
 **Code:** `distr/core/mempalace/` (adapter, wiring, flags, paths, bootstrap). Hooks in `memory/files.py`, `core_mixin` RAG, orchestrator / learnings / steering / workspace.  
 **Notes:** `.decisions-mempalace-flags.md`, `docs/mempalace-setup-map.md`, `distr/core/mempalace/SETUP.md`.  
@@ -134,7 +134,7 @@
 - [x] Dual-write first (legacy write always + MemPalace drawer); no cutover/delete of old stores.
 - [x] chromadb available in local decisions venv (mempalace 3.3.3 + chromadb 1.5.9; free ONNX embed cache).
 - [x] Markdown dual-write / prefer-read / search live-tested; wiring no-ops when flag OFF.
-- [x] Both surfaces: chat primary semantic consumer; Development/harness dual-write + prefer-read (FS companions stay pickup SoT).
+- [x] Both surfaces: Agents as the primary semantic consumer; Development/harness dual-write + prefer-read (FS companions stay pickup SoT).
 - [x] Soft-fail when mempalace/chromadb missing (adapter status, no crash).
 - [ ] **Out of scope / future:** one-shot migrate, Settings UI toggle, markdown-only scoped flag, LlamaIndex replace vs keep.
 
@@ -165,7 +165,7 @@
 2. **“No strip”** — Interpreted as: do not omit/clear `human_checkpoints` from `run_settings`, and do not auto-inject `skip_human_checkpoints` on ad-hoc paths. If “strip” meant something else (UI checkbox, metadata sanitizer), call it out.
 3. **WhatsApp dry-run default** — Code default is **False** (live relay when connected); local safety relies on env `DECISIONSAI_WHATSAPP_DRY_RUN=1`. Confirm whether durable default should be True for non-prod profiles.
 4. **Approval loop E2E owner** — §2 spawn/tool skip defaults flipped. §5 remains **in-flight**: unit simulation green; full live WA→TG→harness→WA dry-run still blocked on Paul pressing Telegram with Decisions running and `DECISIONSAI_WHATSAPP_DRY_RUN=1`.
-5. **MemPalace “both surfaces”** — Recommended and partially wired; Development does not yet RAG-inject markdown/palace the way chat does. Confirm whether “both” means dual-write only on Dev, or also prefer-read inject on harness prompts.
+5. **MemPalace “both surfaces”** — Recommended and partially wired; Development does not yet RAG-inject markdown/palace the way Agents does. Confirm whether “both” means dual-write only on Dev, or also prefer-read inject on harness prompts.
 6. **Cost ledger currency / pricing table** — **In-flight:** static table in `distr/core/cost_ledger/pricing.py`; local/ollama $0 provider + resource estimate. See NEEDS_PAUL for API vs table / Client ORM.
 7. **Uncommitted local tree** — Several §1–§6 items live in a dirty working tree (`mempalace/`, harness workers, WorkIntake WA row, checkpoint default). Acceptance **met** here means “current local code satisfies checks,” not “merged to main.”
 

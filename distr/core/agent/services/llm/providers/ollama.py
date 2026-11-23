@@ -707,10 +707,10 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             if not tool_calls and last_user_message and 'clear' in last_user_message.lower() and 'chat' in last_user_message.lower():
                 parsed = parse_tool_calls_from_content(full_response)
                 if parsed:
-                    tool_calls = [{'function': {'name': p.get('name', 'clear_chat'), 'arguments': {'confirm': True} if isinstance(p.get('arguments'), str) else (p.get('arguments') or {'confirm': True})}} for p in parsed]
+                    tool_calls = [{'function': {'name': p.get('name', 'clear_agent_conversation'), 'arguments': {'confirm': True} if isinstance(p.get('arguments'), str) else (p.get('arguments') or {'confirm': True})}} for p in parsed]
                     full_response = ""
                 elif 'clear' in full_response.lower():
-                    tool_calls = [{'function': {'name': 'clear_chat', 'arguments': {'confirm': True}}}]
+                    tool_calls = [{'function': {'name': 'clear_agent_conversation', 'arguments': {'confirm': True}}}]
                     full_response = ""
 
             # 7b. Models often emit spurious mouse/oracle tools on "what do you do" — strip before execute.
@@ -801,7 +801,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             if full_response:
                 full_response = clean_text_for_tts(full_response, strip_whitespace=True)
             if current_chat_id and full_response:
-                if tool_calls and any(tc.get('function', {}).get('name') == 'clear_chat' for tc in tool_calls):
+                if tool_calls and any(tc.get('function', {}).get('name') == 'clear_agent_conversation' for tc in tool_calls):
                     return
                 # DB save is Python-only — should never fail due to Qt lifecycle
                 try:
