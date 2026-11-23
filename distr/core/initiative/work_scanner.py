@@ -491,7 +491,7 @@ def _add_board_proposals(scan: dict[str, Any], board: dict[str, Any]) -> None:
     lanes = board.get("lanes") or []
     lane_by_name = {str(l.get("name") or "").strip().lower(): l for l in lanes}
     backlog = lane_by_name.get("backlog")
-    current_name = (board.get("source_lane") or "Current").strip()
+    current_name = (board.get("source_lane") or "In Progress").strip()
     current = lane_by_name.get(current_name.lower()) or lane_by_name.get("current")
 
     if backlog and backlog.get("tickets"):

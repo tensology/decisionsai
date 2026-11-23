@@ -154,3 +154,73 @@ def test_work_scan_returns_top_candidate_when_everything_is_duplicate():
     assert InitiativeService._proposal_from_work_scan(_scan_bundle(stale), settings, "operate").payload == {
         "ticket_ids": [230]
     }
+
+
+def test_board_proposal_targets_a_real_delivery_lane():
+    """Regression: proposals used the legacy lane name 'Current', which
+    move_ticket_to_delivery_lane rejects ("Automation may only move tickets to
+    In Progress or QA"), so backlog promotions silently failed."""
+    from distr.core.initiative.work_scanner import _add_board_proposals
+
+    scan = {"proposals": []}
+    board = {
+        "id": 14,
+        "name": "Plan My Charter",
+        "source_lane": "",
+        "lanes": [
+            {"name": "Backlog", "tickets": [{"id": 330, "title": "Reorder dates"}]},
+            {"name": "In Progress", "tickets": []},
+        ],
+    }
+    _add_board_proposals(scan, board)
+
+    moves = [p for p in scan["proposals"] if p["action_type"] == "ticket_lane_move"]
+    assert moves, "expected a backlog promotion proposal"
+    assert moves[0]["payload"]["target_lane"] == "In Progress"
+
+
+def test_move_tickets_rejects_legacy_current_lane(monkeypatch):
+    import contextlib
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from distr.core.db import Base
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+
+    @contextlib.contextmanager
+    def _sess():
+        db = Session()
+        try:
+            yield db
+            db.commit()
+        finally:
+            db.close()
+
+    import distr.core.db as dbmod
+
+    monkeypatch.setattr(dbmod, "get_session", _sess)
+
+    with _sess() as db:
+        board = KanbanBoard(name="B", source="database")
+        db.add(board)
+        db.flush()
+        for i, name in enumerate(("Backlog", "In Progress", "QA", "Complete")):
+            db.add(KanbanLane(board_id=board.id, name=name, position=i))
+        db.flush()
+        lane = db.query(KanbanLane).filter_by(board_id=board.id, name="Backlog").first()
+        ticket = KanbanTicket(lane_id=lane.id, title="x")
+        db.add(ticket)
+        db.flush()
+        board_id, ticket_id = int(board.id), int(ticket.id)
+
+    from distr.core.initiative.action_handlers import move_tickets
+
+    import pytest
+
+    with pytest.raises(ValueError, match="In Progress or QA"):
+        move_tickets({"board_id": board_id, "ticket_ids": [ticket_id], "target_lane": "Current"})

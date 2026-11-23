@@ -291,7 +291,7 @@ def build_planner_orchestration_actions(bundle: ContextBundle, *, scope: str) ->
             "payload": {
                 "board_id": int(board_id),
                 "ticket_ids": [int(ticket_id)],
-                "target_lane": "Current",
+                "target_lane": "In Progress",
                 "source": "planner_orchestration",
                 "confidence": 0.74,
                 "risk_level": "low",

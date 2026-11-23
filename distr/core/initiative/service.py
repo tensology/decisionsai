@@ -287,7 +287,7 @@ def _initiative_context_line(context: dict[str, Any]) -> str:
     ]
 
     if action_type == "ticket_lane_move":
-        lane = context.get("target_lane") or "Current"
+        lane = context.get("target_lane") or "In Progress"
         if ticket_count:
             noun = "ticket" if ticket_count == 1 else "tickets"
             if ticket_summaries:
