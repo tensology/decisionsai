@@ -119,6 +119,30 @@ _HYPOTHETICAL_RE = re.compile(
 )
 
 
+# A work verb anywhere (not just leading): "Don't forget to fix the login bug"
+# is a request even though it starts with a disclaimer.
+_WORK_VERB_ANY_RE = re.compile(r"\b(?:" + _WORK_VERB + r")\b", re.I)
+
+
+_REQUEST_WORK_RE = re.compile(
+    r"\b(?:please|can\s+you|could\s+you|would\s+you|will\s+you|"
+    r"i\s+want\s+you\s+to|i\s+need\s+you\s+to|i'?d\s+like\s+you\s+to|"
+    r"go\s+ahead\s+and|don'?t\s+forget\s+to|remember\s+to|make\s+sure\s+to|"
+    r"you\s+should|you\s+need\s+to|just)\b.{0,40}?\b(?:" + _WORK_VERB + r")\b",
+    re.I,
+)
+
+
+def _has_strong_work_signal(value: str) -> bool:
+    """A request that must route even when wrapped in disclaimer/hypothetical words."""
+    text = str(value or "")
+    return bool(
+        _EXECUTE_RE.search(text)
+        or _TICKET_RE.search(text)
+        or _WORK_VERB_ANY_RE.search(text)
+    )
+
+
 def _has_work_intent(value: str) -> bool:
     """True when the text asks for durable work, however it is phrased."""
     text = str(value or "")
@@ -128,6 +152,7 @@ def _has_work_intent(value: str) -> bool:
         _PROJECT_WORK_RE.search(text)
         or _WORK_INTENT_ANY_RE.search(text)
         or _COLON_WORK_RE.search(text)
+        or _REQUEST_WORK_RE.search(text)
     )
 _BATCH_TICKETS_RE = re.compile(
     r"\b(?:create|make|open|add)?\s*(?:separate|individual|multiple)\s+"
@@ -322,12 +347,17 @@ class OrchestratorIntakeService:
                 WorkIntakeAction.ANSWER_DIRECTLY,
                 "Short confirmation requires the active conversation context",
             )
-        if _NOT_A_REQUEST_RE.search(value):
+        if _NOT_A_REQUEST_RE.search(value) and not _has_strong_work_signal(value):
             return WorkIntakeDecision(
                 WorkIntakeAction.ANSWER_DIRECTLY,
                 "Text explicitly disclaims a request; keep it conversational",
             )
-        if _HYPOTHETICAL_RE.search(value) and not _EXECUTE_RE.search(value) and not _TICKET_RE.search(value):
+        if (
+            _HYPOTHETICAL_RE.search(value)
+            and not _has_strong_work_signal(value)
+            and not _EXECUTE_RE.search(value)
+            and not _TICKET_RE.search(value)
+        ):
             return WorkIntakeDecision(
                 WorkIntakeAction.ANSWER_DIRECTLY,
                 "Hypothetical/offer phrasing is conversation, not a task",

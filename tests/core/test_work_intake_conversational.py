@@ -43,8 +43,26 @@ def test_conversational_remark_is_not_routed_as_work(text):
         "Fix the login bug on the charter site",
         "create a ticket to reorder the calendar options",
         "run the workflow for ticket 330",
+        # A request wrapped in disclaimer words must still route.
+        "Don't forget to fix the login bug.",
+        "can you update the footer copy",
+        "This is not a request, actually it is — create a ticket for the header.",
     ],
 )
 def test_real_work_requests_still_route(text):
     decision = get_work_intake_service().classify(WorkIntake(source="web", user_text=text))
     assert decision.action != WorkIntakeAction.ANSWER_DIRECTLY
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Commentary that merely mentions work-ish words stays conversational.
+        "The fix you did yesterday was great.",
+        "I think the header looks off.",
+        "I'm just saying the header looks off.",
+    ],
+)
+def test_commentary_about_work_stays_conversational(text):
+    decision = get_work_intake_service().classify(WorkIntake(source="web", user_text=text))
+    assert decision.action == WorkIntakeAction.ANSWER_DIRECTLY
