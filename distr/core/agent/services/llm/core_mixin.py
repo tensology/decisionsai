@@ -2532,7 +2532,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         # New response supersedes any generation still unwinding in the
         # background (e.g. a blocking tool). Its token no longer matches, so it
         # will not push a second spoken reply.
-        self._response_generation += 1
+        self._response_generation = getattr(self, '_response_generation', 0) + 1
 
         try:
             from distr.core.provider_failover import is_chat_capable_model
@@ -2822,10 +2822,12 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             if await self._check_and_execute_voice_command(text_lower, direction):
                 return
 
-            # Voice/oracle front door: work-intent → WorkIntake → Development thread
-            # (do not load Dev threads into Chat agent; bridge via intake/dispatch).
-            if self._try_route_work_intake(text, source="web"):
-                return
+            # The agent decides whether this is work or conversation. We used to
+            # route work-intent text to WorkIntake here, before the model ran,
+            # using English phrase heuristics — brittle, and it swallowed remarks
+            # that merely mentioned work words. The model now routes work itself
+            # with the ticket/development tools when it judges that is what was
+            # asked; see the WORK ROUTING guidance in the system prompt.
 
             # Fast action detection
             from distr.core.agent.services.llm.bulk_instruction import should_bypass_fast_action_detection
@@ -3003,7 +3005,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
 
             # Supersede any generation still unwinding (a blocking tool can
             # outlive the 3s shield): its token stops it from speaking again.
-            self._response_generation += 1
+            self._response_generation = getattr(self, '_response_generation', 0) + 1
 
             if hasattr(self, '_generation_requested_at'):
                 self._generation_requested_at = time.monotonic()

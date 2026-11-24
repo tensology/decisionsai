@@ -27,6 +27,12 @@ class _ChatManager:
     def get_current_chat(self):
         return 123
 
+    def add_user_message(self, chat_id, text, source_platform=None):
+        # The agent now owns work-vs-conversation routing, so a dictation/PTT
+        # transcript reaches _ensure_user_message_persisted instead of being
+        # swallowed by the old pre-LLM WorkIntake router.
+        return 1
+
 
 class _Harness(LLMSharedMixin):
     def __init__(self):
@@ -46,6 +52,7 @@ class _Harness(LLMSharedMixin):
         self.typed = []
         self.pushed = []
         self.work_intakes = []
+        self.generated = []
 
     async def _type_dictation_text(self, text: str):
         self.typed.append(text)
@@ -56,6 +63,13 @@ class _Harness(LLMSharedMixin):
     def _try_route_work_intake(self, text: str, *, source: str = "web") -> bool:
         self.work_intakes.append((text, source))
         return True
+
+    async def _generate_response(self):
+        # The agent now owns work-vs-conversation routing, so a transcript reaches
+        # generation instead of the removed pre-LLM WorkIntake router.
+        self.generated.append(
+            self._messages[-1].get("content") if self._messages else ""
+        )
 
 
 def test_dictation_transcript_does_not_touch_agent_ptt_state(monkeypatch):
@@ -116,7 +130,8 @@ def test_failed_dictation_flush_does_not_type_next_agent_capture(monkeypatch, fa
     asyncio.run(capture())
 
     assert harness.typed == []
-    assert harness.work_intakes == [("agent request", "web")]
+    assert harness.generated == ["agent request"]
+    assert harness.work_intakes == []
     assert harness._dictation_release_pending is False
     assert harness._is_dictating is False
     assert harness._voice_capture_pending is False
@@ -154,7 +169,8 @@ def test_completed_ptt_reserves_exactly_one_transcript(monkeypatch):
 
     assert harness._voice_capture_pending is False
     assert harness._last_ptt_transcription_text == "captured speech"
-    assert harness.work_intakes == [("captured speech", "web")]
+    assert harness.work_intakes == []
+    assert harness.generated == ["captured speech"]
 
 
 def test_empty_completed_ptt_reports_no_speech_and_clears_authorization(monkeypatch):

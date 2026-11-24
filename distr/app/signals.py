@@ -43,6 +43,12 @@ class SignalBridgeMixin:
         intake_context=None,
     ) -> bool:
         """Route explicit cmds and work-intent through WorkIntake; casual chat continues."""
+        # The agent decides work vs conversation now (see WORK ROUTING in the
+        # system prompt). Pre-routing typed text through WorkIntake with English
+        # phrase heuristics was brittle — it swallowed remarks that merely
+        # mentioned work words, and missed requests phrased differently. Hand the
+        # text to the agent and let it call the ticket/development tools itself.
+        return False
         clean = str(message or "").strip()
         if not clean:
             return False

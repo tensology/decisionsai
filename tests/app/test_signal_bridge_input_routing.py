@@ -344,7 +344,14 @@ def test_explicit_remote_origin_bypasses_local_realtime_without_pending_heuristi
     assert params["telegram_input_type"] == "voice"
 
 
-def test_web_send_preserves_durable_intake_identity(monkeypatch):
+def test_web_send_hands_text_to_the_agent_without_intake_prerouting(monkeypatch):
+    """Work vs conversation is the agent's call now, not a keyword router's.
+
+    The desktop used to pre-route typed text through WorkIntake with English
+    phrase heuristics. That swallowed remarks that merely mentioned work words
+    and missed differently-phrased requests, so the text now goes straight to
+    the agent, which routes work itself with the ticket/development tools.
+    """
     import distr.app.signals as signals_module
 
     fake_signal_manager = _fake_signal_manager()
@@ -360,13 +367,10 @@ def test_web_send_preserves_durable_intake_identity(monkeypatch):
 
     captured = []
 
-    class _Decision:
-        handled = False
-
     class _IntakeService:
         def ingest(self, intake):
             captured.append(intake)
-            return _Decision()
+            raise AssertionError("typed text must not be pre-routed through WorkIntake")
 
     monkeypatch.setattr(
         "distr.core.work_intake.get_work_intake_service",
@@ -391,27 +395,10 @@ def test_web_send_preserves_durable_intake_identity(monkeypatch):
         },
     )
 
-    assert len(captured) == 1
-    assert captured[0].source == "web"
-    assert captured[0].source_thread_id == "808"
-    assert captured[0].source_message_id == "qualification:research:808"
-    assert captured[0].requested_outcome == "A cited research brief"
-    assert captured[0].metadata == {
-        "chat_id": 808,
-        "qualification_campaign_id": "campaign-808",
-    }
-    assert host.sent_commands[-1] == (
-        "process_text_input",
-        {
-            "text": "Research this artist and summarize the evidence.",
-            "speak": False,
-            "chat_id": 808,
-            # The chat's own model rides along so the agent can't drift to the global default.
-            "provider": "openai",
-            "model_name": "gpt-5.2",
-            "work_intake_uid": captured[0].intake_uid,
-        },
-    )
+    assert captured == []
+    assert host.sent_commands[-1][0] == "process_text_input"
+    assert host.sent_commands[-1][1]["text"] == "Research this artist and summarize the evidence."
+    assert host.sent_commands[-1][1]["chat_id"] == 808
 
 
 def test_web_chat_events_are_queued_for_ordered_delivery():
