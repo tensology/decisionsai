@@ -33,6 +33,30 @@ You can [download or clone the repository](https://github.com/tensology/decision
 ### Changed
 - The MemPalace bootstrap prefers the installed package over the reference clone. Seed mining is skipped while the hub owns the palace.
 
+## [2.9.6] - 2026-11-24
+
+### A chat can turn into real work
+
+Ask for a change in Agents and DecisionsAI can create a ticket, carry it into Development, and keep the work on the right board. A single chat can raise more than one ticket, and an existing ticket stays attached when its thread moves into Development. The timer starts when the agent actually begins a run, and the board updates as work moves.
+
+### Keep the whole job in Development
+
+Incoming requests can be linked to a project, and Planning now has a page designer for shaping an interface before the build. The Development sidebar keeps boards, threads, and workflows close at hand, with mark-as-read controls where the lists start to pile up. When a tool runs or files change, the thread gives you a place to pick up the work and see what happened.
+
+### Voice takes turns again
+
+Continuous conversation uses full-duplex audio with echo cancellation on supported setups. The microphone can stay listening while DecisionsAI speaks, so you can interrupt and carry on. The read-aloud player stays open when you bring it up, long replies keep their sentences, and a newer reply can take over without the old one playing again.
+
+### Give each chat its own agent
+
+Chats can use their own agent, model, voice, and Oracle skin. Chat groups can route to the agent you configured, and the skin follows the chat you have open. Hayley has a fuller set of animations, and the headphone-wearing Llama joins the skin picker.
+
+## [2.9.5] - 2026-11-07
+
+### A simpler way to install on Apple Silicon
+
+The portable macOS app now has a DMG, and speech models can be downloaded after installation. Pick the local speech engine and voice you want, or start with a cloud provider you already use. Git installs can also check for updates from Settings and restart into the new version.
+
 ## [2.9.4] - 2026-10-22
 
 ### The development pipelines are live (finally!)

@@ -747,7 +747,7 @@ class AboutWindow(QtWidgets.QMainWindow):
         Extract version from CHANGELOG.md.
         
         Returns:
-            str: Version string like "2.1.9" or "Unreleased"
+            str: Version string like "2.1.9", or "Unknown" if none is found.
         """
         try:
             project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -755,14 +755,10 @@ class AboutWindow(QtWidgets.QMainWindow):
             if os.path.exists(changelog_path):
                 with open(changelog_path, 'r', encoding='utf-8') as f:
                     for line in f:
-                        # Look for patterns like "## [2.1.9] - 2026-01-29" or "## [Unreleased]"
                         import re
-                        match = re.match(r'^##\s+\[([^\]]+)\]', line)
+                        match = re.match(r'^##\s+\[(\d+\.\d+\.\d+)\]', line)
                         if match:
-                            version = match.group(1)
-                            # Skip "What's to Come" section header
-                            if version != "What's to Come":
-                                return version
+                            return match.group(1)
             return "Unknown"
         except Exception:
             return "Unknown"

@@ -19,6 +19,8 @@ https://github.com/user-attachments/assets/cba7775e-f61e-4625-aefd-76417e72ca33
   <a href="CHANGELOG.md"><strong>Changelog</strong></a>
 </p>
 
+**Current source version: 2.9.6.** Agents can turn a chat request into a tracked Development ticket. This release also updates continuous voice, read-aloud playback, and per-chat agents. See the [changelog](CHANGELOG.md) for details.
+
 ## What it is
 
 DecisionsAI is an open-source desktop agent that can talk, type, use tools, control your computer, and carry work through a real software project. It combines a voice-first desktop assistant with a local web workspace, durable development threads, workflows, connected services, and remote access from your phone.
@@ -26,6 +28,8 @@ DecisionsAI is an open-source desktop agent that can talk, type, use tools, cont
 The product is local-first. Speech, project context, memory, and models can stay on your machine. Cloud models and services are optional and only receive data when you configure and use them.
 
 DecisionsAI is not tied to one model or coding tool. It can route work through local models, hosted providers, Codex, Cursor, Claude-compatible tools, Pi, and other configured CLIs while keeping the project, ticket, run history, and evidence together.
+
+![DecisionsAI Agents showing a sample conversation that sends a checkout fix to Development](assets/readme/chat.webp)
 
 ## Start with the Oracle
 
@@ -37,6 +41,8 @@ The Oracle is the small desktop avatar that stays above your windows. It is the 
 - Change shortcuts, audio devices, models, and voices in Preferences.
 
 Voice can run through local speech recognition and text-to-speech, or through configured cloud providers. Push-to-talk, dictation, and continuous conversation are separate modes, so you can use only the parts you need.
+
+![The DecisionsAI Skins picker showing Oracle, Hayley, Llama, and other avatars](assets/readme/avatar.webp)
 
 ## Give work a project
 
@@ -56,11 +62,15 @@ Development brings these surfaces together:
 
 The agent chooses the lightest route that fits the request. A bounded edit can run directly in a Development thread. Repeatable or independently verifiable work can use a workflow. A completed run is still checked against the original request before it is treated as done.
 
+![The Development workflow editor showing the steps from understanding a ticket to reporting the result](assets/readme/steprunner.webp)
+
 ## Use it away from your desk
 
 Telegram can send text, voice notes, screenshots, documents, approvals, and corrections to the same agent. The secure remote interface adds screen viewing, clicking, scrolling, typing, and file transfer.
 
 WhatsApp can feed selected contacts or groups into project intake. DecisionsAI can collect the relevant text and media, prepare a ticket, and wait for approval before work starts. Outbound replies remain drafts until you approve them.
+
+<img src="assets/readme/mobile.webp" alt="DecisionsAI Remote on a phone with a connected desktop and remote controls" width="330" />
 
 ## How it fits together
 
@@ -205,6 +215,10 @@ The HTTP API (auth, reply ids, settings, skills) is in `docs/api.md`. That file 
 - Tool mutations use shared safety controls so a stopped or repeated turn does not quietly repeat an external write.
 
 Read the current [Privacy Policy](https://decisions.tensology.com/privacy) and [Terms and Conditions](https://decisions.tensology.com/terms) before connecting external accounts or sensitive data.
+
+## About DecisionsAI
+
+![About DecisionsAI on macOS, showing version 2.9.6 and the Local is Lekker llama artwork](assets/readme/about.webp)
 
 ## Contributing
 
