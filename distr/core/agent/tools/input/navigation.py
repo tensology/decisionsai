@@ -548,12 +548,36 @@ class ModeControlTool(BaseTool):
                 text = str(kwargs.get("last_user_message") or "")
             # Extract action from text if not provided
             if not action and text:
+                import re as _re
+
                 text_lower = text.lower()
-                # Check for specific mode requests
-                if any(word in text_lower for word in ["ptt", "push to talk", "push-to-talk"]):
-                    action = "ptt"
-                elif any(word in text_lower for word in ["continuous", "hands free", "hands-free"]):
-                    action = "continuous"
+                ptt_words = ("push to talk", "push-to-talk", "ptt")
+                cont_words = ("continuous", "hands free", "hands-free")
+
+                def _mode_of(token: str) -> str:
+                    return "ptt" if token in ("ptt", "push to talk", "push-to-talk") else "continuous"
+
+                # Prefer the TARGET of a "switch ... to <mode>" phrase so both
+                # directions work: "from continuous to push to talk" -> ptt,
+                # "from push to talk back to continuous" -> continuous.
+                target = None
+                match = _re.search(
+                    r"\b(?:to|into|back\s+to)\s+(?:the\s+)?"
+                    r"(push[\s-]?to[\s-]?talk|ptt|continuous|hands[\s-]?free)(?:\s+mode)?",
+                    text_lower,
+                )
+                if match:
+                    target = _mode_of(match.group(1))
+                else:
+                    # Otherwise the last mode named wins ("swap over from
+                    # continuous mode to push to talk").
+                    positions = [(text_lower.rfind(w), "ptt") for w in ptt_words if text_lower.rfind(w) >= 0]
+                    positions += [(text_lower.rfind(w), "continuous") for w in cont_words if text_lower.rfind(w) >= 0]
+                    if positions:
+                        target = max(positions)[1]
+
+                if target is not None:
+                    action = target
                 elif any(word in text_lower for word in ["change", "switch", "toggle"]):
                     action = "toggle"
             
