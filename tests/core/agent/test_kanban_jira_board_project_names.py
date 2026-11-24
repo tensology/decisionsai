@@ -110,9 +110,9 @@ def test_fetch_external_boards_preserves_jira_project_metadata_and_paginates(mon
         lambda: [
             {
                 "provider": "jira",
-                "email": "paul@snuza.com",
+                "email": "jira-user@example.com",
                 "api_token": "token",
-                "server_url": "https://snuzadev.atlassian.net",
+                "server_url": "https://jira.example.com",
             }
         ],
     )
