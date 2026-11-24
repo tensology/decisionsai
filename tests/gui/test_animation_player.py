@@ -17,6 +17,30 @@ import pytest
 from distr.gui.oracle.webm_player import advance_pingpong, elapsed_frame_steps
 
 
+def test_missing_skin_animation_falls_back_to_the_builtin_oracle(tmp_path, monkeypatch):
+    from distr.core.skin_config import EventResponse
+    from distr.gui.oracle import window
+
+    built_in = tmp_path / "oracle"
+    built_in.mkdir()
+    default_animation = built_in / "6.webm"
+    default_animation.touch()
+    monkeypatch.setattr(window, "AVATARS_DIR", str(tmp_path))
+    monkeypatch.setattr(window, "ORACLE_DIR", str(built_in))
+
+    oracle = MagicMock()
+    oracle._skin_folder = "missing-skin"
+    oracle._skin_config = None
+    oracle._webm_view = None
+    oracle._animation_player._webm_player = None
+    oracle.content_size = 180
+    oracle.devicePixelRatioF.return_value = 1.0
+    window.OracleWindow._play_animation(oracle, EventResponse("idle.webm"))
+
+    assert oracle._current_anim_path == str(default_animation)
+    assert oracle._animation_player.load.call_args.args == (str(default_animation),)
+
+
 # ---------------------------------------------------------------------------
 # Ping-pong boundary cases (pure function — no Qt needed)
 # ---------------------------------------------------------------------------

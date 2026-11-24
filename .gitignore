@@ -213,8 +213,14 @@ installer/build-audit/
 **/kokoro-*.onnx
 **/voices*.bin
 assets/**/*.webm
-!/assets/avatars/headphone-llama/*.webm
+!/assets/avatars/clippy/*.webm
 !/assets/avatars/hayley/*.webm
+!/assets/avatars/headphone-llama/*.webm
+!/assets/avatars/madame-patate/*.webm
+!/assets/avatars/masko/*.webm
+!/assets/avatars/nugget/*.webm
+!/assets/avatars/oracle/*.webm
+!/assets/avatars/rusty/*.webm
 /assets/avatars/hayley/headphones-listening.webm
 /assets/avatars/imported-*/
 assets/**/*.mp4

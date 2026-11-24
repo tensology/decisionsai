@@ -16,6 +16,17 @@ from distr.core.skin_config import SkinConfig, parse, validate
 
 logger = logging.getLogger(__name__)
 
+BUILTIN_SKIN_IDS = (
+    "oracle",
+    "hayley",
+    "headphone-llama",
+    "clippy",
+    "nugget",
+    "rusty",
+    "masko",
+    "madame-patate",
+)
+
 
 def discover_skins(
     avatars_dir: Union[str, Path],

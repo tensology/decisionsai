@@ -9,6 +9,7 @@ import pytest
 from PIL import Image
 
 from distr.core.skin_config import EVENT_HOOKS, parse, validate
+from distr.core.skin_discovery import BUILTIN_SKIN_IDS
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -17,17 +18,9 @@ from distr.core.skin_config import EVENT_HOOKS, parse, validate
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 AVATARS_DIR = PROJECT_ROOT / "assets" / "avatars"
 
-SHIPPED_SKINS = [
-    "oracle",
-    "headphone-llama",
-    "clippy",
-    "nugget",
-    "rusty",
-    "masko",
-    "madame-patate",
-]
+SHIPPED_SKINS = BUILTIN_SKIN_IDS
 
-AVATAR_SKINS = [s for s in SHIPPED_SKINS if s not in {"oracle", "headphone-llama"}]
+AVATAR_SKINS = [s for s in SHIPPED_SKINS if s not in {"oracle", "hayley", "headphone-llama"}]
 
 
 def _load_skin(name: str):
@@ -175,6 +168,16 @@ def test_avatar_tts_show_player_false(skin_name: str) -> None:
     """All avatar skins must have tts_response.show_player == False."""
     config = _load_skin(skin_name)
     assert config.events["tts_response"].show_player is False
+
+
+@pytest.mark.parametrize("skin_name", SHIPPED_SKINS)
+def test_builtin_skin_ships_its_configured_animations(skin_name: str) -> None:
+    config = _load_skin(skin_name)
+    folder = AVATARS_DIR / skin_name
+    animations = {response.animation for response in config.events.values()}
+    animations.update(config.transitions.values())
+    missing = sorted(name for name in animations if not (folder / name).is_file())
+    assert not missing, f"{skin_name} is missing bundled animations: {missing}"
 
 
 def test_hayley_runtime_states_use_their_matching_animations() -> None:

@@ -10,6 +10,9 @@ from pathlib import Path
 
 import pytest
 
+from distr.core.skin_config import parse
+from distr.core.skin_discovery import BUILTIN_SKIN_IDS
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = PROJECT_ROOT / "installer" / "install.sh"
@@ -85,6 +88,16 @@ def test_invalid_update_does_not_replace_installed_app(tmp_path: Path):
 
 def test_release_verifier_enforces_version_and_identity(tmp_path: Path):
     app = _fake_app(tmp_path, "2.8.0")
+    avatars = app / "Contents" / "Resources" / "assets" / "avatars"
+    for skin_id in BUILTIN_SKIN_IDS:
+        folder = avatars / skin_id
+        folder.mkdir(parents=True)
+        manifest = (PROJECT_ROOT / "assets" / "avatars" / skin_id / "skin.json").read_text(encoding="utf-8")
+        (folder / "skin.json").write_text(manifest, encoding="utf-8")
+        config = parse(manifest)
+        animations = {response.animation for response in config.events.values()} | set(config.transitions.values())
+        for animation in animations:
+            (folder / animation).write_bytes(b"test animation")
     valid = subprocess.run(
         [sys.executable, str(VERIFIER), str(app), "--version", "2.8.0"],
         text=True,
@@ -100,7 +113,27 @@ def test_release_verifier_enforces_version_and_identity(tmp_path: Path):
         check=False,
     )
     assert mismatch.returncode != 0
-    assert "expected version 2.8.1" in mismatch.stderr
+    assert mismatch.stderr.startswith("release verification failed: expected version 2.8.1")
+
+    (avatars / "oracle" / "6.webm").unlink()
+    missing_animation = subprocess.run(
+        [sys.executable, str(VERIFIER), str(app)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert missing_animation.returncode != 0
+    assert missing_animation.stderr == "release verification failed: built-in skin oracle is missing animations: 6.webm\n"
+
+    (avatars / "oracle" / "skin.json").unlink()
+    missing_skin = subprocess.run(
+        [sys.executable, str(VERIFIER), str(app)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert missing_skin.returncode != 0
+    assert missing_skin.stderr.endswith("release verification failed: app bundle has a missing or invalid built-in skin: oracle\n")
 
 
 def test_smoke_probe_uses_isolated_port_and_child_process_identity():

@@ -1,6 +1,6 @@
 from PyQt6.QtCore import QTimer, QParallelAnimationGroup, QPropertyAnimation, QEasingCurve, Qt, QPoint, pyqtProperty
 from distr.core.utils import load_settings_from_db, save_settings_to_db, get_screens_hash
-from distr.core.paths import AVATARS_DIR, IMAGES_DIR
+from distr.core.paths import AVATARS_DIR, ORACLE_DIR
 from distr.core.db import get_session, ScreenPosition, Chat
 from distr.core.signals import signal_manager
 from distr.core.skin_config import EventResponse, MIN_SKIN_SIZE_SCALE, MAX_SKIN_SIZE_SCALE
@@ -777,9 +777,14 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         so WebM frames get background removal at extraction time.
         """
         anim_path = os.path.join(AVATARS_DIR, self._skin_folder, response.animation)
-        if not os.path.exists(anim_path):
+        if not os.path.isfile(anim_path):
             still = os.path.splitext(anim_path)[0] + ".webp"
-            anim_path = still if os.path.isfile(still) else os.path.join(IMAGES_DIR, "avatar.webp")
+            anim_path = still if os.path.isfile(still) else os.path.join(ORACLE_DIR, "6.webm")
+            if not os.path.isfile(anim_path):
+                logger.warning("No Oracle artwork available for %s", response.animation)
+                self._stop_all_animation()
+                self.gif_label.clear()
+                return
 
         # Stop any WebMView if it was previously used
         if self._webm_view is not None:

@@ -1,6 +1,7 @@
 from pathlib import Path
 from contextlib import nullcontext
 from io import StringIO
+import os
 import runpy
 import subprocess
 import sys
@@ -12,6 +13,35 @@ from distr.core.install_requirements import selected_requirements
 
 REQUIREMENTS = Path(__file__).resolve().parents[2] / "requirements.txt"
 WIZARD = REQUIREMENTS.parent / "bin" / "first_run.py"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Bash runtime bootstrap")
+def test_private_python_bootstrap_installs_then_reuses_managed_python(tmp_path):
+    home = tmp_path / "Clean Profile"
+    runtime = home / ".decisions" / "runtime"
+    uv = runtime / "bin" / "uv"
+    uv.parent.mkdir(parents=True)
+    uv.write_text(
+        '#!/bin/sh\n'
+        'case "$*" in\n'
+        '    "python find --managed-python 3.12")\n'
+        '        test -f "$UV_PYTHON_INSTALL_DIR/ready" || exit 1\n'
+        '        printf "%s/python3.12\\n" "$UV_PYTHON_INSTALL_DIR" ;;\n'
+        '    "python install --no-bin 3.12")\n'
+        '        mkdir "$UV_PYTHON_INSTALL_DIR" && touch "$UV_PYTHON_INSTALL_DIR/ready" ;;\n'
+        '    *) exit 2 ;;\n'
+        'esac\n',
+        encoding="utf-8",
+    )
+    uv.chmod(0o755)
+    bootstrap = WIZARD.with_name("bootstrap-python.sh")
+    for _ in range(2):
+        result = subprocess.run(
+            ["/bin/bash", "-c", 'source "$1" && printf "%s" "$PYTHON_CMD"', "bash", str(bootstrap)],
+            env={**os.environ, "HOME": str(home)},
+            capture_output=True, text=True, check=True,
+        )
+        assert result.stdout == str(runtime / "python" / "python3.12")
 
 
 @pytest.mark.parametrize(
@@ -26,6 +56,7 @@ WIZARD = REQUIREMENTS.parent / "bin" / "first_run.py"
 def test_first_run_installs_only_selected_provider_extensions(stt, tts, expected):
     requirements = selected_requirements(REQUIREMENTS, stt=stt, tts=tts)
     assert "PyQt6" in requirements
+    assert any(line.startswith("psutil>=") for line in requirements)
     assert any(line.startswith("pipecat-ai[silero]") for line in requirements)
     for name in ("pywhispercpp", "vosk", "assemblyai", "elevenlabs", "kokoro-onnx", "supertonic"):
         assert any(line.startswith(name) for line in requirements) == (name in expected)

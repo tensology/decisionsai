@@ -140,6 +140,8 @@ pywebrtc-audio>=0.2.0
 aiortc>=1.9.0
 # pathspec for .gitignore parsing in project indexing
 pathspec>=1.1.1
+# Process ownership checks used by ticket sync and terminal management.
+psutil>=7.2.2
 pytest>=8.0.0
 pytest-playwright>=0.5.0  # uses the pinned playwright below
 hypothesis>=6.100.0

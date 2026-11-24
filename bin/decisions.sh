@@ -140,12 +140,12 @@ if [ -n "$GIT_HASH" ]; then
 fi
 echo ""
 
-# Bootstrap a private Python and native dependencies on macOS.
-PYTHON_CMD=""
+# macOS uses a private runtime. Linux can also use an existing Python 3.12.
 if [[ "$OSTYPE" == darwin* ]]; then
     source "$SCRIPT_DIR/bin/bootstrap-macos.sh" || exit 1
-else
-    PYTHON_CMD=$(command -v python3.12) || { echo "Python 3.12 is required" >&2; exit 1; }
+elif ! PYTHON_CMD=$(command -v python3.12); then
+    echo "System Python 3.12 unavailable. Preparing the private DecisionsAI runtime..."
+    source "$SCRIPT_DIR/bin/bootstrap-python.sh" || exit 1
 fi
 
 migrate_legacy_decisions_home
@@ -358,7 +358,7 @@ if [ -d "$VENV_DIR" ]; then
         echo -e "${YELLOW}Existing venv uses Python $VENV_PYTHON_VERSION, recreating with 3.12...${NC}"
         rm -rf "$VENV_DIR"
         mkdir -p "$HOME/.virtualenvs"
-        $PYTHON_CMD -m venv "$VENV_DIR"
+        "$PYTHON_CMD" -m venv "$VENV_DIR" || exit 1
         echo -e "${GREEN}✓${NC} Virtual environment recreated at $VENV_DIR"
     else
         echo -e "${GREEN}✓${NC} Using existing virtual environment at $VENV_DIR (Python $VENV_PYTHON_VERSION)"
@@ -366,7 +366,7 @@ if [ -d "$VENV_DIR" ]; then
 else
     echo -e "${YELLOW}Creating virtual environment at $VENV_DIR...${NC}"
     mkdir -p "$HOME/.virtualenvs"
-    $PYTHON_CMD -m venv "$VENV_DIR"
+    "$PYTHON_CMD" -m venv "$VENV_DIR" || exit 1
     echo -e "${GREEN}✓${NC} Virtual environment created at $VENV_DIR"
 fi
 

@@ -211,3 +211,7 @@ Record only user corrections, rejections, or requested rework. Do not record inf
 2026-11-16 | Did: The Snuza public site showed a single row of links at the bottom | Wanted: A proper public site footer | Why: Paul asked where the footer was after reviewing the public site.
 
 2026-11-18 | Did: SpoorTrack device Details added Profile Summary, Warranty Context and Contact your distributor panels | Wanted: Remove all three and restrict sharing to an existing person in the device team or billing account | Why: Paul identified these as outside the original device screen and questioned whether Snuza concepts had been carried across
+
+2026-11-24 | Did: SpoorTrack dropdowns used a chevron tight to the right edge and text, and Transfer used a narrow fixed-width Amount column | Wanted: Inset the dropdown chevron and allow room for the label, and give From account, To account and Amount equal columns where they fit | Why: Paul pointed out that the dropdowns felt squeezed even when space was available and requested three equal Transfer columns.
+
+2026-11-24 | Did: Short mobile action buttons hugged the left or right edge and left unused space | Wanted: Center labels in actions and have groups fill the available mobile width with even alignment | Why: Paul called out mobile buttons that did not use the narrow space or line up.
