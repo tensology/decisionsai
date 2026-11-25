@@ -9,6 +9,7 @@ import pytest
 
 from distr.app.events import EventHandlerMixin
 from distr.core.integrations.bus import IntegrationMessageBus
+from distr.core.integrations.telegram import messages as telegram_messages
 from distr.core.integrations.telegram.messages import (
     TelegramMessagesMixin,
     _canonical_batch_source_message_id,
@@ -48,6 +49,34 @@ class DummyApp(EventHandlerMixin):
 
     def _send_to_telegram_worker(self, data):
         self.worker_calls.append(data)
+
+
+@pytest.mark.parametrize(("failure", "reply"), [
+    ("reset", "I lost the connection while downloading your voice note."),
+    ("timeout", "That voice note took too long to download."),
+    ("http", "I couldn't download that voice note."),
+    ("other", "I couldn't process that voice note."),
+])
+def test_voice_download_failure_gets_a_plain_language_reply(monkeypatch, failure, reply):
+    requests = pytest.importorskip("requests")
+    manager = DummyTelegramManager()
+
+    def download(*args, **kwargs):
+        if failure == "http":
+            return SimpleNamespace(status_code=502)
+        if failure == "timeout":
+            raise requests.exceptions.Timeout("Timed out after 30 seconds")
+        if failure == "reset":
+            raise requests.exceptions.ConnectionError(
+                "Connection aborted.", ConnectionResetError(54, "Connection reset by peer"),
+            )
+        raise RuntimeError("Internal diagnostic")
+
+    monkeypatch.setattr(telegram_messages.requests, "get", download)
+    TelegramMessagesMixin._transcribe_voice_task(manager, "https://example.com/voice", "voice")
+
+    assert manager.stopped_typing
+    assert manager.sent == [((f"{reply} Please resend it or send it as text.",), {})]
 
 
 class WorkerApp(EventHandlerMixin):

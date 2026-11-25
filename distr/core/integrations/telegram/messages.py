@@ -525,7 +525,7 @@ class TelegramMessagesMixin:
                     return
             except Exception as exc:
                 logger.error("[Telegram] Project control command failed: %s", exc, exc_info=True)
-                self.send_to_telegram(f"Project control failed: {exc}")
+                self.send_to_telegram("I couldn't complete that project command. Please check the project's current state before trying again.")
                 return
 
             try:
@@ -535,7 +535,7 @@ class TelegramMessagesMixin:
                     return
             except Exception as exc:
                 logger.error("[Telegram] Delegated continuation failed: %s", exc, exc_info=True)
-                self.send_to_telegram(f"Delegated continuation failed: {exc}")
+                self.send_to_telegram("I couldn't continue that work. Please check the run before trying again.")
                 return
 
             # Detect mode-switch intent and persist to Settings_Store
@@ -936,7 +936,7 @@ class TelegramMessagesMixin:
                 return self._apply_initiative_draft_decision(queue_obj, entries[0].id, decision)
         except Exception as exc:
             logger.error("[Telegram] Initiative draft command failed: %s", exc, exc_info=True)
-            self.send_to_telegram(f"Initiative approval failed: {exc}")
+            self.send_to_telegram("I couldn't confirm that decision. Please check the pending action before trying again.")
             return True
         return False
 
@@ -1475,7 +1475,7 @@ class TelegramMessagesMixin:
         """Trigger background thread used for transcription (requests/STT)."""
         if not url:
             logger.warning("[Telegram] ⚠️ No download_url for %s — skipping transcription", media_type)
-            self.send_to_telegram("⚠️ Could not process voice note: no download URL in message. Please resend.")
+            self.send_to_telegram("I couldn't open that voice note. Please resend it or send it as text.")
             return
         # Show "recording" indicator so user knows we're processing a voice note, not typing text
         self._start_typing_loop("record_voice")
@@ -1490,19 +1490,19 @@ class TelegramMessagesMixin:
         if not requests:
             logger.error("[Telegram] ❌ requests library not available — cannot download voice note")
             self._stop_typing_loop()
-            self.send_to_telegram("⚠️ Could not process voice note: requests library unavailable.")
+            self.send_to_telegram("I can't process voice notes right now. Please send it as text.")
             return
 
         try:
             # Typing loop already started by _handle_voice_message (as record_voice)
 
             # Download
-            logger.info("[Telegram] 🎙️ Downloading %s from %s...", media_type, media_url[:80] if media_url else "None")
+            logger.info("[Telegram] Downloading %s for transcription", media_type)
             resp = requests.get(media_url, timeout=30)
             if resp.status_code != 200:
                 logger.error("[Telegram] ❌ Failed to download voice: HTTP %s", resp.status_code)
                 self._stop_typing_loop()
-                self.send_to_telegram(f"⚠️ Could not download voice note (HTTP {resp.status_code}). Please try again.")
+                self.send_to_telegram("I couldn't download that voice note. Please resend it or send it as text.")
                 return
 
             temp_dir = Path(tempfile.gettempdir()) / "decisions_ai_telegram"
@@ -1562,16 +1562,20 @@ class TelegramMessagesMixin:
             else:
                 logger.warning("[Telegram] ⚠️ Agent queue not available for transcription — voice note will not be processed")
                 self._stop_typing_loop()
-                self.send_to_telegram("⚠️ Could not process voice note: agent not ready. Please try again.")
+                self.send_to_telegram("I'm still getting ready to transcribe voice notes. Please try again in a moment or send it as text.")
 
         except requests.exceptions.Timeout:
             logger.error("[Telegram] ❌ Voice download timed out after 30s — URL may have expired")
             self._stop_typing_loop()
-            self.send_to_telegram("⚠️ Voice note download timed out. The link may have expired — please resend.")
+            self.send_to_telegram("That voice note took too long to download. Please resend it or send it as text.")
+        except (requests.exceptions.ConnectionError, ConnectionResetError) as exc:
+            logger.warning("[Telegram] Voice download connection dropped (%s)", type(exc).__name__)
+            self._stop_typing_loop()
+            self.send_to_telegram("I lost the connection while downloading your voice note. Please resend it or send it as text.")
         except Exception as e:
             logger.error("[Telegram] ❌ Voice transcription error: %s", e, exc_info=True)
             self._stop_typing_loop()
-            self.send_to_telegram(f"⚠️ Could not process voice note: {e}")
+            self.send_to_telegram("I couldn't process that voice note. Please resend it or send it as text.")
 
     # -------------------------------------------------------------------------
     #  Incoming file handling (photos, documents, video from Telegram)

@@ -132,31 +132,42 @@ def test_deliver_telegram_user_input_waits_for_sink_instead_of_dropping(tmp_path
     assert IntegrationMessageBus(mapping_path=mapping).resolve_mapped_chat_id("telegram", "777001") == 42
 
 
-def test_deliver_telegram_user_input_prefers_existing_thread_mapping_over_current_chat(tmp_path: Path) -> None:
+def test_private_telegram_input_follows_agent_selection_after_a_switch(tmp_path: Path) -> None:
     mapping = tmp_path / "existing_telegram.json"
+    IntegrationMessageBus(mapping_path=mapping).remember_thread_chat("telegram", "777001", 42)
     bus = IntegrationMessageBus(mapping_path=mapping)
     received: list[tuple] = []
-    bus.remember_thread_chat("telegram", "777001", 42)
     bus.set_text_sink(
         lambda text, is_telegram, img, speak: received.append((text, is_telegram, img, speak))
     )
-    bus.set_chat_id_provider(lambda: 99)
+    selected_chat = 99
+    bus.set_chat_id_provider(lambda: selected_chat)
 
     bus.deliver_telegram_user_input(
-        text="stay on mapped chat",
+        text="Use the live agent",
         telegram_chat_id=777001,
-        speak=False,
+        input_type="text",
+    )
+    selected_chat = 100
+    bus.deliver_telegram_user_input(
+        text="Transcript for the next live agent",
+        telegram_chat_id=777001,
+        input_type="voice",
     )
 
-    assert received == [
-        (
-            "stay on mapped chat",
-            True,
-            None,
-            {"speak": False, "surface": "telegram", "chat_id": 42},
-        )
-    ]
-    assert IntegrationMessageBus(mapping_path=mapping).resolve_mapped_chat_id("telegram", "777001") == 42
+    assert [(call[3]["chat_id"], call[3]["input_type"]) for call in received] == [(99, "text"), (100, "voice")]
+    assert IntegrationMessageBus(mapping_path=mapping).resolve_mapped_chat_id("telegram", "777001") == 100
+
+
+def test_group_telegram_input_keeps_its_existing_thread_mapping(tmp_path: Path) -> None:
+    bus = IntegrationMessageBus(mapping_path=tmp_path / "group.json")
+    bus.remember_thread_chat("telegram", "-100123", 42)
+    received = []
+    bus.set_text_sink(lambda _text, _external, _image, metadata: received.append(metadata))
+    bus.set_chat_id_provider(lambda: 99)
+
+    assert bus.deliver_telegram_user_input(text="Group message", telegram_chat_id=-100123)
+    assert received[0]["chat_id"] == 42
 
 
 def test_deliver_telegram_user_input_repairs_stale_thread_mapping(tmp_path: Path) -> None:

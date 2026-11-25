@@ -100,6 +100,15 @@ class IntegrationMessageBus:
         """Return current internal chat id for mapping persistence."""
         self._chat_id_provider = provider
 
+    def _current_chat_id(self) -> int | None:
+        provider = self._chat_id_provider
+        if provider is not None:
+            try:
+                return provider()
+            except Exception:
+                logger.debug("message bus chat_id_provider failed", exc_info=True)
+        return None
+
     def set_chat_id_validator(self, validator: ChatIdValidator | None) -> None:
         """Validate persisted chat mappings before routing new connector input."""
         self._chat_id_validator = validator
@@ -283,30 +292,24 @@ class IntegrationMessageBus:
         metadata = self._telegram_metadata(speak, input_type)
         queued = False
         with self._route_lock:
-            cid: int | None = None
-            mapping_key = None
-            if telegram_chat_id is not None:
-                mapping_key = f"telegram:{int(telegram_chat_id)}"
-                cid = self._thread_to_chat.get(mapping_key)
-                if cid is not None and not self._mapped_chat_is_valid(cid):
-                    logger.warning(
-                        "IntegrationMessageBus: removing stale Telegram chat mapping %s -> %s",
-                        telegram_chat_id,
-                        cid,
-                    )
+            chat_number = int(telegram_chat_id) if telegram_chat_id is not None else None
+            mapping_key = f"telegram:{chat_number}" if chat_number is not None else None
+            mapped = self._thread_to_chat.get(mapping_key) if mapping_key is not None else None
+            # A bot DM follows the agent selected on Desktop. Group chats retain their own routing.
+            direct = chat_number is not None and chat_number > 0
+            cid = self._current_chat_id() if direct else None
+            if cid is not None and not self._mapped_chat_is_valid(cid):
+                cid = None
+            if cid is None and self._mapped_chat_is_valid(mapped):
+                cid = mapped
+            if cid is None and not direct:
+                cid = self._current_chat_id()
+            if mapping_key is not None and cid != mapped:
+                if cid is None:
                     self._thread_to_chat.pop(mapping_key, None)
-                    self._persist_mapping_unlocked()
-                    cid = None
-            if cid is None:
-                prov = self._chat_id_provider
-                if prov:
-                    try:
-                        cid = prov()
-                    except Exception:
-                        logger.debug("message bus chat_id_provider failed", exc_info=True)
-                if mapping_key is not None and cid is not None:
+                else:
                     self._thread_to_chat[mapping_key] = int(cid)
-                    self._persist_mapping_unlocked()
+                self._persist_mapping_unlocked()
             self._set_target_chat_metadata(metadata, cid)
             sink = self._text_sink
             if sink is None:
@@ -356,14 +359,7 @@ class IntegrationMessageBus:
         }
         if input_type:
             metadata["input_type"] = str(input_type)
-        current_chat_id = None
-        provider = self._chat_id_provider
-        if provider:
-            try:
-                current_chat_id = provider()
-            except Exception:
-                logger.debug("message bus chat_id_provider failed", exc_info=True)
-        self._set_target_chat_metadata(metadata, current_chat_id)
+        self._set_target_chat_metadata(metadata, self._current_chat_id())
 
         with self._route_lock:
             sink = self._text_sink
