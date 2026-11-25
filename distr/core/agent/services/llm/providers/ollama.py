@@ -40,6 +40,7 @@ from distr.core.agent.services.llm.tool_execution_policy import (
     sanitized_tool_arguments,
     tool_execution_block_reason,
 )
+from ..base_service import BaseLLMService
 from ..core_mixin import LLMSharedMixin
 from ..mixins.ollama_response import OllamaResponseMixin
 from distr.core.agent.tools import load_tools
@@ -74,6 +75,8 @@ def _ollama_runtime_options(default_num_ctx: int = 8192) -> dict:
 
 class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
     """Ollama-based LLM service using Pipecat."""
+
+    _normalize_tool_kwargs = staticmethod(BaseLLMService._normalize_tool_kwargs)
 
     def __init__(self, model_name: str = None, system_prompt: str = None,
                  event_queue=None, is_listening=True, chat_manager=None, tts_service=None,
@@ -1049,6 +1052,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
 
     async def _execute_tool_calls(self, tool_calls, last_user_message=None):
         """Execute tool calls and return results."""
+        last_user_message = last_user_message or self._last_user_text_for_failover()
         results = []
         decisions = build_computer_use_execution_decisions(tool_calls)
         for idx, tool_call in enumerate(tool_calls):
@@ -1093,7 +1097,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     if getattr(self, '_is_telegram_request', False):
                         args_dict.setdefault("is_telegram_request", True)
                     if last_user_message:
-                        args_dict.setdefault("last_user_message", last_user_message)
+                        args_dict["last_user_message"] = last_user_message
                     if tool_name in ('oracle_globe', 'clipboard_action', 'mouse_movement', 'send_file_to_telegram') and not args_dict.get('text'):
                         if last_user_message:
                             args_dict['text'] = last_user_message
@@ -1103,7 +1107,8 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                                     args_dict['text'] = msg.get('content', '')
                                     break
 
-                    user_text = str(args_dict.get("last_user_message") or last_user_message or "")
+                    user_text = str(last_user_message or "")
+                    args_dict = self._normalize_tool_kwargs(tool, args_dict)
                     block_reason = tool_execution_block_reason(
                         self, tool_name, args_dict, user_text
                     )
@@ -1125,7 +1130,6 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     )
 
                     loop = asyncio.get_running_loop()
-                    args_dict = self._normalize_tool_kwargs(tool, args_dict)
                     result = await loop.run_in_executor(
                         None, lambda t=tool, a=args_dict: t._run(**a)
                     )
@@ -1154,8 +1158,10 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                 if matched:
                     try:
                         loop = asyncio.get_running_loop()
+                        if last_user_message:
+                            args_dict["last_user_message"] = last_user_message
                         args_dict = self._normalize_tool_kwargs(matched, args_dict)
-                        user_text = str(args_dict.get("last_user_message") or last_user_message or "")
+                        user_text = str(last_user_message or "")
                         block_reason = tool_execution_block_reason(
                             self, matched.name, args_dict, user_text
                         )

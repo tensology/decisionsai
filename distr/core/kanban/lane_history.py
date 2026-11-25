@@ -68,6 +68,7 @@ def record_lane_change(
     actor: str,
     reason: str,
     source: str,
+    publish_change: bool = True,
 ) -> KanbanTicketLaneHistory | None:
     """Append one history row. Caller commits. Also refreshes work-item lane metadata."""
     if from_lane == to_lane and from_lane is not None:
@@ -83,7 +84,8 @@ def record_lane_change(
     )
     session.add(row)
     _sync_work_item_lane(session, int(ticket_id), to_lane)
-    # Push the move to any open board/list/thread page immediately.
+    if not publish_change:
+        return row
     try:
         from distr.core.kanban.realtime import publish_kanban_changed
 

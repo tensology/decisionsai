@@ -1078,6 +1078,9 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             enabled=bool(self.settings.get("accepted_eula", False)),
             open_path=self.oracle_window._open_web_url,
         )
+        drawer_action = QtGui.QAction("Open Development sidebar", self.oracle_window.development_submenu)
+        drawer_action.triggered.connect(self.development_hot_corner.show_for_keyboard)
+        self.oracle_window.development_submenu.insertAction(self.oracle_window.open_development_action, drawer_action)
         # Hide oracle window until EULA is accepted
         self.oracle_window.hide()
         self.player_window.set_oracle_window(self.oracle_window)

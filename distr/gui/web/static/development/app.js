@@ -5,13 +5,13 @@ import { createThreadSession } from './threads/session.js?v=20261115-workflow-di
 import { createCatalogLoader } from './shell/catalog.js';
 import { installNavigationGuard } from './shell/navigation-guard.js';
 import { catalogModels, providerLabel } from './shared/models.js';
-import { createPlanning } from './planning/index.js?v=20261120-ux4';
+import { createPlanning } from './planning/index.js?v=20261125-canvas-workspace';
 import { seedPlanHistory } from './planning/back.js?v=20261102-verify';
 import { planCrumbs, renderPlanCrumbs, clearPlanCrumbs } from './planning/breadcrumb.js?v=20261111-nav-apply-chrome4';
 import { setOverflowLabel } from './shared/overflow-names.js?v=20261111-overflow-names3';
 import { rememberBoardThread, boardLastThread, rememberBoardSection, boardLastSection, boardViewOptions, boardViewSwitchHtml, projectClickTarget } from './planning/view-switch.js?v=20261111-nav-apply-chrome3';
 
-import { createSidebar } from './sidebar/index.js?v=20261123-menu-consistency';
+import { createSidebar } from './sidebar/index.js?v=20261125-jira-badge';
 
 import { createAutomations } from './automations/index.js?v=20261113-calendar-page1';
 
@@ -1128,6 +1128,42 @@ function togglePicker(buttonId, menuId) {
 
 const pendingBoardLoads = new Map();
 const EXTERNAL_BOARD_STORE = 'decisions.developmentExternalBoardDetails';
+
+function connectKanbanUpdates() {
+    let refreshTimer;
+    function invalidateBoards(boardId) {
+        const affected = state.boards.filter((board) => board.provider === 'decisions'
+            && (boardId == null || String(board.local_id || board.id) === String(boardId)));
+        for (const board of affected) delete state.boardTicketLoads[board.key];
+        if (state.workspaceMode !== 'kanban' || !affected.some((board) => board.key === state.selectedBoardKey)) return;
+        window.clearTimeout(refreshTimer);
+        const boardKey = state.selectedBoardKey;
+        refreshTimer = window.setTimeout(() => {
+            if (state.workspaceMode === 'kanban' && state.selectedBoardKey === boardKey) {
+                loadBoardTickets(boardKey, { force: true });
+            }
+        }, 100);
+    }
+
+    const url = new URL('/api/tickets/ws/boards', window.location.href);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    function connect() {
+        const socket = new WebSocket(url);
+        socket.addEventListener('open', () => invalidateBoards(null));
+        socket.addEventListener('message', (message) => {
+            try {
+                const update = JSON.parse(message.data);
+                if (update?.type === 'kanban_updated' && update.event === 'ticket_lane_move') {
+                    invalidateBoards(update.board_id);
+                }
+            } catch (_) {
+                // Ignore malformed messages. The next move or reconnect refreshes the board.
+            }
+        });
+        socket.addEventListener('close', () => window.setTimeout(connect, 5000));
+    }
+    connect();
+}
 
 function readStoredExternalBoard(boardKey) {
     try {
@@ -3742,6 +3778,7 @@ threadCliMode.bind();
 loadPlayOpensTerminals();
 
 init();
+connectKanbanUpdates();
 
 // Laya submissions: repaint thread rows (spinner / failed mark) from the events stream.
 // Development lists only development threads; Laya never targets those, so rows are

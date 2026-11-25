@@ -5,10 +5,13 @@ live separately in tests/core/test_plan_conversation.py.
 """
 from __future__ import annotations
 import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 from pathlib import Path
 import socket
 import subprocess
 import sys
+from threading import Thread
 import time
 from urllib.request import urlopen
 import pytest
@@ -97,6 +100,9 @@ def test_page_designer_saves_a_responsive_stencil(page: Page, plan_server, tmp_p
     designer.get_by_role("button", name="Move up").click()
     expect(canvas.locator(".row input").first).to_have_attribute("aria-label", "Text field")
     expect(canvas.locator(".stack .row input")).to_have_count(2)
+    designer.get_by_label("width", exact=True).fill("180")
+    designer.get_by_role("button", name="Apply layout").click()
+    expect(canvas.locator(".design-selected")).to_have_attribute("data-wf-width", "180")
 
     designer.get_by_role("button", name="Phone", exact=True).click()
     if width == 1440:
@@ -110,6 +116,9 @@ def test_page_designer_saves_a_responsive_stencil(page: Page, plan_server, tmp_p
     page.locator(".plan-detail-body").evaluate("body => { body.scrollTop = 0; }")
     page.locator("#plan-preview").evaluate("preview => { preview.scrollTop = 0; }")
     page.screenshot(path=out / f"page-designer-{width}.png", animations="disabled")
+    if width == 390:
+        designer.get_by_label("Widget label").scroll_into_view_if_needed()
+        page.screenshot(path=out / "page-designer-390-inspector.png", animations="disabled")
 
     page.get_by_role("button", name="Preview", exact=True).click()
     expect(page.frame_locator('#plan-preview iframe').get_by_role("textbox", name="Bike model")).to_have_count(0)
@@ -118,7 +127,7 @@ def test_page_designer_saves_a_responsive_stencil(page: Page, plan_server, tmp_p
     with page.expect_response(lambda response: response.request.method == "PATCH" and "/plan-items/" in response.url) as saved:
         designer.get_by_role("button", name="Save design").click()
     assert saved.value.ok
-    assert '    stack\n      row\n        input "Text field"\n        input "Bike model"' in saved.value.request.post_data_json["content"]
+    assert '    stack\n      row\n        input "Text field" width="180"\n        input "Bike model"' in saved.value.request.post_data_json["content"]
     expect(designer.get_by_role("button", name="Save design")).to_be_disabled()
     page.reload()
     expect(page.locator(".iface-node")).to_have_count(2)
@@ -130,9 +139,146 @@ def test_page_designer_saves_a_responsive_stencil(page: Page, plan_server, tmp_p
     assert not errors
 
 
+def test_map_finds_a_journey_and_saves_a_drawn_connection(page: Page, plan_server):
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(plan_server)
+    page.get_by_role("button", name="Find page", exact=True).click()
+    page.get_by_role("searchbox").fill("/customers")
+    page.get_by_role("dialog", name="Find page").get_by_role("button", name="Customers").click()
+    page.get_by_role("button", name="Focus journey", exact=True).click()
+    customers = page.locator('.iface-node[data-screen-key="customers"]')
+    saved = page.locator('.iface-node[data-screen-key="saved"]')
+    with page.expect_response(lambda response: response.request.method == "PATCH" and "/plan-items/" in response.url) as response:
+        customers.get_by_role("button", name="Connect from Customers").drag_to(saved)
+    assert response.value.ok
+    expect(page.get_by_role("button", name="All routes", exact=True)).to_be_visible()
+    forward = '.iface-edge[data-from="w:wf-id-customers"][data-to="w:wf-id-saved"]'
+    expect(page.locator(forward)).to_have_count(1)
+    page.reload()
+    expect(page.locator(forward)).to_have_count(1)
+
+
 def _json_messages(page):
     """The composer streams by default; these tests drive the JSON fallback it uses when the stream route is missing."""
     page.route("**/plan-workspaces/1/messages/stream", lambda route: route.fulfill(status=404, body=""))
+
+
+def test_double_click_opens_stencil_and_edits_base_template(page, plan_server, tmp_path):
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(plan_server)
+    page.locator(".iface-node", has_text="Saved").dblclick()
+    design = page.get_by_role("region", name="Page designer")
+    expect(design.get_by_text("Inherits Shell")).to_be_visible()
+    design.get_by_role("button", name="Edit base template").click()
+    drawer = page.get_by_role("dialog", name="Edit base template · Shell")
+    source = drawer.get_by_role("textbox", name="Page source")
+    assert source.evaluate("box => box.value.substring(box.selectionStart, box.selectionEnd)") == "template Shell"
+    out = Path(os.environ.get("DECISIONS_DESIGN_EVIDENCE", str(tmp_path)))
+    out.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=out / "page-designer-base-template.png", animations="disabled")
+    source.fill(source.input_value().replace('image "Example logo"', 'image "Updated logo"'))
+    drawer.get_by_role("button", name="Apply", exact=True).click()
+    canvas = page.frame_locator('iframe[title="Design canvas"]')
+    expect(canvas.get_by_role("img", name="Updated logo")).to_be_visible()
+    design.get_by_role("button", name="Undo", exact=True).click()
+    expect(canvas.get_by_role("img", name="Example logo")).to_be_visible()
+    design.get_by_role("button", name="Redo", exact=True).click()
+    design.get_by_role("button", name="Save design").click()
+    page.get_by_role("button", name="Back to all pages").click()
+    page.locator('.iface-node[data-screen-key="customers"]').press("Enter")
+    expect(page.frame_locator("#plan-preview iframe").get_by_role("img", name="Updated logo")).to_be_visible()
+
+
+@pytest.mark.parametrize("width", [390, 768, 1280, 1440])
+def test_planning_endpoint_runs_against_local_dev_and_keeps_example(page, plan_server, tmp_path, width):
+    page.set_default_timeout(8000)
+    received = []
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+
+    class DevHandler(BaseHTTPRequestHandler):
+        def answer(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            request = {"method": self.command, "path": self.path, "json": json.loads(body) if body else None}
+            received.append(request)
+            payload = json.dumps(request).encode()
+            self.send_response(200)
+            self.send_header("Access-Control-Allow-Origin", plan_server)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        do_GET = do_POST = do_PUT = do_DELETE = answer
+
+        def do_OPTIONS(self):
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", plan_server)
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), DevHandler) as server:
+        worker = Thread(target=server.serve_forever)
+        worker.start()
+        try:
+            page.set_viewport_size({"width": width, "height": 900})
+            page.goto(plan_server)
+            if width == 1440:
+                with page.expect_file_chooser() as picker:
+                    page.get_by_role("button", name="Attach project files").click()
+                picker.value.set_files({"name": "api-notes.txt", "mimeType": "text/plain", "buffer": b"API reference"})
+                expect(page.get_by_role("region", name="Artifacts").get_by_role("button", name="api-notes.txt")).to_be_visible()
+            page.get_by_role("button", name="Add endpoint").click()
+            creator = page.get_by_role("dialog", name="Add endpoint")
+            creator.get_by_label("Endpoint name").fill("Customer API")
+            creator.get_by_label("Route").fill("/api/customers")
+            creator.get_by_label("Method").select_option("POST")
+            creator.get_by_role("button", name="Add endpoint", exact=True).click()
+            endpoint = page.locator('.iface-node[data-kind="endpoint"]', has_text="Customer API")
+            expect(endpoint).to_contain_text("POST")
+            endpoint.dblclick()
+            editor = page.get_by_role("dialog", name="Customer API")
+            assert not errors, errors
+            expect(editor).to_be_visible()
+            base = f"http://127.0.0.1:{server.server_port}"
+            editor.get_by_label("Local or development server").fill(base)
+            expect(editor.get_by_label("Request path")).to_have_value("/api/customers")
+            expect(editor.get_by_label("Method")).to_have_value("POST")
+            out = Path(os.environ.get("DECISIONS_DESIGN_EVIDENCE", str(tmp_path)))
+            out.mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=out / f"endpoint-empty-{width}.png", animations="disabled")
+
+            editor.get_by_label("Request path").fill("//other-server/path")
+            editor.get_by_role("button", name="Send", exact=True).click()
+            expect(editor.get_by_role("status")).to_contain_text("local request path")
+            assert received == []
+            editor.get_by_label("Request path").fill("/api/customers?active=true")
+            for method in ["POST", "PUT", "GET", "DELETE"]:
+                editor.get_by_label("Method").select_option(method)
+                if method != "GET":
+                    editor.get_by_label("Request JSON").fill('{"active":true}')
+                editor.get_by_role("button", name="Send", exact=True).click()
+                expect(editor.get_by_role("region", name="Response")).to_contain_text(f'"method": "{method}"')
+                assert received[-1] == {"method": method, "path": "/api/customers?active=true",
+                                        "json": None if method == "GET" else {"active": True}}
+            editor.get_by_role("button", name="Use as example").click()
+            editor.get_by_role("button", name="Save example").click()
+            expect(editor.get_by_role("status")).to_have_text("Example saved")
+            editor.get_by_label("JSON response example").scroll_into_view_if_needed()
+            page.screenshot(path=out / f"endpoint-response-{width}.png", animations="disabled")
+            editor.get_by_role("button", name="Close", exact=True).click()
+            page.reload()
+            endpoint.press("Enter")
+            expect(editor.get_by_label("Local or development server")).to_have_value(base)
+            expect(editor.get_by_label("JSON response example")).to_have_value(json.dumps(received[-1], indent=2))
+            assert not errors, errors
+        finally:
+            server.shutdown()
+            worker.join()
 
 
 def _drag_designer_widget(page, start, end):
@@ -234,7 +380,7 @@ def test_page_designer_delete_undo_redo(page: Page, plan_server):
     redo.click()
     expect(added).to_have_count(0)
     # Keyboard: Ctrl+Z restores, Delete removes the selected widget again.
-    designer.get_by_role("combobox", name="Layer").focus()
+    designer.get_by_role("treeitem", selected=True).focus()
     page.keyboard.press("Control+z")
     expect(added).to_have_count(1)
     page.keyboard.press("Delete")
@@ -275,7 +421,7 @@ screen "Book" route=/book
 
     designer.get_by_role("button", name="Add text").click()
     expect(rows.first.locator(".text")).to_have_count(1)
-    designer.get_by_role("combobox", name="Layer").select_option(index=1)
+    designer.get_by_role("treeitem", name="content", exact=True).click()
     add_row.click()
     expect(rows.last).to_have_attribute("data-design-empty", "")
     _drag_designer_widget(page, rows.first.locator(".text"), rows.last)
@@ -335,7 +481,7 @@ def test_desktop_reopen_rejects_plan_from_previous_project(page: Page, plan_serv
     assert initial["opened"], initial["text"]
     expect(page.locator(".iface-canvas")).to_be_visible()
     assert page.evaluate("window.openMovedPlan()") == {"opened": False, "showedOldCanvas": False}
-    expect(page.get_by_role("alert")).to_contain_text("This saved plan belongs to a different project.")
+    expect(page.get_by_role("alert")).to_contain_text("This saved plan belongs to a different project (Plan integration)")
     expect(page.get_by_role("button", name="Start a new plan for this project")).to_be_visible()
     expect(page.locator(".iface-canvas")).to_have_count(0)
     page.screenshot(path=f"/tmp/decisions-desktop-plan-project-conflict-{width}.png")
@@ -367,6 +513,7 @@ def test_prompt_linked_artifacts_and_repeated_build(page: Page, plan_server, siz
     expect(page.locator('select[aria-label="Wireframe page"]')).to_have_count(0)
     expect(page.locator(".iface-canvas")).to_be_visible()
     expect(page.locator(".iface-node")).to_have_count(2)
+    page.get_by_role("button", name="Project panels", exact=True).click()
     page.get_by_label("Message", exact=True).fill("Add an optional phone field and update its data and requirements.")
     with page.expect_response("**/plan-workspaces/1/messages") as response:
         page.get_by_role("button", name="Send message", exact=True).click()
@@ -420,6 +567,7 @@ def test_prompt_linked_artifacts_and_repeated_build(page: Page, plan_server, siz
 def test_plan_retry_after_post_and_recovery_read_are_lost(page: Page, plan_server):
     page.goto(plan_server)
     _json_messages(page)
+    page.get_by_role("button", name="Project panels", exact=True).click()
     field = page.get_by_label("Message", exact=True)
     send = page.get_by_role("button", name="Send message", exact=True)
     expect(page.get_by_label("Model", exact=True)).to_have_value("fixture-model")
@@ -473,6 +621,7 @@ def test_plan_reload_recovers_the_original_submission(page: Page, plan_server, c
     if committed:
         page.get_by_role("button", name="Documents", exact=True).click()
     else:
+        page.get_by_role("button", name="Project panels", exact=True).click()
         page.locator(".iface-node").first.press("Enter")
         expect(page.get_by_label("Back to all pages", exact=True)).to_be_visible()
     requests = []

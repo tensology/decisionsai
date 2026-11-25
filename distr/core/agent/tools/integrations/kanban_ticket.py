@@ -97,6 +97,13 @@ def missing_move_ticket_params_error(ticket_id: int = 0, lane_name: str = "", te
     )
 
 
+def _human_acceptance_required() -> str:
+    return voice_then_reference(
+        "That ticket is ready for your acceptance in QA.",
+        "Only you can move a QA ticket to Complete. Open the board and make the final move there.",
+    )
+
+
 def resolve_lane_on_board(session, board_id: int, lane_name: str):
     """Match a lane by exact name, alias, or fuzzy / case-insensitive contains."""
     from distr.core.db.kanban import KanbanLane
@@ -115,9 +122,10 @@ def resolve_lane_on_board(session, board_id: int, lane_name: str):
     lowered = wanted.lower()
     alias = _LANE_ALIASES.get(lowered, wanted)
     alias_lower = str(alias).lower()
-    for lane in lanes:
-        if str(lane.name or "").strip().lower() == alias_lower or str(lane.name or "").strip().lower() == lowered:
-            return lane
+    for candidate in dict.fromkeys((lowered, alias_lower)):
+        for lane in lanes:
+            if str(lane.name or "").strip().lower() == candidate:
+                return lane
     # Prefer a longer, unambiguous contains match over a 1-2 letter wildcard.
     contains = [
         lane for lane in lanes
@@ -1604,14 +1612,11 @@ class KanbanTicketTool(BaseTool):
                 )
             elif action == "move_ticket":
                 parsed_id, parsed_lane = parse_move_ticket_instruction(
-                    text, ticket_id or self._last_ticket_id, lane_name
+                    text, ticket_id, lane_name
                 )
+                parsed_id = parsed_id or self._last_ticket_id
                 if parsed_id:
                     self._last_ticket_id = parsed_id
-                if parsed_lane:
-                    self._last_lane_name = parsed_lane
-                if not parsed_lane and getattr(self, "_last_lane_name", ""):
-                    parsed_lane = self._last_lane_name
                 has_board_hint = bool(
                     target_board_name
                     or kwargs.get("destination_board_name")
@@ -2657,17 +2662,12 @@ class KanbanTicketTool(BaseTool):
                 "I need a ticket number to update that.",
                 "No ticket ID provided.",
             )
-        if lane_name:
-            from distr.core.kanban.lifecycle import require_automation_lane
+        from distr.core.kanban.lane_history import is_complete_lane_name, record_lane_change
+        from distr.core.db.kanban import KanbanTicket
 
-            try:
-                require_automation_lane(lane_name)
-            except ValueError:
-                return voice_then_reference(
-                    "That ticket is ready for your acceptance in QA.",
-                    "Only you can move a QA ticket to Complete. Open the board and make the final move there.",
-                )
-        from distr.core.db.kanban import KanbanTicket, KanbanLane
+        if is_complete_lane_name(lane_name):
+            return _human_acceptance_required()
+        moved_on_board = None
         with self._get_session() as s:
             t = orm_get_by_id(s, KanbanTicket, ticket_id)
             if not t:
@@ -2675,6 +2675,15 @@ class KanbanTicketTool(BaseTool):
                     "I could not find that ticket.",
                     f"Ticket #{ticket_id} not found.",
                 )
+            old_lane = t.lane
+            new_lane = resolve_lane_on_board(s, old_lane.board_id, lane_name) if lane_name and old_lane else None
+            if lane_name and not new_lane:
+                return voice_then_reference(
+                    "That destination lane did not match any lane on the ticket's board.",
+                    f"Lane '{lane_name}' not found for ticket #{ticket_id}.",
+                )
+            if new_lane and is_complete_lane_name(new_lane.name):
+                return _human_acceptance_required()
             if title:
                 t.title = title
             if description:
@@ -2692,24 +2701,16 @@ class KanbanTicketTool(BaseTool):
                 t.linked_workflow_id = linked_workflow_id
                 t.send_to_cli = False
                 t.priority = priority
-            if lane_name:
-                # Move to different lane
-                board_id = t.lane.board_id if t.lane else None
-                if board_id:
-                    new_lane = s.query(KanbanLane).filter(
-                        KanbanLane.board_id == board_id,
-                        KanbanLane.name.ilike(f"%{lane_name}%")
-                    ).first()
-                    if new_lane and int(t.lane_id or 0) != int(new_lane.id):
-                        from distr.core.kanban.lane_history import lane_name, record_lane_change
-                        old_name = lane_name(s, t.lane_id)
-                        record_lane_change(
-                            s, int(t.id),
-                            from_lane=old_name, to_lane=new_lane.name,
-                            actor="tool", reason="tool_update", source="kanban_ticket_tool",
-                        )
-                        t.lane_id = new_lane.id
-            return voice_then_reference("I saved those ticket changes.", f"Updated ticket #{ticket_id}")
+            if new_lane and t.lane_id != new_lane.id:
+                record_lane_change(
+                    s, int(t.id), from_lane=old_lane.name, to_lane=new_lane.name,
+                    actor="tool", reason="tool_update", source="kanban_ticket_tool", publish_change=False,
+                )
+                t.lane_id = new_lane.id
+                moved_on_board = new_lane.board_id
+        if moved_on_board is not None:
+            self._publish_ticket_move(ticket_id, moved_on_board, moved_on_board)
+        return voice_then_reference("I saved those ticket changes.", f"Updated ticket #{ticket_id}")
 
     def _action_attach_file(self, ticket_id, file_path) -> str:
         if not ticket_id:
@@ -2940,6 +2941,22 @@ class KanbanTicketTool(BaseTool):
             f"The duplicate is archived with a 'Merged into #{keep_id}' note.",
         )
 
+    def _publish_ticket_move(self, ticket_id: int, source_board_id: int, target_board_id: int):
+        data = {
+            "ticket_id": ticket_id,
+            "source_board_id": source_board_id,
+            "target_board_id": target_board_id,
+        }
+        if self.event_queue is not None:
+            try:
+                self.event_queue.put(("kanban_ticket_moved", data), block=False)
+                return
+            except Exception:
+                logger.debug("Could not relay committed ticket move", exc_info=True)
+        from distr.core.kanban.realtime import publish_ticket_move
+
+        publish_ticket_move(**data)
+
     def _action_move_ticket(
         self,
         ticket_id,
@@ -2956,16 +2973,10 @@ class KanbanTicketTool(BaseTool):
         has_board_hint = bool(target_board_name or target_board_id or board_name or board_id or str(text or "").strip())
         if not ticket_id or (not lane_name and not has_board_hint):
             return missing_move_ticket_params_error(ticket_id, lane_name, text)
-        if lane_name:
-            from distr.core.kanban.lifecycle import require_automation_lane
+        from distr.core.kanban.lane_history import is_complete_lane_name, record_lane_change
 
-            try:
-                require_automation_lane(lane_name)
-            except ValueError:
-                return voice_then_reference(
-                    "That ticket is ready for your acceptance in QA.",
-                    "Only you can move a QA ticket to Complete. Open the board and make the final move there.",
-                )
+        if is_complete_lane_name(lane_name):
+            return _human_acceptance_required()
         explicit_board_id = target_board_id or board_id
         explicit_board_name = (target_board_name or board_name or "").strip()
         from distr.core.db.kanban import KanbanTicket, KanbanLane
@@ -3017,7 +3028,7 @@ class KanbanTicketTool(BaseTool):
                 if not target_board:
                     target_board = old_board
 
-            if not target_board:
+            if not target_board or target_board.archived or target_board.source != "database":
                 return voice_then_reference(
                     "I could not find the destination board.",
                     f"Destination board not found: {explicit_board_name or explicit_board_id}",
@@ -3039,17 +3050,17 @@ class KanbanTicketTool(BaseTool):
                     except Exception:
                         preferred_lane = ""
                 if preferred_lane:
-                    new_lane = s.query(KanbanLane).filter(
-                        KanbanLane.board_id == target_board_id,
-                        KanbanLane.name.ilike(f"%{preferred_lane}%")
-                    ).first()
+                    new_lane = resolve_lane_on_board(s, target_board_id, preferred_lane)
+                    if new_lane and is_complete_lane_name(new_lane.name):
+                        new_lane = None
                 if not new_lane:
-                    new_lane = (
+                    candidates = (
                         s.query(KanbanLane)
                         .filter_by(board_id=target_board_id)
-                        .order_by(KanbanLane.position)
-                        .first()
+                        .order_by(KanbanLane.position, KanbanLane.id)
+                        .all()
                     )
+                    new_lane = next((lane for lane in candidates if not is_complete_lane_name(lane.name)), None)
 
             if not new_lane:
                 lanes = s.query(KanbanLane).filter_by(board_id=target_board_id).order_by(KanbanLane.position).all()
@@ -3058,6 +3069,8 @@ class KanbanTicketTool(BaseTool):
                     "That destination lane did not match any lane on that board.",
                     f"Lane '{lane_name}' not found on board '{target_board.name}'. Available: {available}",
                 )
+            if is_complete_lane_name(new_lane.name):
+                return _human_acceptance_required()
 
             if old_board and target_board_id != old_board_id:
                 if not t.linked_project_id or t.linked_project_id == old_board.default_project_id:
@@ -3076,11 +3089,10 @@ class KanbanTicketTool(BaseTool):
             max_pos = max(lane_positions, default=-1)
             old_lane_name = old_lane.name if old_lane else "unknown"
             if int(t.lane_id or 0) != int(new_lane.id):
-                from distr.core.kanban.lane_history import record_lane_change
                 record_lane_change(
                     s, int(t.id),
                     from_lane=old_lane_name if old_lane else None, to_lane=new_lane.name,
-                    actor="tool", reason="tool_move", source="kanban_ticket_tool",
+                    actor="tool", reason="tool_move", source="kanban_ticket_tool", publish_change=False,
                 )
             t.lane_id = new_lane.id
             t.position = max_pos + 1
@@ -3088,6 +3100,7 @@ class KanbanTicketTool(BaseTool):
             old_board_name = old_board.name if old_board else "unknown"
             moved_lane_name = new_lane.name
             moved_board_name = target_board.name
+        self._publish_ticket_move(ticket_id, old_board_id, target_board_id)
         return voice_then_reference(
             f"I moved that ticket to {moved_board_name}, in {moved_lane_name}.",
             (

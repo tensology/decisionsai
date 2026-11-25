@@ -175,7 +175,12 @@ class EventHandlerMixin:
                         'transcription_for_action_name', 'set_action_name'):
             self._evt_actions(event, data)
 
-        # --- Workflows (websocket refresh) ---
+        # --- Board and workflow updates ---
+        elif event == 'kanban_ticket_moved':
+            from distr.core.kanban.realtime import publish_ticket_move
+
+            publish_ticket_move(**data)
+
         elif event == 'step_runner_updated':
             try:
                 from distr.gui.web.workflow_events import increment_workflow_updated

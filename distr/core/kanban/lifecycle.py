@@ -80,7 +80,9 @@ def require_automation_lane(lane_name: str) -> str:
     boundary before it writes a ticket directly.
     """
     target_name = str(lane_name or "").strip()
-    if target_name.lower() == DELIVERY_DONE_LANE.lower():
+    from distr.core.kanban.lane_history import is_complete_lane_name
+
+    if is_complete_lane_name(target_name):
         raise ValueError("Only a human may move a QA ticket to Complete")
     return target_name
 

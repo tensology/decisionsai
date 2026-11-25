@@ -1,4 +1,5 @@
 import contextlib
+from queue import Queue
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -69,7 +70,7 @@ def _memory_session(monkeypatch):
         finally:
             session.close()
 
-    monkeypatch.setattr("distr.core.db.get_session", get_session)
+    monkeypatch.setattr(KanbanTicketTool, "_get_session", lambda self: get_session())
     return get_session
 
 
@@ -84,20 +85,30 @@ def test_move_ticket_text_form_and_split_calls(monkeypatch):
         session.add_all([backlog, qa])
         session.flush()
         ticket = KanbanTicket(lane_id=backlog.id, title="E2E move me (safe to delete)", position=0)
-        session.add(ticket)
+        other = KanbanTicket(lane_id=backlog.id, title="Earlier ticket", position=1)
+        session.add_all([ticket, other])
         session.flush()
-        ids = {"ticket": int(ticket.id), "qa": int(qa.id)}
+        ids = {"ticket": ticket.id, "other": other.id, "qa": qa.id, "board": board.id, "backlog": backlog.id}
 
-    tool = KanbanTicketTool()
-    missing = tool._run(action="move_ticket", ticket_id=ids["ticket"], lane_name="", text="")
+    queue = Queue()
+    tool = KanbanTicketTool(event_queue=queue)
+    missing = tool._run(action="move_ticket", ticket_id=ids["other"], lane_name="", text="")
     assert "ticket_id=" in missing and "lane_name=" in missing
     assert "same call" in missing.lower()
 
     moved = tool._run(action="move_ticket", text=f"move #{ids['ticket']} to QA")
     assert "Moved ticket" in moved or "moved" in moved.lower()
+    assert queue.get_nowait() == ("kanban_ticket_moved", {
+        "ticket_id": ids["ticket"],
+        "source_board_id": ids["board"],
+        "target_board_id": ids["board"],
+    })
+    assert "lane_name=(missing)" in tool._run(action="move_ticket", ticket_id=ids["other"])
+    assert queue.empty()
     with get_session() as session:
         row = session.get(KanbanTicket, ids["ticket"])
         assert int(row.lane_id) == ids["qa"]
+        assert session.get(KanbanTicket, ids["other"]).lane_id == ids["backlog"]
 
 
 def test_move_ticket_accepts_fuzzy_lane_and_split_followup(monkeypatch):

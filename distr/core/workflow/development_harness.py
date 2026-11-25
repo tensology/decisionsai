@@ -339,7 +339,12 @@ def _audit_only_request(prompt: str) -> bool:
     text = re.sub(r"\s+", " ", str(prompt or "").split('\n\nRetained proposal conversation evidence', 1)[0]).strip().lower()
     if re.search(r'\b(?:audit[ -]only|review[ -]only|strictly read[ -]only)\b', text):
         return True
-    if re.match(r"^(?:(?:please|can you|could you|ok)[, ]+)*(?:fix|implement|build|add|change|deploy)\b", text):
+    if re.match(
+        r"^(?:(?:please|can you|could you|ok)[, ]+)*"
+        r"(?:fix|implement|build|add|change|deploy|update|edit|remove|replace|correct|revise|"
+        r"carry out [^.!?]{0,100}\bcorrections)\b",
+        text,
+    ):
         return False
     if re.search(r"\b(?:audit[ -]only|review[ -]only|read[ -]only|do not (?:make fixes|edit|modify|change)|don't (?:make fixes|edit|modify|change))\b", text):
         return True
@@ -2930,11 +2935,20 @@ async def _run_execution(
 
 
 def _owned_automation_schedule_from_prompt(prompt: str, current: dict[str, Any]) -> dict[str, Any] | None:
-    lowered = str(prompt or "").strip().lower()
-    if not re.search(r"\b(change|set|make|schedule|run)\b", lowered):
+    text = str(prompt or "").strip().lower()
+    prefix = re.match(
+        r"^(?:please\s+)?(?:(?:change|set|make)\s+"
+        r"(?:(?:the|this|its)\s+)?(?:schedule|run time|it)\s+(?:to|for)\s+"
+        r"|(?:run|schedule)\s+(?:it\s+)?(?=(?:every|once|hourly|daily|weekly|monthly|weekday|weekdays|at|on)\b))",
+        text,
+    )
+    if not prefix:
+        return None
+    lowered = text[prefix.end():].rstrip(".!")
+    if re.search(r"[\n.!?;]", lowered):
         return None
     time_value = str(current.get("time") or "09:00")
-    match = re.search(r"\b(?:at|to)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", lowered)
+    match = re.search(r"(?:\bat\s+|^)(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", lowered)
     if match:
         hour = int(match.group(1))
         minute = int(match.group(2) or 0)
@@ -3015,13 +3029,20 @@ def _handle_owned_automation_control(
     if not automation_id:
         return None
     from distr.core.automation.store import delete_automation, get_automation, update_automation
-    from distr.core.chat_turns import latest_active_turn_id
+    from distr.core.chat_turns import complete_turn, latest_active_turn_id
 
     automation = get_automation(automation_id)
     if not automation:
         return None
     lowered = str(prompt or "").strip().lower()
     current_turn_id = int(latest_active_turn_id(chat_id) or 0)
+
+    def reply(message: str) -> dict[str, str]:
+        _write_response(chat_id, current_turn_id or None, message)
+        if current_turn_id:
+            complete_turn(chat_id, turn_id=current_turn_id, display_text=message)
+        return {"message": message}
+
     with get_session() as db:
         root = db.get(Chat, int(chat_id))
         params = _chat_params(root.params) if root is not None else {}
@@ -3054,8 +3075,7 @@ def _handle_owned_automation_control(
         pending_valid
         and current_turn_id > int(pending.get("requested_turn_id") or 0)
         and (
-            lowered in {"yes", "confirm", "confirmed", "confirm delete", "yes delete it"}
-            or re.search(r"\b(confirm|yes)\b.*\b(delete|remove)\b", lowered)
+            re.fullmatch(r"(?:yes|confirm(?:ed)?)(?:[, ]+(?:delete|remove)(?:\s+(?:it|(?:this|the) (?:automation|schedule|scheduled task)))?)?[.!]?", lowered)
         )
     )
     if confirms_pending:
@@ -3075,16 +3095,21 @@ def _handle_owned_automation_control(
         )
         clear_pending_confirmation()
         if rejected:
-            ChatService.append_assistant_notice(chat_id, "Deletion cancelled. This scheduled task is unchanged.")
             return {
                 "status": "completed",
                 "direct": True,
                 "execution_mode": "automation_control",
                 "automation_control": "delete_cancelled",
                 "automation_id": automation_id,
+                **reply("Deletion cancelled. The scheduled task is still available."),
             }
-    target_words = bool(re.search(r"\b(schedule|automation|scheduled task)\b", lowered))
-    if target_words and re.search(r"\b(delete|remove)\b", lowered):
+    control = re.fullmatch(
+        r"(?:please\s+)?(delete|remove|pause|resume|unpause)\s+"
+        r"(?:(?:this|the|my)\s+)?(?:schedule|automation|scheduled task)[.!]?",
+        lowered,
+    )
+    action = control.group(1) if control else ""
+    if action in {"delete", "remove"}:
         with get_session() as db:
             root = db.get(Chat, int(chat_id))
             if root is None:
@@ -3098,31 +3123,31 @@ def _handle_owned_automation_control(
             root.params = json.dumps(params, ensure_ascii=False, default=str)
             db.commit()
         message = "Please confirm in a new message that you want to delete this scheduled task and its thread."
-        ChatService.append_assistant_notice(chat_id, message)
         return {
             "status": "waiting",
             "direct": True,
             "execution_mode": "automation_control",
             "automation_control": "delete_confirmation",
             "automation_id": automation_id,
+            **reply(message),
         }
-    if target_words and "pause" in lowered:
+    if action == "pause":
         updated = update_automation(automation_id, status="paused")
-        ChatService.append_assistant_notice(chat_id, "This scheduled task is paused.")
-        return {"status": "completed", "direct": True, "execution_mode": "automation_control", "automation": updated}
-    if target_words and re.search(r"\b(resume|unpause)\b", lowered):
+        return {"status": "completed", "direct": True, "execution_mode": "automation_control",
+                "automation": updated, **reply("This scheduled task is paused.")}
+    if action in {"resume", "unpause"}:
         updated = update_automation(automation_id, status="active")
-        ChatService.append_assistant_notice(chat_id, "This scheduled task is active again.")
-        return {"status": "completed", "direct": True, "execution_mode": "automation_control", "automation": updated}
-    if re.search(r"\brun\s+(?:(?:it|this\s+(?:schedule|automation|task))\s+)?now\b", lowered):
+        return {"status": "completed", "direct": True, "execution_mode": "automation_control",
+                "automation": updated, **reply("This scheduled task is active again.")}
+    if re.fullmatch(r"(?:please\s+)?run\s+(?:(?:it|this\s+(?:schedule|automation|task))\s+)?now[.!]?", lowered):
         from distr.core.automation_orchestrator import dispatch_automation_to_current_chat
 
         return dispatch_automation_to_current_chat(automation, manual=True)
     schedule = _owned_automation_schedule_from_prompt(prompt, automation.get("schedule") or {})
     if schedule is not None:
         updated = update_automation(automation_id, schedule=schedule)
-        ChatService.append_assistant_notice(chat_id, "The schedule has been updated.")
-        return {"status": "completed", "direct": True, "execution_mode": "automation_control", "automation": updated}
+        return {"status": "completed", "direct": True, "execution_mode": "automation_control",
+                "automation": updated, **reply("The schedule has been updated.")}
     return None
 
 

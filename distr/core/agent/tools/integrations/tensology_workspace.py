@@ -43,6 +43,7 @@ class TensologyWorkspaceTool(BaseTool):
         "explicitly instructed sending the exact content or approved a recipient, subject, and body preview; "
         "otherwise save a draft and ask. Use read_latest_mail for the complete body of the newest matching message; "
         "set params.include_thread=true when the user asks for the complete conversation thread. "
+        "For a reply draft, set params.inReplyTo to the original message's Message-ID returned by read_mail. "
         "Use download_mail_attachment to save a Mailshot attachment locally (params: message_id, attachment_id, "
         "optional filename and destination_dir; default is ~/Downloads)."
     )

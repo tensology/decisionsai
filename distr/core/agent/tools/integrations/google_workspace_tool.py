@@ -78,7 +78,7 @@ def _resolve_google_workspace_action(
         return "read_email"
 
     if merged.get("to") and merged.get("body"):
-        return "send_email"
+        return None  # A recipient and body do not distinguish a draft from a send.
 
     if merged.get("draft_id"):
         return "get_draft"
@@ -162,7 +162,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         "- 'download_email_attachment': Download one Gmail attachment to disk (default ~/Downloads). (params: message_id, attachment_id, filename; or message_id + filename to match). Optional destination_dir.\n"
         "- 'download_email_attachments': Download every attachment on an email to disk (default ~/Downloads). (params: message_id, optional destination_dir)\n"
         "- 'send_email': Send email (params: to, subject, body, body_type, cc, bcc)\n"
-        "- 'draft_email': Create draft email in Gmail (params: to (required), subject (optional), body (required), body_type (optional, default='plain')). Example: action='draft_email', params={'to': 'bob@bob.com', 'subject': 'Thank you', 'body': 'Thank you for the pineapples.'}\n"
+        "- 'draft_email': Create an unsent draft in Gmail (params: to, subject, body, optional body_type). For a reply, pass message_id from the original email to keep the draft in its thread.\n"
         "- 'list_drafts': List all draft emails (params: max_results, default=10). Returns list of drafts with details including draft_id.\n"
         "- 'get_draft': Get a specific draft by draft_id (params: draft_id). Returns full draft details including body.\n"
         "- 'list_emails_by_type': List emails by type (params: email_type, max_results). Types: 'sent', 'drafts', 'starred', 'important', 'unread', 'read', 'trash', 'spam'.\n"
@@ -417,7 +417,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                 list(kwargs.keys()),
             )
             return (
-                "Error: action is required. For a single calendar entry use "
+                "Error: action is required. Use draft_email for an unsent draft or send_email for an authorized send. For a single calendar entry use "
                 "action='create_calendar_event' with summary, start_time, and end_time "
                 "(ISO 8601). Example: "
                 '{"action":"create_calendar_event","params":{"summary":"Visit Louis",'
@@ -483,6 +483,10 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                     f"Matched {len(messages)} email(s); reading the most recent match.\n"
                     f"Message ID: {email.get('id', '')}\n"
                     f"From: {email.get('from', 'Unknown')}\n"
+                )
+                if email.get("reply_to"):
+                    result += f"Reply-To: {email['reply_to']}\n"
+                result += (
                     f"To: {email.get('to', 'Unknown')}\n"
                     f"Subject: {email.get('subject', 'No Subject')}\n"
                     f"Date: {email.get('date', '')}\n\n"
@@ -501,6 +505,8 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                     return "Error: Could not retrieve email"
                 result = f"Message ID: {email.get('id', message_id)}\n"
                 result += f"From: {email.get('from', 'Unknown')}\n"
+                if email.get("reply_to"):
+                    result += f"Reply-To: {email['reply_to']}\n"
                 result += f"To: {email.get('to', 'Unknown')}\n"
                 result += f"Subject: {email.get('subject', 'No Subject')}\n"
                 result += f"Date: {email.get('date', '')}\n\n"
@@ -594,7 +600,10 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                 if not body:
                     logger.warning("Draft email: body is empty, but proceeding anyway")
                 
-                draft_id = self.connector.draft_email(to, subject, body, body_type)
+                if params.get("message_id"):
+                    draft_id = self.connector.draft_email(to, subject, body, body_type, message_id=params["message_id"])
+                else:
+                    draft_id = self.connector.draft_email(to, subject, body, body_type)
                 if draft_id:
                     logger.info(f"Draft email created successfully: ID={draft_id}")
                     return f"Draft created successfully (ID: {draft_id})"

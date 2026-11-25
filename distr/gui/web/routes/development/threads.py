@@ -680,6 +680,11 @@ def register_routes(router, templates):
                         f"Execution could not start: {execution['error']}",
                     )
                 return JSONResponse({"detail": execution["error"], **({"code": code} if code else {})}, status_code=409)
+            if isinstance(execution, dict) and execution.get("execution_mode") == "automation_control":
+                return JSONResponse({
+                    "success": True, "started": False, "turn_id": turn_id,
+                    "execution": execution, "message": execution.get("message", ""),
+                })
             from distr.core.workflow.development_control import resume_thread_time
 
             track_time = True

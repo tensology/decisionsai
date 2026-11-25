@@ -1,9 +1,9 @@
 @import './shell.css?v=20261123-menu-consistency';
 @import './shared/components.css?v=20261102-verify';
 @import './threads/styles.css?v=20261120-workflow-thread-result';
-@import './sidebar/styles.css?v=20261123-sidebar-read-tooltip';
+@import './sidebar/styles.css?v=20261125-jira-badge';
 @import './boards/styles.css?v=20261111-nav-apply-chrome7';
-@import './planning/styles.css?v=20261120-wfplan';
+@import './planning/styles.css?v=20261125-canvas-workspace';
 @import './incoming/styles.css?v=20261118-message-copy';
 @import './automations/styles.css?v=20261113-calendar-page1';
 @import './workflows/styles.css?v=20261120-wfplan';

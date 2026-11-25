@@ -65,7 +65,8 @@ def _no_overflow(page):
 def _surface_ok(page):
     g = page.evaluate("""() => { const s = document.querySelector('#plan-preview.plan-canvas-surface');
         return { callout: Boolean(s.querySelector(':scope > .plan-canvas-callout')), first: s.firstElementChild?.classList.contains('plan-canvas-callout'),
-                 paneBottom: document.querySelector('#plan-artifacts').getBoundingClientRect().bottom, bottom: s.getBoundingClientRect().bottom,
+                 paneBottom: document.querySelector('#plan-artifacts').getBoundingClientRect().bottom,
+                 bottom: (document.querySelector('.plan-preview-dock') || s).getBoundingClientRect().bottom,
                  panels: document.querySelectorAll('.plan-conversation').length }; }""")
     assert not g["callout"], g                                                # summary banner retired; quiet map status instead
     assert -1 <= g["paneBottom"] - g["bottom"] <= 24, g                      # footer flush, surface fills the pane
@@ -148,9 +149,9 @@ def test_description_keeps_edits_made_during_save(page, w, h):
     assert 'Sorted by name' not in backend.saves[-1]['content']
     page.locator('#plan-preview').evaluate('node => { node.scrollTop = node.scrollHeight; }')
     assert status.evaluate('''node => {
-        const dock = document.querySelector('.plan-pinned-dock').getBoundingClientRect();
+        const dock = document.querySelector('.plan-preview-dock, .plan-pinned-dock').getBoundingClientRect();
         return node.getBoundingClientRect().bottom <= dock.top - 4;
-    }'''), 'The save status must scroll clear of the pinned edit dock'
+    }'''), 'The save status must scroll clear of the edit dock'
     OUT.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(OUT / f'description-edit-during-save-{w}.png'))
 

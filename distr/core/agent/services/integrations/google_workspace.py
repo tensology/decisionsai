@@ -722,38 +722,24 @@ class GoogleWorkspaceConnector:
             logger.error(f"Failed to send email: {e}", exc_info=True)
             return False
     
-    def draft_email(self, to: str, subject: str, body: str, body_type: str = 'plain') -> Optional[str]:
-        """Create draft email"""
+    def draft_email(self, to: str, subject: str, body: str, body_type: str = 'plain', *,
+                    message_id: Optional[str] = None) -> Optional[str]:
+        """Create an unsent draft, optionally linked to a verified original message."""
         if not self._ensure_valid_token():
             return None
         
         try:
-            # Create message exactly like send_email for consistency
-            message = MIMEText(body, body_type)
-            message['to'] = to
-            message['subject'] = subject
-            # Gmail API will automatically set 'From' based on authenticated user
-            
-            # Encode message - use same method as send_email
-            raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
-            
-            # Gmail API expects base64url encoding without padding for drafts
-            # But we should keep it consistent with send_email which works
-            # Actually, let's not strip padding - send_email doesn't strip it
-            # raw_message = raw_message.rstrip('=')
-            
+            if message_id:
+                draft_message = self.prepare_email_reply(message_id, body, body_type, to=to, require_reference=True)
+            else:
+                message = MIMEText(body, body_type)
+                message['to'] = to
+                message['subject'] = subject
+                draft_message = {'raw': base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')}
+
             url = "https://gmail.googleapis.com/gmail/v1/users/me/drafts"
-            data = {
-                'message': {
-                    'raw': raw_message
-                }
-            }
-            
             logger.debug(f"Creating draft: to={to}, subject={subject}, body_length={len(body)}")
-            logger.debug(f"Draft raw message length: {len(raw_message)}")
-            
-            # Make request with better error handling
-            result = self._make_request('POST', url, json=data)
+            result = self._make_request('POST', url, json={'message': draft_message})
             
             if result and 'id' in result:
                 draft_id = result.get('id')

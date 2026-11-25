@@ -1,5 +1,6 @@
-import { parseWireframe, renderWireframe, explainWireframeDiagnostics } from './wireframe.js?v=20261119-page-designer';
-import { mountPageDesigner } from './page-designer.js?v=20261120-wfplan';
+import { parseWireframe, renderWireframe, explainWireframeDiagnostics } from './wireframe.js?v=20261125-canvas-workspace';
+import { mountPageDesigner } from './page-designer.js?v=20261125-canvas-workspace';
+import { endpointExample, HTTP_METHODS, openEndpointEditor, saveEndpointExample } from './endpoint-editor.js?v=20261125-canvas-workspace';
 import { createPlanPolling } from './polling.js';
 import { buildResultsHtml } from './build-results.js';
 import { layoutConnectedSitemap, pageAccessGroup, sitemapRouteKey, SITEMAP_ACCESS_GROUPS } from './sitemap.js?v=20261119-preview-routes';
@@ -11,9 +12,10 @@ import { DOCUMENT_ORDER, orderDocuments, documentLabel, openDocument, moveTab, n
 import { userDocumentsEnabled, USER_DOCUMENT_TYPE } from './documents-config.js?v=20261103-ifaces3';
 import { mountErdItem, isErdMermaid, erdIsDirty } from './erd/mount.js?v=20261112-readable-data';
 import { availableBottom, fillToWindow, createCallout, advancedButton, pinDock, openDrawer } from './canvas-chrome.js?v=20261103-ifaces3';
-import { readSidecar, nodeIds, writeSidecar, slugId } from './flow-meta.js?v=20261113-rebuild-map15';
-import { buildIfaceModel, newScreenSource, SHAPE_KIND, LANES } from './iface-model.js?v=20261119-journey-links';
-import { createIfaceCanvas } from './iface-canvas.js?v=20261119-journey-links';
+import { readSidecar, nodeIds, writeSidecar, slugId, ensureScreenId, updateNodeMeta } from './flow-meta.js?v=20261113-rebuild-map15';
+import { buildIfaceModel, focusIfaceJourney, newScreenSource, SHAPE_KIND, LANES } from './iface-model.js?v=20261125-canvas';
+import { createIfaceCanvas } from './iface-canvas.js?v=20261125-canvas-workspace';
+import { mountPagePicker } from './page-picker.js';
 import { decorateNode, nodeButton, openNodePopover, openNodePicker, closeNodePopover, warningsNotice } from './flow-nodes.js?v=20261113-rebuild-map15';
 import { rememberedRoute, rememberRoute, routeStore } from './route-memory.js?v=20261102-verify';
 import { chatHeaderHtml, chatStore, rememberChat, rememberedChat, pickActiveChat, validateImageFiles, rejectionMessage, isImageAsset, imageLabel } from './chat-header.js?v=20261113-rebuild-map15';
@@ -603,6 +605,9 @@ export function createPlanConversation(host, root) {
         root.querySelector('#plan-attachment').onchange = (event) => {
             const files = [...event.target.files];
             event.target.value = '';
+            if (files.length && root.querySelector('[data-canvas-workspace]:not([data-show-project-panels])')) {
+                root.querySelector('[data-project-panels]')?.click();
+            }
             upload(session, files);
         };
         planBar().querySelectorAll('[data-plan-tab]').forEach((button) => {
@@ -966,7 +971,7 @@ export function createPlanConversation(host, root) {
             for (const child of node?.children || []) {
                 if (flatten.length >= 12) return;
                 flatten.push({ type: child.type || 'text', depth });
-                if (depth < 1) walk(child, depth + 1);
+                if (depth < 3) walk(child, depth + 1);
             }
         };
         walk(screen);
@@ -1297,6 +1302,34 @@ export function createPlanConversation(host, root) {
         session.previewCleanup?.();
         session.previewCleanup = null;
         const panel = root.querySelector('#plan-artifacts');
+        const body = panel.closest('.plan-detail-body');
+        const panelsKey = `decisions.plan.project-panels.${session.scope}`;
+        if (session.showProjectPanels == null) {
+            try { session.showProjectPanels = tabStore()?.getItem(panelsKey) === '1'; }
+            catch { session.showProjectPanels = false; }
+        }
+        body.toggleAttribute('data-canvas-workspace', session.tab === 'wireframes');
+        body.toggleAttribute('data-show-project-panels', Boolean(session.showProjectPanels));
+        if (ifaceActions) {
+            let toggle = ifaceActions.querySelector('[data-project-panels]');
+            if (!toggle) {
+                toggle = document.createElement('button');
+                toggle.type = 'button';
+                toggle.className = 'header-button iface-workspace-toggle';
+                toggle.dataset.projectPanels = '';
+                ifaceActions.append(toggle);
+            }
+            toggle.textContent = session.showProjectPanels ? 'Focus canvas' : 'Project panels';
+            toggle.setAttribute('aria-pressed', String(Boolean(session.showProjectPanels)));
+            toggle.onclick = () => {
+                session.showProjectPanels = !session.showProjectPanels;
+                try { tabStore()?.setItem(panelsKey, session.showProjectPanels ? '1' : '0'); } catch { /* tab storage unavailable */ }
+                body.toggleAttribute('data-show-project-panels', session.showProjectPanels);
+                toggle.textContent = session.showProjectPanels ? 'Focus canvas' : 'Project panels';
+                toggle.setAttribute('aria-pressed', String(session.showProjectPanels));
+                requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+            };
+        }
         // Artifacts are always shown (the old show/hide toggle was removed in Round 16).
         panel.hidden = false;
         planBar().querySelectorAll('[data-plan-tab]').forEach(button => button.setAttribute('aria-pressed', String(session.tab === button.dataset.planTab)));
@@ -1353,7 +1386,10 @@ export function createPlanConversation(host, root) {
             };
             session.previewCleanup?.();
             session.previewCleanup = null;
-            preview.innerHTML = `<div class="plan-canvas-empty"><p><strong>No ${esc(TABS[session.tab].label.toLowerCase())} yet</strong></p><p class="plan-empty-hint">${esc(tips[session.tab] || 'Ask Plan to fill this section.')}</p></div>`;
+            preview.innerHTML = `<div class="plan-canvas-empty"><p><strong>No ${esc(TABS[session.tab].label.toLowerCase())} yet</strong></p><p class="plan-empty-hint">${esc(tips[session.tab] || 'Ask Plan to fill this section.')}</p>
+                ${session.tab === 'wireframes' ? '<div class="plan-empty-actions"><button type="button" class="header-button primary" data-first-page>Add page</button><button type="button" class="header-button" data-first-endpoint>Add endpoint</button></div>' : ''}</div>`;
+            preview.querySelector('[data-first-page]')?.addEventListener('click', e => addPageDrawer(session, null, { opener: e.currentTarget }));
+            preview.querySelector('[data-first-endpoint]')?.addEventListener('click', e => addPageDrawer(session, null, { endpoint: true, opener: e.currentTarget }));
             if (session.tab === 'wireframes') session.previewCleanup = interfacesSurface(preview, '0 pages, 0 documents', 'Ask Plan to draft a page outline, or rescan the project to fill the sitemap.');
             parkIfaceActions(session, preview);
             return;
@@ -1387,6 +1423,7 @@ export function createPlanConversation(host, root) {
                 const divider = document.createElement('span'); divider.className = 'erd-dock-divider'; divider.setAttribute('aria-hidden', 'true');
                 ifaceTools.append(
                     mk('erd-dock-button erd-dock-wide', 'Add page', 'Add page', `${ico('M8 3v10M3 8h10')}<span class="erd-dock-label">Add page</span>`, (e) => addPageDrawer(session, item, { opener: e.currentTarget })),
+                    mk('erd-dock-button', 'Add endpoint', 'Add endpoint', ico('M5.5 4 2 8l3.5 4m5-8L14 8l-3.5 4M9 3 7 13'), (e) => addPageDrawer(session, item, { endpoint: true, opener: e.currentTarget })),
                     divider,
                     mk('erd-dock-button', 'Undo', 'Undo', ico('M6 4 3 7l3 3M3.5 7H10a3 3 0 0 1 0 6H8'), () => ifaceStep(session, item, 'undo'), !h.undo.length),
                     mk('erd-dock-button', 'Redo', 'Redo', ico('M10 4l3 3-3 3M12.5 7H6a3 3 0 0 0 0 6h2'), () => ifaceStep(session, item, 'redo'), !h.redo.length));
@@ -1429,7 +1466,7 @@ export function createPlanConversation(host, root) {
                         <button type="button" data-layer="development" aria-pressed="${layer === 'development'}">Development</button>
                        </div>`;
                     toolbar.innerHTML = `${openId ? '<button type="button" class="iface-back" data-iface-back aria-label="Back to all pages">← All pages</button>' : ''}
-                        ${openId && session.ifacePicker?.[item.id]?.hasSelection ? '<button type="button" data-iface-page-results>Back to results</button>' : ''}
+                        ${layer !== 'design' && openId && session.ifacePicker?.[item.id]?.hasSelection ? '<button type="button" data-iface-page-results>Back to results</button>' : ''}
                         ${layerButtons}${layer === 'preview' ? `<button type="button" class="plan-preview-mode" data-preview-mode="${session.previewModes[item.id]}" title="Switch the preview rendering">${session.previewModes[item.id] === 'html' ? 'Show stencil' : 'Show interactive'}</button>` : ''}`;
                     panel.insertBefore(toolbar, preview);
                     const ctx = nodeCtx(session, item);
@@ -1489,6 +1526,24 @@ export function createPlanConversation(host, root) {
                 }
 
                 if (page && layer === 'design') {
+                    const pageToolbar = panel.querySelector('.plan-preview-toolbar');
+                    if (ifaceTools && pageToolbar) {
+                        const pageOptions = document.createElement('div');
+                        pageOptions.className = 'plan-design-page-options';
+                        pageOptions.append(...ifaceTools.querySelectorAll('.plan-advanced-open, .plan-node-open'));
+                        const projectPanels = ifaceActions?.querySelector('[data-project-panels]');
+                        if (projectPanels) {
+                            const editorToggle = projectPanels.cloneNode(true);
+                            editorToggle.onclick = () => {
+                                projectPanels.click();
+                                editorToggle.textContent = projectPanels.textContent;
+                                editorToggle.setAttribute('aria-pressed', projectPanels.getAttribute('aria-pressed'));
+                            };
+                            pageOptions.append(editorToggle);
+                        }
+                        if (pageOptions.childElementCount) pageToolbar.append(pageOptions);
+                        ifaceTools.remove();
+                    }
                     const drafts = session.designerDrafts ||= {};
                     const draft = drafts[item.id] || { source: item.content, baseSource: item.content, revision: revisionOf(item) };
                     mountPageDesigner(preview, {
@@ -1572,30 +1627,29 @@ export function createPlanConversation(host, root) {
                     return;
                 }
 
-                const result = renderWireframe(item.content, item.title, page?.id, previewAssets);
+                const interactive = session.previewModes[item.id] === 'html';
+                const result = renderWireframe(item.content, item.title, page?.id, previewAssets, { interactive });
                 preview.innerHTML = `<div class="plan-wireframe-preview">${result.svg}</div>${diagnosticsHtml(result.diagnostics)}`;
-                if (session.previewModes[item.id] === 'html') {
+                if (interactive) {
                     const frame = document.createElement('iframe');
                     frame.title = page?.label || item.title || 'Page preview';
-                    // Wireframe HTML is generated from validated nodes with scripts disabled.
-                    // Keep raw HTML artifacts in the separate, opaque sandbox below.
-                    frame.setAttribute('sandbox', 'allow-same-origin');
+                    // The generated preview gets an opaque origin. Only its hash-pinned
+                    // navigation script may send messages back to this host.
+                    frame.setAttribute('sandbox', 'allow-scripts');
                     frame.referrerPolicy = 'no-referrer';
-                    frame.addEventListener('load', () => {
-                        const previewDocument = frame.contentDocument;
-                        if (!previewDocument || previewDocument.URL !== 'about:srcdoc') return;
-                        previewDocument.addEventListener('click', event => {
-                            const link = event.target.closest?.('a[data-preview-route]');
-                            if (!link) return;
-                            const route = sitemapRouteKey(link.dataset.previewRoute);
-                            if (!route) return;
-                            event.preventDefault();
-                            const matches = screens.filter(screen => sitemapRouteKey(screen.attrs.route) === route);
-                            if (matches.length !== 1 || matches[0].id === page?.id) return;
-                            openIfacePage(session, item, { screenId: matches[0].id });
-                            preview.querySelector('iframe')?.focus();
-                        });
-                    });
+                    const listen = event => {
+                        if (event.source !== frame.contentWindow || event.origin !== 'null' || event.data?.type !== 'decisions-plan-route'
+                            || typeof event.data.route !== 'string') return;
+                        const route = sitemapRouteKey(event.data.route);
+                        if (!route) return;
+                        const matches = screens.filter(screen => sitemapRouteKey(screen.attrs.route) === route);
+                        if (matches.length !== 1 || matches[0].id === page?.id) return;
+                        openIfacePage(session, item, { screenId: matches[0].id });
+                        preview.querySelector('iframe')?.focus();
+                    };
+                    const cleanup = session.previewCleanup;
+                    window.addEventListener('message', listen);
+                    session.previewCleanup = () => { window.removeEventListener('message', listen); cleanup?.(); };
                     frame.srcdoc = result.html;
                     preview.querySelector('.plan-wireframe-preview').replaceWith(frame);
                 }
@@ -1919,15 +1973,16 @@ export function createPlanConversation(host, root) {
         }
         renderArtifacts(session);
     }
-    function addPageDrawer(session, item, { label = '', route = '', opener = document.activeElement } = {}) {
-        const { drawer, close } = openDrawer({ title: label ? 'Create page outline' : 'Add page', opener, className: 'iface-add-drawer', html: `
+    function addPageDrawer(session, item, { label = '', route = '', endpoint = false, opener = document.activeElement } = {}) {
+        const title = endpoint ? 'Add endpoint' : (label ? 'Create page outline' : 'Add page');
+        const { drawer, close } = openDrawer({ title, opener, className: 'iface-add-drawer', html: `
             <form class="iface-add-form">
-                <label>Page name<input name="label" required maxlength="80" value="${esc(label)}" autocomplete="off"></label>
-                <label>Route<input name="route" maxlength="200" placeholder="/example" value="${esc(route)}" autocomplete="off"></label>
-                <p class="plan-empty-hint">Adds a page outline to this Interfaces item (a new revision; the server validates it).</p>
+                <label>${endpoint ? 'Endpoint name' : 'Page name'}<input name="label" required maxlength="80" value="${esc(label)}" autocomplete="off"></label>
+                <label>Route<input name="route" ${endpoint ? 'required' : ''} maxlength="200" placeholder="${endpoint ? '/api/items' : '/example'}" value="${esc(route)}" autocomplete="off"></label>
+                ${endpoint ? `<label>Method<select name="method">${HTTP_METHODS.map(method => `<option>${method}</option>`).join('')}</select></label>` : ''}
                 <footer class="plan-drawer-foot"><p class="plan-drawer-error" role="alert" hidden></p>
                     <button type="button" class="header-button plan-drawer-cancel">Cancel</button>
-                    <button type="submit" class="header-button primary">${label ? 'Create outline' : 'Add page'}</button></footer>
+                    <button type="submit" class="header-button primary">${label && !endpoint ? 'Create outline' : title}</button></footer>
             </form>` });
         const form = drawer.querySelector('form');
         const error = drawer.querySelector('.plan-drawer-error');
@@ -1941,15 +1996,29 @@ export function createPlanConversation(host, root) {
             submit.disabled = true;
             try {
                 let taken = [];
-                try { taken = (parseWireframe(item.content || '').screens || []).map((s) => s.attrs?.id).filter(Boolean); } catch { taken = []; }
+                try { taken = (parseWireframe(item?.content || '').screens || []).map((s) => s.attrs?.id).filter(Boolean); } catch { taken = []; }
                 const id = slugId(name, taken);
-                const sidecar = readSidecar(item.content || '', 'wire');
-                const body = (sidecar.error ? (item.content || '') : sidecar.body).replace(/\s+$/, '');
-                const added = `${body ? `${body}\n` : ''}${newScreenSource({ label: name, route: form.elements.route.value, id })}`;
+                const sidecar = readSidecar(item?.content || '', 'wire');
+                const body = (sidecar.error ? (item?.content || '') : sidecar.body).replace(/\s+$/, '');
+                const route = form.elements.route.value.trim();
+                if (endpoint && !/^\/(?!\/)[^\s\\#]*$/.test(route)) throw new Error('Use a local endpoint route, such as /api/items.');
+                const source = endpoint
+                    ? `screen ${JSON.stringify(name)} id=${id} layer=ajax method=${form.elements.method.value} route=${JSON.stringify(route)}\n`
+                    : newScreenSource({ label: name, route, id });
+                const added = `${body ? `${body}\n` : ''}${source}`;
                 const content = !sidecar.error && Object.keys(sidecar.nodes).length ? writeSidecar(added, 'wire', sidecar.nodes) : added;
+                if (!item) {
+                    const created = await api(path(session, '/items'), { method: 'POST', body: { item_type: 'wireframe', title: 'Interfaces', content_format: 'wire', content } });
+                    session.workspace.items = [...(session.workspace.items || []), created];
+                    session.selection.wireframes = created.id;
+                    close();
+                    if (current(session)) renderArtifacts(session);
+                    return;
+                }
                 let opened = false;
                 await applyPageSource(session, item, content, () => {
-                    if (!label || !current(session) || session.tab !== 'wireframes' || selected(session) !== item
+                    if (endpoint) delete (session.openPage || {})[item.id];
+                    if (!label || endpoint || !current(session) || session.tab !== 'wireframes' || selected(session) !== item
                         || !drawer.closest('.plan-drawer-backdrop.open')) return;
                     const screen = parseWireframe(item.content).screens.find((entry) => entry.attrs.id === id);
                     if (!screen) return;
@@ -1963,7 +2032,7 @@ export function createPlanConversation(host, root) {
                     root.querySelector('[data-iface-back]')?.focus({ preventScroll: true });
                 }
             } catch (e) {
-                error.textContent = e?.message || 'Could not add the page.';
+                error.textContent = e?.message || (endpoint ? 'Could not add the endpoint.' : 'Could not add the page.');
                 error.hidden = false;
                 submit.disabled = false;
             }
@@ -1991,8 +2060,10 @@ export function createPlanConversation(host, root) {
         }
         return `<h4 tabindex="-1">${esc(node.label)}</h4>
             ${node.route ? `<p class="iface-selected-route">${esc(node.route)}</p>` : ''}
-            ${hasOutlineItem || fromPicker ? `<div class="erd-panel-actions iface-panel-actions">
-                ${hasOutlineItem ? (node.screenId ? '<button type="button" class="header-button primary" data-iface-open>Open page</button><button type="button" class="header-button" data-iface-node>Name, id, shape…</button>'
+            ${hasOutlineItem || fromPicker || node.kind === 'endpoint' || outgoing.size || incoming.size ? `<div class="erd-panel-actions iface-panel-actions">
+                ${outgoing.size || incoming.size ? '<button type="button" class="header-button" data-iface-journey>Focus journey</button>' : ''}
+                ${node.kind === 'endpoint' ? '<button type="button" class="header-button primary" data-iface-open>Open endpoint</button>' : ''}
+                ${hasOutlineItem && node.kind !== 'endpoint' ? (node.screenId ? '<button type="button" class="header-button primary" data-iface-open>Open page</button><button type="button" class="header-button" data-iface-node>Name, id, shape…</button>'
                     : '<button type="button" class="header-button primary" data-iface-create>Create page outline</button>') : ''}
                 ${fromPicker ? '<button type="button" class="header-button" data-iface-results>Back to results</button>' : ''}
                 ${hasOutlineItem ? '<button type="button" class="header-button" data-iface-source>Source</button>' : ''}
@@ -2008,12 +2079,28 @@ export function createPlanConversation(host, root) {
                 ${row('View', node.view)}${row('Status', node.status)}${row('Method', node.method)}${row('Screenshot', node.lane === 'ajax' || node.lane === 'guidance' ? '' : (node.shot?.image ? '' : node.shot?.reason || (node.shot ? '' : 'none saved')))}</dl>
             ${node.note ? `<p class="iface-note">${esc(node.note)}</p>` : ''}`;
     }
-    function openIfacePage(session, item, node) {
-        if (!node?.screenId) return false;
+    function openIfacePage(session, item, node, layer = 'preview') {
+        if (node?.kind === 'endpoint') {
+            const source = item?.content || '';
+            const screen = node.screenId && parseWireframe(source).sourceScreens.find(entry => String(entry.id) === node.screenId);
+            let revision = item && revisionOf(item);
+            openEndpointEditor({
+                label: node.label, route: screen?.attrs.route || node.route, method: node.method,
+                projectKey: session.workspace.project_id || session.id,
+                example: screen ? endpointExample(source, screen.line) : null,
+                onSave: screen ? async (example) => {
+                    if (revisionOf(item) !== revision) throw new Error('The stencil changed. Reopen the endpoint before saving.');
+                    await applyPageSource(session, item, saveEndpointExample(item.content, screen.line, example));
+                    revision = revisionOf(item);
+                } : null,
+            });
+            return true;
+        }
+        if (!item || !node?.screenId) return false;
         session.openPage ||= {};
         session.openPage[item.id] = node.screenId;
         session.pageLayers ||= {};
-        session.pageLayers[item.id] = 'preview';
+        session.pageLayers[item.id] = layer;
         renderArtifacts(session);
         return true;
     }
@@ -2032,9 +2119,19 @@ export function createPlanConversation(host, root) {
         const mapScreens = hasDiscoveredRoutes && content.includes('heading "No route table detected"')
             ? screens.filter(screen => screen.label !== 'No routes found' || screen.attrs?.route)
             : screens;
-        const model = buildIfaceModel({ sitemap, screens: mapScreens, captures: pageCaptureFor(session.workspace), meta: readSidecar(content, 'wire').nodes, source: content });
+        const fullModel = buildIfaceModel({ sitemap, screens: mapScreens, captures: pageCaptureFor(session.workspace), meta: readSidecar(content, 'wire').nodes, source: content });
+        const journey = (session.ifaceJourney ||= {});
+        const pinnedJourney = journey[viewKey];
+        const matches = pinnedJourney && !fullModel.byKey.has(pinnedJourney.key)
+            ? fullModel.nodes.filter(node => node.route === pinnedJourney.route && node.method === pinnedJourney.method
+                && node.kind === pinnedJourney.kind && (node.route || node.label === pinnedJourney.label))
+            : [];
+        const anchor = matches.length === 1 ? matches[0].key : pinnedJourney?.key;
+        const model = focusIfaceJourney(fullModel, anchor);
+        const scoped = model !== fullModel;
+        const cameraKey = scoped ? `${viewKey}:${anchor}` : viewKey;
         if (!model.nodes.length) return false;
-        if (screens.length === 1 && mapScreens.length === 1 && model.nodes.length === 1) return false;
+        if (screens.length === 1 && mapScreens.length === 1 && model.nodes.length === 1 && model.nodes[0].kind !== 'endpoint') return false;
         if (item) (session.pages ||= {})[item.id] = null;
         const history = item ? ifaceHistory(session, item) : null;
         session.ifaceView ||= {}; session.ifaceSel ||= {};
@@ -2044,29 +2141,49 @@ export function createPlanConversation(host, root) {
         const ctx = item ? nodeCtx(session, item) : null;
         const pickerState = (session.ifacePicker ||= {})[viewKey] ||= {};
         const allLinks = session.ifaceAllLinks ||= {};
-        if (allLinks[viewKey] == null) allLinks[viewKey] = true;
+        if (allLinks[viewKey] == null) allLinks[viewKey] = false;
         const panelSource = item ? advancedButton({ title: 'Advanced · page source', text: () => item.content || '', onApply: (text) => applyPageSource(session, item, text) }) : null;
         ensureIfaceLayout(session);
         if (session.ifaceLayoutLoaded) session.ifaceLayoutMounted = true;
         const canvas = createIfaceCanvas({
             model, aspect: Math.min(2.4, Math.max(0.5, width / height)),
-            view: session.ifaceView[viewKey] || null, selectedKey: session.ifaceSel[viewKey] || null,
-            pinned: session.ifaceLayout || {},
+            view: session.ifaceView[cameraKey] || null, selectedKey: session.ifaceSel[viewKey] || null,
+            pinned: scoped ? {} : session.ifaceLayout || {},
             showAllLinks: allLinks[viewKey],
+            onAddAssets: () => root.querySelector('#plan-attachment')?.click(),
             onPin: (nodes) => {
+                if (scoped) return;
                 session.ifaceLayout = nodes;
                 api(path(session, '/interface-layout'), { method: 'PUT', body: { nodes } }).catch(() => {});
             },
+            onAddPage: (opener) => addPageDrawer(session, item, { opener }),
+            onAddEndpoint: (opener) => addPageDrawer(session, item, { endpoint: true, opener }),
             ...(item && {
                 canUndo: history.undo.length > 0, canRedo: history.redo.length > 0,
-                onAddPage: (opener) => addPageDrawer(session, item, { opener }),
+                onConnect: async (from, to) => {
+                    try {
+                        const target = byScreen.get(to.screenId), source = byScreen.get(from.screenId);
+                        if (!target || !source || item.content !== content) throw new Error('The outline changed. Open the map again before connecting pages.');
+                        const next = target.attrs.id ? { content, id: target.attrs.id } : ensureScreenId(content, target.line);
+                        const links = { ...from.links, [next.id]: from.links?.[next.id] || '' };
+                        const updated = updateNodeMeta(next.content, 'wire', { ...screenNode(source), patch: { links } });
+                        await applyPageSource(session, item, updated.content);
+                    } catch (error) { host.toast?.(error.message || 'Could not connect pages.', 'error'); }
+                },
                 onUndo: () => ifaceStep(session, item, 'undo'), onRedo: () => ifaceStep(session, item, 'redo'),
             }),
-            onViewChange: (view) => { session.ifaceView[viewKey] = view; },
+            onViewChange: (view) => { session.ifaceView[cameraKey] = view; },
             onSelect: (node) => { session.ifaceSel[viewKey] = node?.key || null; },
-            onOpen: (node) => { if (!openIfacePage(session, item, node)) canvas.select(node?.key, { focus: true }); },
+            onOpen: (node, layer) => { if (!openIfacePage(session, item, node, layer)) canvas.select(node?.key, { focus: true }); },
             panelHtml: (node) => ifacePanelHtml(node, model, pickerState.hasSelection, Boolean(item)),
             onPanel: (box, node) => {
+                box.querySelector('[data-iface-journey]')?.addEventListener('click', () => {
+                    const { key, route, method, kind, label } = node;
+                    journey[viewKey] = { key, route, method, kind, label };
+                    delete session.ifaceView[`${viewKey}:${node.key}`];
+                    session.ifaceSel[viewKey] = null;
+                    renderArtifacts(session);
+                });
                 box.querySelector('[data-iface-results]')?.addEventListener('click', (e) => openPicker(e.currentTarget));
                 box.querySelector('[data-iface-open]')?.addEventListener('click', () => openIfacePage(session, item, node));
                 box.querySelector('[data-iface-create]')?.addEventListener('click', (e) => addPageDrawer(session, item, { label: node.label, route: node.route, opener: e.currentTarget }));
@@ -2085,6 +2202,26 @@ export function createPlanConversation(host, root) {
                 }
             },
         });
+        const finderSlot = canvas.dock.querySelector('[data-iface="finder-slot"]');
+        const openPicker = mountPagePicker(finderSlot, fullModel.nodes, node => {
+            pickerState.hasSelection = true;
+            if (!model.byKey.has(node.key)) {
+                delete journey[viewKey];
+                session.ifaceSel[viewKey] = node.key;
+                renderArtifacts(session);
+            } else {
+                canvas.select(node.key, { focus: true });
+                canvas.reveal(node.key, { readable: true });
+            }
+        }, pickerState);
+        if (scoped) {
+            const exit = document.createElement('button');
+            exit.className = 'header-button iface-exit-journey';
+            exit.type = 'button';
+            exit.textContent = 'All routes';
+            exit.onclick = () => { delete journey[viewKey]; renderArtifacts(session); };
+            canvas.el.querySelector('.erd-body').append(exit);
+        }
         if (panelSource) canvas.setAdvanced?.(panelSource);
         const docs = choices.length;
         const endpoints = model.nodes.filter((node) => node.kind === 'endpoint').length;

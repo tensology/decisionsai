@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import base64
 from datetime import datetime
+from email import message_from_bytes
+from unittest.mock import Mock
 
 from distr.core.agent.tools.integrations.google_workspace_tool import (
     GoogleWorkspaceTool,
     _resolve_google_workspace_action,
 )
+from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
 
 
 def test_resolve_action_from_flattened_calendar_fields() -> None:
@@ -31,6 +35,52 @@ def test_resolve_action_from_events_batch() -> None:
     ]
     action = _resolve_google_workspace_action(None, {}, {}, events=events)
     assert action == "create_calendar_events_batch"
+
+
+def test_recipient_and_body_do_not_imply_sending_or_drafting(monkeypatch):
+    tool = GoogleWorkspaceTool.__new__(GoogleWorkspaceTool)
+    connector = Mock()
+    connector.is_connected.return_value = True
+    monkeypatch.setattr(tool, "_ensure_initialized", lambda: None)
+    object.__setattr__(tool, "connector", connector)
+
+    result = tool._run(params={"to": "person@example.org", "body": "A reply."})
+
+    assert "action is required" in result
+    connector.send_email.assert_not_called()
+    connector.draft_email.assert_not_called()
+
+
+def test_gmail_reply_draft_uses_original_thread_and_message_headers(monkeypatch):
+    tool = GoogleWorkspaceTool.__new__(GoogleWorkspaceTool)
+    connector = GoogleWorkspaceConnector.__new__(GoogleWorkspaceConnector)
+    post = Mock(return_value={"id": "draft-1"})
+    message = {
+        "threadId": "thread-1", "message_id_header": "<original@example.org>",
+        "from": "person@example.org", "subject": "Project update",
+    }
+    monkeypatch.setattr(connector, "_ensure_valid_token", lambda: True)
+    monkeypatch.setattr(connector, "is_connected", lambda: True)
+    monkeypatch.setattr(connector, "get_email", Mock(return_value=message))
+    monkeypatch.setattr(connector, "_make_request", post)
+    monkeypatch.setattr(tool, "_ensure_initialized", lambda: None)
+    object.__setattr__(tool, "connector", connector)
+    params = {"to": "person@example.org", "body": "Thanks.", "message_id": "gmail-1"}
+
+    assert "draft-1" in tool._run(action="draft_email", params=params)
+    connector.get_email.assert_called_once_with("gmail-1")
+    assert post.call_args.args == ("POST", "https://gmail.googleapis.com/gmail/v1/users/me/drafts")
+    draft = post.call_args.kwargs["json"]["message"]
+    assert draft["threadId"] == "thread-1"
+    raw = message_from_bytes(base64.urlsafe_b64decode(draft["raw"]))
+    assert raw["In-Reply-To"] == "<original@example.org>"
+    assert raw["Subject"] == "Re: Project update"
+    assert raw["To"] == "person@example.org"
+
+    post.reset_mock()
+    message["message_id_header"] = ""
+    assert "Failed to create draft" in tool._run(action="draft_email", params=params)
+    post.assert_not_called()
 
 
 def test_connection_status_reports_verified_google_authentication(monkeypatch) -> None:

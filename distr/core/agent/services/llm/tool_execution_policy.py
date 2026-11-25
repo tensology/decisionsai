@@ -7,6 +7,7 @@ import json
 import re
 from typing import Any
 
+from .reply_context import is_reply_read, remember_reply_read, reply_tool_block_reason, reply_user_instruction
 
 _NO_ACTION_PATTERNS = (
     r"\b(?:do not|don't|dont)\s+(?:try\s+to\s+)?(?:do|change|create|make|send|write|delete|move|touch|run|execute|modify|update)\b",
@@ -129,6 +130,11 @@ def _action_name(arguments: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip().lower().replace("-", "_").replace(" ", "_")
     params = arguments.get("params")
+    if isinstance(params, str):
+        try:
+            params = json.loads(params)
+        except ValueError:
+            return ""
     if isinstance(params, dict):
         return _action_name(params)
     return ""
@@ -152,7 +158,7 @@ def is_mutating_tool_call(tool_name: str, arguments: dict[str, Any] | None = Non
         return operation != OperationType.READ_ONLY
     action = _action_name(args)
     if action:
-        if _starts_with_any(action, _READ_ACTION_PREFIXES):
+        if is_reply_read(name, action) or _starts_with_any(action, _READ_ACTION_PREFIXES):
             return False
         if _starts_with_any(action, _MUTATION_ACTION_PREFIXES):
             return True
@@ -300,9 +306,14 @@ def tool_execution_block_reason(
     ide_reason = ide_thread_misroute_reason(tool_name, args, user_text)
     if ide_reason:
         return ide_reason
+    name = str(tool_name or "").strip().lower()
+    action = _action_name(args)
+    reply_reason = reply_tool_block_reason(owner, name, action, args, user_text)
+    if reply_reason:
+        return reply_reason
     if not is_mutating_tool_call(tool_name, args):
         return ""
-    if no_action_requested(user_text):
+    if no_action_requested(reply_user_instruction(name, action, user_text)):
         return (
             "Blocked mutation because the latest user instruction explicitly said not to act. "
             "Respond with diagnosis or read-only inspection only."
@@ -333,6 +344,10 @@ def remember_successful_tool_call(
 ) -> None:
     """Remember successful mutations so later tool rounds cannot replay them."""
     args = arguments if isinstance(arguments, dict) else {}
+    remember_reply_read(
+        owner, str(tool_name or "").strip().lower(), _action_name(args), args,
+        _latest_user_instruction(user_text), result,
+    )
     text = str(result or "").strip().lower()
     if not text or text.startswith(("error", "failed", "blocked", "skipped", "stopped")):
         return

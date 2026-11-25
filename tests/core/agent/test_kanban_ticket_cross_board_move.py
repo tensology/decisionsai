@@ -1,5 +1,9 @@
 import contextlib
+from queue import Queue
 
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -30,11 +34,14 @@ def _memory_session(monkeypatch):
         finally:
             session.close()
 
-    monkeypatch.setattr("distr.core.db.get_session", get_session)
+    monkeypatch.setattr(KanbanTicketTool, "_get_session", lambda self: get_session())
     return get_session
 
 
 def test_move_ticket_to_another_board_defaults_to_target_source_lane_and_rebases_defaults(monkeypatch):
+    from distr.app.events import EventHandlerMixin
+    from distr.gui.web.routes.kanban import create_routes
+
     get_session = _memory_session(monkeypatch)
 
     with get_session() as session:
@@ -77,13 +84,30 @@ def test_move_ticket_to_another_board_defaults_to_target_source_lane_and_rebases
         ids = {
             "ticket": ticket.id,
             "right_current": right_current.id,
+            "source": wrong.id,
+            "target": right.id,
         }
 
-    result = KanbanTicketTool()._run(
-        action="move_ticket",
-        ticket_id=ids["ticket"],
-        target_board_name="Right Context",
-    )
+    app = FastAPI()
+    app.include_router(create_routes(), prefix="/api")
+    queue = Queue()
+    with TestClient(app) as client, client.websocket_connect("/api/tickets/ws/boards") as socket:
+        result = KanbanTicketTool(event_queue=queue)._run(
+            action="move_ticket",
+            ticket_id=ids["ticket"],
+            target_board_name="Right Context",
+        )
+        event, data = queue.get_nowait()
+        assert event == "kanban_ticket_moved"
+        with get_session() as session:
+            assert session.get(KanbanTicket, ids["ticket"]).lane_id == ids["right_current"]
+        EventHandlerMixin()._dispatch_agent_event(event, data)
+        updates = [socket.receive_json(), socket.receive_json()]
+        assert {update["board_id"] for update in updates} == {ids["source"], ids["target"]}
+        for update in updates:
+            assert update["type"] == "kanban_updated"
+            assert update["event"] == "ticket_lane_move"
+            assert update["payload"]["ticket_id"] == ids["ticket"]
 
     assert "Moved ticket" in result
     assert "'Wrong Board' / 'Backlog'" in result
@@ -126,8 +150,34 @@ def test_move_ticket_to_board_named_in_text_without_lane(monkeypatch):
     assert "'ThatShirtShow' / 'Ready'" in result
 
 
-def test_agent_cannot_move_a_ticket_to_complete():
-    result = KanbanTicketTool()._action_move_ticket(42, "Complete")
+@pytest.mark.parametrize("lane_name", ["Complete", "Done", "Completed", "Closed", "Shipped"])
+def test_agent_cannot_move_a_ticket_to_complete(lane_name):
+    result = KanbanTicketTool()._action_move_ticket(42, lane_name)
 
     assert "ready for your acceptance in QA" in result
     assert "Only you can move a QA ticket to Complete" in result
+
+
+@pytest.mark.parametrize("action", ["move_ticket", "update_ticket"])
+def test_fuzzy_destination_cannot_bypass_human_acceptance(monkeypatch, action):
+    get_session = _memory_session(monkeypatch)
+    with get_session() as session:
+        board = KanbanBoard(name="Delivery")
+        session.add(board)
+        session.flush()
+        qa = KanbanLane(board_id=board.id, name="QA", position=0)
+        session.add_all([qa, KanbanLane(board_id=board.id, name="Complete", position=1)])
+        session.flush()
+        ticket = KanbanTicket(lane_id=qa.id, title="Verified", position=0)
+        session.add(ticket)
+        session.flush()
+        ticket_id, qa_id = ticket.id, qa.id
+
+    queue = Queue()
+    result = KanbanTicketTool(event_queue=queue)._run(
+        action=action, ticket_id=ticket_id, lane_name="Complet",
+    )
+    assert "Only you can move a QA ticket to Complete" in result
+    assert queue.empty()
+    with get_session() as session:
+        assert session.get(KanbanTicket, ticket_id).lane_id == qa_id

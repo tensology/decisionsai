@@ -1,4 +1,4 @@
-import { parseWireframe } from './wireframe.js?v=20261119-page-designer';
+import { parseWireframe } from './wireframe.js?v=20261125-canvas-workspace';
 
 export const WIDGETS = {
     row: 'row',
@@ -20,7 +20,8 @@ export function designPage(source, pageIndex) {
     }
     if (screen) visit(screen);
     const root = screen?.children.find(child => child.type === 'content') || screen;
-    return { id: screen?.id, root, layers, valid: Boolean(screen?.line) && !parsed.diagnostics.some(entry => entry.severity === 'error') };
+    const template = parsed.templates.find(entry => entry.label === screen?.attrs.uses);
+    return { id: screen?.id, root, layers, template, valid: Boolean(screen?.line) && !parsed.diagnostics.some(entry => entry.severity === 'error') };
 }
 
 export function insertionLayout(page, line) {
@@ -67,6 +68,21 @@ export function editWidgetLabel(source, node, label) {
     const lines = source.split(newline);
     const attrs = Object.entries(node.attrs).filter(([key]) => key !== 'label');
     const tokens = [node.type, JSON.stringify(label.trim()), ...attrs.map(([key, value]) => `${key}=${JSON.stringify(value)}`)];
+    lines[node.line - 1] = ' '.repeat(node.column - 1) + tokens.join(' ');
+    return { source: lines.join(newline), line: node.line };
+}
+
+export function editWidgetLayout(source, node, values) {
+    const newline = source.includes('\r\n') ? '\r\n' : '\n';
+    const lines = source.split(newline);
+    const attrs = { ...node.attrs };
+    for (const [key, value] of Object.entries(values)) {
+        if (value === '') delete attrs[key];
+        else attrs[key] = value;
+    }
+    const quote = value => '"' + value.replaceAll('\\', '\\\\').replaceAll('"', '\\"') + '"';
+    const tokens = [node.type, ...(node.label ? [quote(node.label)] : []),
+        ...Object.entries(attrs).map(([key, value]) => `${key}=${quote(value)}`)];
     lines[node.line - 1] = ' '.repeat(node.column - 1) + tokens.join(' ');
     return { source: lines.join(newline), line: node.line };
 }

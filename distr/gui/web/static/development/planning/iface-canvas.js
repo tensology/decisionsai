@@ -1,8 +1,5 @@
-// Interfaces canvas: the same pan / zoom chrome as the Data (ERD) canvas: .erd-editor > .erd-body >
-// .erd-viewport (dot grid, drag to pan, Command+wheel zooms, plain wheel pans) > transformed
-// .erd-stage, bottom-left edit dock, bottom-right zoom dock, top-right call-out, selection panel.
-// Pages are cards (screenshot or placeholder, title, route) on lanes. No saving here: the host passes actions.
-import { SHAPE_KIND, layoutIface, NODE } from './iface-model.js?v=20261113-rebuild-map15';
+// Planning board. The host supplies the graph and persists edits and viewport state.
+import { SHAPE_KIND, layoutIface, NODE } from './iface-model.js?v=20261125-canvas-workspace';
 import { shapeGlyph } from './flow-nodes.js?v=20261103-ifaces3';
 import { esc, availableBottom } from './canvas-chrome.js?v=20261103-ifaces3';
 
@@ -24,7 +21,10 @@ export function createIfaceCanvas(opts) {
             <div class="erd-stage"><svg class="erd-lines iface-lines" aria-hidden="true"></svg><div class="iface-lanes"></div><div class="erd-nodes iface-nodes" role="list" aria-label="Pages"></div></div>
         </div>
         <div class="erd-dock erd-dock-left iface-dock" role="toolbar" aria-label="Edit pages">
+            <span data-iface="finder-slot"></span>
             <button type="button" class="erd-dock-button erd-dock-wide" data-iface="add-page" aria-label="Add page" title="Add page">${icon('M8 3v10M3 8h10')}<span class="erd-dock-label">Add page</span></button>
+            <button type="button" class="erd-dock-button" data-iface="add-assets" aria-label="Attach project files" title="Attach project files">${icon('M8 10V2m-3 3 3-3 3 3M3 10v4h10v-4')}</button>
+            <button type="button" class="erd-dock-button" data-iface="add-endpoint" aria-label="Add endpoint" title="Add endpoint">${icon('M5.5 4 2 8l3.5 4m5-8L14 8l-3.5 4M9 3 7 13')}</button>
             <span class="erd-dock-divider" aria-hidden="true"></span>
             <button type="button" class="erd-dock-button" data-iface="undo" aria-label="Undo" title="Undo (⌘Z)">${icon('M6 4 3 7l3 3M3.5 7H10a3 3 0 0 1 0 6H8')}</button>
             <button type="button" class="erd-dock-button" data-iface="redo" aria-label="Redo" title="Redo (⇧⌘Z)">${icon('M10 4l3 3-3 3M12.5 7H6a3 3 0 0 0 0 6h2')}</button>
@@ -55,16 +55,19 @@ export function createIfaceCanvas(opts) {
     let activeKey = selectedKey || orderedNodes[0]?.key;
     nodesEl.innerHTML = orderedNodes.map((n) => {
         const part = n.lane === 'ajax' || n.kind === 'endpoint';
-        const comment = n.note ? `<small class="iface-note" title="${esc(n.note)}">${esc(n.note)}</small>` : '';
-        const thumb = part || n.quiet || n.lane === 'guidance' || (layout.large && !n.screenId && !n.shot?.image && n.route) ? '' : (n.shot?.image ? `<img class="iface-shot" alt="" decoding="async" loading="lazy" draggable="false" src="${esc(n.shot.image)}">`
-            : `<span class="iface-shot iface-shot-missing" aria-hidden="true"${n.shot?.reason ? ` title="${esc(n.shot.reason)}"` : ''}><i></i><i></i><i></i></span>`);
+        const comment = n.note && n.kind !== 'endpoint' ? `<small class="iface-note" title="${esc(n.note)}">${esc(n.note)}</small>` : '';
+        const thumb = part || n.quiet || n.lane === 'guidance' ? '' : (n.shot?.image ? `<img class="iface-shot" alt="" decoding="async" loading="lazy" draggable="false" src="${esc(n.shot.image)}">`
+            : `<div class="iface-card-content">${n.summary?.length ? n.summary.map(value => `<span>${esc(value)}</span>`).join('') : `<span>${n.screenId ? 'Page stencil' : 'Outline needed'}</span>`}</div>`);
         const method = part && n.method ? `<span class="iface-part-method">${esc(n.method)}</span>` : '';
+        const route = esc(n.route || (n.lane === 'guidance' ? 'guidance' : 'no route'));
+        const endpoint = n.kind === 'endpoint';
         const kind = part ? (n.kind === 'endpoint' ? 'Endpoint' : 'Part') : (SHAPE_KIND[n.shape] || 'Page');
         return `<div class="erd-table iface-node${part ? ' iface-part' : ''}${n.kind === 'endpoint' ? ' iface-endpoint' : ''}${n.quiet ? ' iface-node-quiet' : ''}${n.key === selectedKey ? ' selected' : ''}${n.pinned ? ' iface-pinned' : ''}" role="listitem" tabindex="${layout.large && n.key !== activeKey ? -1 : 0}" data-node="${esc(n.key)}" data-shape="${esc(n.shape)}" data-shape-source="${n.shapeSource}" data-lane="${esc(n.lane)}" data-kind="${esc(n.kind || '')}" data-screen-key="${esc(n.screenKey || '')}" data-outline="${n.screenId ? 'yes' : 'no'}" data-page-state="${esc(n.state || 'normal')}"
             aria-label="${esc(`${n.label}${n.method ? `, ${n.method}` : ''}${n.route ? `, ${n.route}` : ''}${n.note ? `. ${n.note}` : ''}. ${kind}${n.screenId ? '' : ', no page outline yet'}. Enter opens.`)}"
             style="transform: translate(${n.x}px, ${n.y}px); width: ${n.w}px; height: ${n.h}px">
             <header class="erd-table-head iface-node-head"><span class="iface-glyph" title="${esc(kind)}${n.shapeSource === 'default' ? ' (default)' : ''}">${shapeGlyph(n.shape)}</span><strong title="${esc(n.label)}">${esc(n.label)}</strong></header>
-            ${method}${thumb}${comment}<small class="iface-route" title="${esc(n.route)}">${esc(n.route || (n.lane === 'guidance' ? 'guidance' : 'no route'))}</small>
+            ${endpoint ? '' : method}${thumb}${comment}<small class="iface-route" title="${esc(n.route)}">${endpoint ? `${method}<span class="iface-endpoint-path">${route}</span>` : route}</small>
+            ${opts.onConnect && n.screenId ? `<button type="button" class="iface-port" data-wire-source aria-label="Connect from ${esc(n.label)}" title="Drag to another card to connect"></button>` : ''}
         </div>`;
     }).join('');
     const byKeyEl = new Map([...nodesEl.querySelectorAll('[data-node]')].map((n) => [n.dataset.node, n]));
@@ -116,15 +119,25 @@ export function createIfaceCanvas(opts) {
         return `M${x1},${y1} L${x2},${y2}`;
     };
     function drawEdges() {
+        const directions = new Set(model.edges.filter(edge => edge.kind !== 'parent').map(({ from, to }) => JSON.stringify([from, to])));
         lines.setAttribute('width', String(layout.width + 40));
         lines.setAttribute('height', String(layout.height + 40));
         lines.innerHTML = `<defs><marker id="iface-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="currentColor"/></marker></defs>` +
             model.edges.map((e) => {
                 const a = model.byKey.get(e.from), b = model.byKey.get(e.to);
                 if (!a || !b) return '';
-                const [x1, y1] = port(a, b.x + b.w / 2, b.y + b.h / 2);
-                const [x2, y2] = port(b, a.x + a.w / 2, a.y + a.h / 2);
-                const d = orthogonal(x1, y1, x2, y2, new Set([a.key, b.key]));
+                let [x1, y1] = port(a, b.x + b.w / 2, b.y + b.h / 2);
+                let [x2, y2] = port(b, a.x + a.w / 2, a.y + a.h / 2);
+                const horizontal = x1 === a.x || x1 === a.x + a.w;
+                if (e.kind !== 'parent' && directions.has(JSON.stringify([e.to, e.from]))) {
+                    if (horizontal) { const offset = Math.sign(x2 - x1) * 13; y1 += offset; y2 += offset; }
+                    else { const offset = Math.sign(y2 - y1) * 13; x1 += offset; x2 += offset; }
+                }
+                const skip = new Set([a.key, b.key]);
+                const blocked = (x1 === x2 || y1 === y2) && hits(x1, y1, x2, y2, skip);
+                const d = e.kind === 'parent' || blocked
+                    ? orthogonal(x1, y1, x2, y2, skip)
+                    : curve(x1, y1, x2, y2, horizontal);
                 return `<g class="iface-edge${e.chrome ? ' iface-edge-chrome' : ''}" data-kind="${esc(e.kind)}" data-from="${esc(e.from)}" data-to="${esc(e.to)}" data-chrome="${e.chrome ? 'yes' : 'no'}"><path class="erd-line" d="${d}" marker-end="url(#iface-arrow)"/>${e.label ? `<text x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 6}">${esc(e.label)}</text>` : ''}</g>`;
             }).join('');
         labelsPlaced = false;
@@ -132,7 +145,7 @@ export function createIfaceCanvas(opts) {
     }
     let labelsPlaced = false;
     let edges = drawEdges();
-    const canFilterLinks = Boolean(layout.large) && edges.length > 0;
+    const canFilterLinks = edges.length > 0;
     function setAllLinks(show) {
         lines.classList.toggle('selected-links-only', canFilterLinks && !show);
     }
@@ -169,12 +182,16 @@ export function createIfaceCanvas(opts) {
     // ---- view ---------------------------------------------------------------------------
     function applyView() {
         stage.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`;
+        const grid = 22 * view.zoom;
+        viewport.style.backgroundSize = `${grid}px ${grid}px`;
+        viewport.style.backgroundPosition = `${view.x % grid}px ${view.y % grid}px`;
+        viewport.classList.toggle('iface-grid-quiet', view.zoom < 0.4);
         $('.erd-zoom').textContent = `${Math.round(view.zoom * 100)}%`;
         opts.onViewChange?.(view);
     }
     let fitted = null;
     function fit({ floor = 0 } = {}) {
-        const vw = viewport.clientWidth || 800, vh = viewport.clientHeight || 500;
+        const vw = viewport.clientWidth || 800, vh = readableHeight();
         const b = { x: -14, y: -4, w: layout.width + 28, h: layout.height + 18 };
         const fittedZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.min((vw - 40) / b.w, (vh - 40) / b.h, 1)));
         const zoom = Math.min(MAX_ZOOM, Math.max(fittedZoom, floor));
@@ -183,8 +200,7 @@ export function createIfaceCanvas(opts) {
         applyView();
         return zoom;
     }
-    // First load/refresh: zoom 0.5, centre on the actual card bounds (or left-align
-    // with padding when the map is wider than the viewport), first row ~24px from the top.
+    // Use card bounds so a small board can open at readable size.
     function contentBounds() {
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         const include = (x, y, w, h) => {
@@ -199,31 +215,35 @@ export function createIfaceCanvas(opts) {
         return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
     }
     function initialView() {
+        if (!el.isConnected) return;
         const vw = viewport.clientWidth || 0;
         if (!vw) {
             requestAnimationFrame(() => { if (!view) initialView(); });
             return;
         }
         const b = contentBounds();
-        const zoom = 0.5;
+        const vh = readableHeight();
         const pad = 24;
+        const zoom = Math.min(1, Math.max(layout.large ? 0.82 : 0.55, Math.min((vw - pad * 2) / b.w, (vh - pad * 2) / b.h)));
         const x = (b.w * zoom + pad * 2 <= vw)
             ? (vw - b.w * zoom) / 2 - b.x * zoom
             : pad - b.x * zoom;
-        const y = pad - b.y * zoom;
+        const y = Math.max(64, (vh - b.h * zoom) / 2) - b.y * zoom;
         view = { zoom, x, y };
         fitted = null;
         applyView();
     }
     function zoomAt(factor, cx = (viewport.clientWidth || 800) / 2, cy = (viewport.clientHeight || 500) / 2) {
+        if (!view) return;
         const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, view.zoom * factor));
         const k = zoom / view.zoom;
         view = { zoom, x: cx - (cx - view.x) * k, y: cy - (cy - view.y) * k };
         applyView();
     }
     function readableHeight() {
-        const dockHeight = Math.max(...[...el.querySelectorAll('.erd-dock')].map((dock) => dock.offsetHeight), 0);
-        return Math.max(1, viewport.clientHeight - dockHeight - 20);
+        const dockHeight = Math.max(...[...el.querySelectorAll('.erd-dock')].map((dock) =>
+            dock.offsetHeight + (parseFloat(getComputedStyle(dock).bottom) || 0)), 0);
+        return Math.max(1, viewport.clientHeight - dockHeight - 12);
     }
     function panTo(x, y) {
         if (layout.large) {
@@ -294,7 +314,7 @@ export function createIfaceCanvas(opts) {
     }
     function reveal(key, { readable = false } = {}) {
         const n = model.byKey.get(key);
-        if (!n) return;
+        if (!n || !view) return;
         let vw = viewport.clientWidth;
         if (readable && key === selectedKey && !panel.hidden && getComputedStyle(panel).position === 'absolute') {
             const unobstructed = panel.getBoundingClientRect().left - viewport.getBoundingClientRect().left - 12;
@@ -367,14 +387,52 @@ export function createIfaceCanvas(opts) {
     }
 
     // ---- pointer: drag a card to move it, drag empty canvas to pan, click selects, double-click opens
-    let gesture = null, raf = 0;
+    let gesture = null, raf = 0, clickTimer = 0, wire = null, wireKey = null, connecting = false;
+    const draftWire = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    draftWire.classList.add('iface-wire-draft');
+    draftWire.innerHTML = '<path/>';
+    stage.append(draftWire);
+    function curve(x1, y1, x2, y2, horizontal = true) {
+        const bend = Math.max(28, Math.abs(horizontal ? x2 - x1 : y2 - y1) * 0.45);
+        const direction = Math.sign(horizontal ? x2 - x1 : y2 - y1) || 1;
+        const dx = horizontal ? bend * direction : 0, dy = horizontal ? 0 : bend * direction;
+        return `M${x1},${y1} C${x1 + dx},${y1 + dy} ${x2 - dx},${y2 - dy} ${x2},${y2}`;
+    }
+    function markWire(key) {
+        byKeyEl.get(wireKey)?.classList.remove('iface-wire-source');
+        wireKey = key;
+        byKeyEl.get(key)?.classList.add('iface-wire-source');
+        viewport.classList.toggle('iface-wiring', Boolean(key));
+        draftWire.firstElementChild.removeAttribute('d');
+    }
+    async function connectTo(key) {
+        const from = model.byKey.get(wireKey), to = model.byKey.get(key);
+        markWire(null);
+        if (!from?.screenId || !to?.screenId || from === to || connecting) return;
+        connecting = true;
+        try { await opts.onConnect?.(from, to); }
+        finally { connecting = false; }
+    }
+    viewport.addEventListener('click', event => {
+        const source = event.target.closest('[data-wire-source]');
+        if (source && event.detail === 0) markWire(source.closest('[data-node]').dataset.node);
+    });
     function panGesture() {
         if (gesture?.last && !gesture.dragging) panTo(gesture.origin[0] + gesture.last[0], gesture.origin[1] + gesture.last[1]);
     }
     viewport.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0) return;
+        if (e.button !== 0 || !view) return;
+        clearTimeout(clickTimer);
         const node = e.target.closest('[data-node]');
         const target = node ? model.byKey.get(node.dataset.node) : null;
+        if (e.target.closest('[data-wire-source]') && target) {
+            e.preventDefault();
+            markWire(target.key);
+            wire = { id: e.pointerId, from: target };
+            viewport.setPointerCapture(e.pointerId);
+            return;
+        }
+        if (wireKey && target) { connectTo(target.key); return; }
         gesture = {
             start: [e.clientX, e.clientY], origin: [view.x, view.y], moved: false,
             node: target?.key || null, id: e.pointerId, dragging: false,
@@ -382,6 +440,13 @@ export function createIfaceCanvas(opts) {
         };
     });
     viewport.addEventListener('pointermove', (e) => {
+        if (wire?.id === e.pointerId) {
+            const bounds = viewport.getBoundingClientRect();
+            const x = (e.clientX - bounds.left - view.x) / view.zoom;
+            const y = (e.clientY - bounds.top - view.y) / view.zoom;
+            draftWire.firstElementChild.setAttribute('d', curve(wire.from.x + wire.from.w, wire.from.y + 18, x, y));
+            return;
+        }
         if (!gesture) return;
         const dx = e.clientX - gesture.start[0], dy = e.clientY - gesture.start[1];
         if (!gesture.moved && Math.hypot(dx, dy) < 4) return;
@@ -408,9 +473,20 @@ export function createIfaceCanvas(opts) {
             else panGesture();
         });
     });
-    const end = () => {
-        const g = gesture; gesture = null;
-        if (!g) return;
+    const end = (event) => {
+        if (wire?.id === event.pointerId) {
+            const key = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-node]')?.dataset.node;
+            wire = null;
+            if (key && key !== wireKey) connectTo(key);
+            else draftWire.firstElementChild.removeAttribute('d');
+            return;
+        }
+        const g = gesture;
+        if (!g || g.id !== event.pointerId) return;
+        if (g.moved) g.last = [event.clientX - g.start[0], event.clientY - g.start[1]];
+        if (g.dragging) applyDrag(g, event.clientX, event.clientY);
+        else panGesture();
+        gesture = null;
         if (g.dragging) {
             const node = model.byKey.get(g.node);
             byKeyEl.get(g.node)?.classList.remove('iface-dragging');
@@ -428,17 +504,24 @@ export function createIfaceCanvas(opts) {
             }
             return;
         }
-        panGesture();
         if (g.moved) return;
-        select(g.node);
+        if (g.node) clickTimer = setTimeout(() => select(g.node), 270);
+        else select(null);
     };
     viewport.addEventListener('pointerup', end);
-    viewport.addEventListener('pointercancel', () => { gesture = null; });
+    viewport.addEventListener('pointercancel', () => { gesture = null; wire = null; markWire(null); });
     viewport.addEventListener('dblclick', (e) => {
         const node = e.target.closest('[data-node]');
-        if (node) { e.preventDefault(); opts.onOpen?.(model.byKey.get(node.dataset.node)); }
+        if (node) {
+            clearTimeout(clickTimer);
+            e.preventDefault();
+            const entry = model.byKey.get(node.dataset.node);
+            opts.onSelect?.(entry);
+            opts.onOpen?.(entry, 'design');
+        }
     });
     viewport.addEventListener('wheel', (e) => {
+        if (!view) return;
         e.preventDefault();
         const r = viewport.getBoundingClientRect();
         // Command+scroll zooms (up in, down out). Control and a plain scroll pan. Chrome also sets ctrlKey for Command+scroll, so the check is Meta only.
@@ -449,11 +532,14 @@ export function createIfaceCanvas(opts) {
         const node = e.target.closest?.('[data-node]');
         if (node) {
             setActivePage(node.dataset.node);
-            reveal(node.dataset.node, { readable: node.matches(':focus-visible') });
+            if (node.matches(':focus-visible')) reveal(node.dataset.node, { readable: true });
         }
     });
     viewport.addEventListener('keydown', (e) => {
         const node = e.target.closest?.('[data-node]');
+        if (e.key === 'Escape' && wireKey) { e.preventDefault(); markWire(null); return; }
+        if (e.target.closest?.('[data-wire-source]')) return;
+        if (node && wireKey && e.key === 'Enter') { e.preventDefault(); connectTo(node.dataset.node); return; }
         if (node && e.key === 'Enter') { e.preventDefault(); opts.onOpen?.(model.byKey.get(node.dataset.node)); return; }
         if (node && e.key === ' ') { e.preventDefault(); select(node.dataset.node, { focus: true }); return; }
         if (node && layout.large) {
@@ -472,7 +558,7 @@ export function createIfaceCanvas(opts) {
         }
         const step = e.shiftKey ? 160 : 60;
         const pan = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
-        if (pan && !node) { e.preventDefault(); panTo(view.x + pan[0], view.y + pan[1]); return; }
+        if (pan && !node && view) { e.preventDefault(); panTo(view.x + pan[0], view.y + pan[1]); return; }
         if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomAt(1.2); }
         else if (e.key === '-') { e.preventDefault(); zoomAt(1 / 1.2); }
         else if (e.key === '0') { e.preventDefault(); fit(); }
@@ -492,6 +578,8 @@ export function createIfaceCanvas(opts) {
     // ---- docks ------------------------------------------------------------------------
     const act = {
         'add-page': () => opts.onAddPage?.($('[data-iface="add-page"]')),
+        'add-assets': () => opts.onAddAssets?.(),
+        'add-endpoint': () => opts.onAddEndpoint?.($('[data-iface="add-endpoint"]')),
         undo: () => opts.onUndo?.(), redo: () => opts.onRedo?.(),
         'zoom-in': () => zoomAt(1.2), 'zoom-out': () => zoomAt(1 / 1.2), 'reset-zoom': () => resetZoom(), fit: () => fit(),
     };
@@ -499,6 +587,8 @@ export function createIfaceCanvas(opts) {
     const setHistory = (canUndo, canRedo) => { $('[data-iface="undo"]').disabled = !canUndo; $('[data-iface="redo"]').disabled = !canRedo; };
     setHistory(Boolean(opts.canUndo), Boolean(opts.canRedo));
     if (!opts.onAddPage) $('[data-iface="add-page"]').disabled = true;
+    if (!opts.onAddAssets) $('[data-iface="add-assets"]').hidden = true;
+    if (!opts.onAddEndpoint) $('[data-iface="add-endpoint"]').hidden = true;
 
     function setShot(key, shot) {
         const node = model.byKey.get(key);
@@ -556,10 +646,9 @@ export function createIfaceCanvas(opts) {
         get selectedKey() { return selectedKey; },
         mounted() {
             sizeToWindow();
-            // First load/refresh: Fit positioning at zoom 0.5, top of the map visible. The Fit button still does a full fit.
             if (view) applyView(); else initialView();
             if (selectedKey) select(selectedKey);
         },
-        destroy() { resizeObserver?.disconnect(); window.removeEventListener('resize', onResize); cancelAnimationFrame(frame); cancelAnimationFrame(raf); el.remove(); },
+        destroy() { resizeObserver?.disconnect(); window.removeEventListener('resize', onResize); cancelAnimationFrame(frame); cancelAnimationFrame(raf); clearTimeout(clickTimer); el.remove(); },
     };
 }

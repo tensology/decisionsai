@@ -1500,6 +1500,67 @@ def test_tray_deep_links_open_board_views_and_automations(page: Page):
     assert errors == []
 
 
+def test_kanban_updates_open_boards_and_lists_after_ticket_moves(page: Page, tmp_path):
+    requests: list[tuple[str, str]] = []
+    _install_api(page, requests)
+    ticket = {"id": 42, "title": "Verify device action failure", "priority": "medium"}
+    backlog = {"id": 701, "name": "Backlog", "tickets": [ticket]}
+    qa = {"id": 702, "name": "QA", "tickets": []}
+    target_backlog = {"id": 801, "name": "Backlog", "tickets": []}
+    source = {"id": 70, "name": "Decisions delivery", "source": "database", "lanes": [
+        backlog, {"id": 703, "name": "In Progress", "tickets": []},
+        qa, {"id": 704, "name": "Complete", "tickets": []},
+    ]}
+    target = {"id": 80, "name": "Empty delivery", "source": "database", "lanes": [target_backlog]}
+    sockets = []
+    page.context.route_web_socket("**/api/tickets/ws/boards", lambda socket: sockets.append(socket))
+    page.route("**/api/tickets/boards/70", lambda route: route.fulfill(json=source))
+
+    def publish(board_id):
+        for socket in sockets:
+            socket.send(json.dumps({"type": "kanban_updated", "event": "ticket_lane_move", "board_id": board_id}))
+
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto(TEST_BASE_URL + "/development/boards/decisions/70/kanban/")
+    second = page.context.new_page()
+    _install_api(second, requests)
+    second.route("**/api/tickets/boards/80", lambda route: route.fulfill(json=target))
+    second.set_viewport_size({"width": 375, "height": 812})
+    second.goto(TEST_BASE_URL + "/development/boards/decisions/80/kanban/")
+    expect(second.locator('[data-kanban-lane="801"]')).to_be_visible()
+    card = page.locator('[data-kanban-ticket="decisions:42"]')
+    expect(page.locator('[data-kanban-lane="701"]').locator(card)).to_be_visible()
+    assert len(sockets) == 2
+    page.screenshot(path=tmp_path / "source-backlog-board.png")
+    second.screenshot(path=tmp_path / "destination-before-transfer-board.png")
+
+    backlog["tickets"].remove(ticket)
+    qa["tickets"].append(ticket)
+    publish(70)
+    expect(page.locator('[data-kanban-lane="702"]').locator(card)).to_be_visible()
+    expect(page.locator('[data-kanban-lane="701"]').locator(card)).to_have_count(0)
+    page.screenshot(path=tmp_path / "source-qa-board.png")
+    page.locator("#development-kanban-view-list").click()
+    expect(page.locator('[data-kanban-lane="702"]').locator(card)).to_be_visible()
+    page.screenshot(path=tmp_path / "source-qa-list.png")
+
+    qa["tickets"].remove(ticket)
+    target_backlog["tickets"].append(ticket)
+    publish(70)
+    publish(80)
+    expect(card).to_have_count(0)
+    expect(second.locator('[data-kanban-lane="801"] [data-kanban-ticket="decisions:42"]')).to_be_visible()
+    page.screenshot(path=tmp_path / "source-after-transfer-list.png")
+    page.locator("#development-kanban-view-board").click()
+    expect(card).to_have_count(0)
+    page.screenshot(path=tmp_path / "source-after-transfer-board.png")
+    second.screenshot(path=tmp_path / "destination-after-transfer-board.png")
+    second.locator("#development-kanban-view-list").click()
+    expect(second.locator('[data-kanban-lane="801"] [data-kanban-ticket="decisions:42"]')).to_be_visible()
+    second.screenshot(path=tmp_path / "destination-after-transfer-list.png")
+    second.close()
+
+
 def test_development_navigation_uses_clean_urls_and_restores_history(page: Page):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests)
@@ -2046,6 +2107,54 @@ def test_delayed_sidebar_refresh_preserves_confirmed_jira_pin(page: Page, width:
     expect(page.locator('#board-task-tree [data-board-select="jira:jira-1"]')).to_have_count(0)
 
 
+@pytest.mark.parametrize("width", [1440, 375])
+def test_sidebar_displays_project_names_with_jira_badges(page: Page, tmp_path, width: int):
+    _install_api(page, [])
+    page.route("**/api/projects", lambda route: route.fulfill(json=[
+        {"id": 7, "name": "Spoortrack", "provider": "jira", "kanban_board_id": 40},
+        {"id": 8, "name": "Player1Sport", "provider": "jira", "kanban_board_id": 41},
+    ]))
+    page.route("**/api/tickets/boards", lambda route: route.fulfill(json=[
+        {"id": 70, "name": "Decisions delivery", "source": "database"},
+        {"id": 40, "name": "STK board", "source": "jira", "external_board_id": "36", "default_project_id": 7},
+        {"id": 41, "name": "Player1Sport", "source": "database", "default_project_id": 8},
+        {"id": 8, "name": "Player1Sport", "source": "jira", "external_board_id": "35", "default_project_id": 8},
+    ]))
+    page.route("**/api/tickets/external-boards", lambda route: route.fulfill(json={
+        "cache_ready": True,
+        "jira": [
+            {"id": "36", "name": "STK board", "project_name": "Spoortrack", "project_key": "STK", "default_project_id": 7},
+            {"id": "35", "name": "Player1Sport", "project_name": "Player1 Sport", "default_project_id": 8},
+            {"id": "37", "name": "Support board", "project_name": "Spoortrack", "default_project_id": 7},
+        ],
+        "trello": [{"id": "trello-1", "name": "Trello launch"}],
+    }))
+    page.route("**/api/tickets/external-boards/jira/36", lambda route: route.fulfill(json={
+        "name": "STK board", "cache_ready": True, "lanes": [{"id": "backlog", "name": "Backlog", "tickets": []}],
+    }))
+    page.route("**/api/workflows/studio/sidebar/pins", lambda route: route.fulfill(json={"board_keys": ["jira:36", "decisions:70"]}))
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(URL)
+    sidebar_button = page.locator("#sidebar-open")
+    if sidebar_button.is_visible():
+        sidebar_button.click()
+
+    for key, name in [("jira:36", "Spoortrack"), ("jira:35", "Player1Sport"), ("jira:37", "Support board")]:
+        row = page.locator(f'[data-board-select="{key}"]')
+        expect(row.locator(".project-select-name")).to_have_text(name)
+        expect(row.locator(".project-jira-badge")).to_have_text("Jira")
+        expect(row.locator(".project-jira-badge")).to_be_in_viewport()
+    spoortrack = page.locator('#pinned-board-tree [data-board-select="jira:36"]')
+    expect(spoortrack).to_have_accessible_name("Spoortrack Jira")
+    expect(spoortrack).to_have_attribute("title", "STK board (Jira · STK)")
+    for key in ("decisions:70", "decisions:41", "trello:trello-1"):
+        row = page.locator(f'[data-board-select="{key}"]')
+        expect(row).to_be_visible()
+        expect(row.locator(".project-jira-badge")).to_have_count(0)
+    expect(page.get_by_text("Could not load Jira tickets.")).to_have_count(0)
+    page.locator("#studio-sidebar").screenshot(path=tmp_path / f"jira-sidebar-{width}.png")
+
+
 def test_boards_section_keeps_its_collapse_preference_without_pinned_boards(page: Page, unpinned_board_preferences):
     requests: list[tuple[str, str]] = []
     _install_api(page, requests)
@@ -2099,7 +2208,7 @@ def test_desktop_controls_are_real_and_contextual(page: Page):
     expect(page.locator('[data-board-select="trello:trello-1"]')).to_contain_text("Trello")
     expect(page.locator('[data-board-select="decisions:70"]')).not_to_contain_text("DecisionsAI")
     expect(page.locator("#board-task-tree .provider-mark, #pinned-board-tree .provider-mark")).to_have_count(0)
-    assert page.locator('[data-board-group="jira:jira-1"] .project-row').inner_text().count("Jira") == 1
+    expect(page.locator('[data-board-select="jira:jira-1"] .project-jira-badge')).to_have_text("Jira")
 
     page.locator("#new-thread-button").click()
     expect(page.locator("#studio-empty")).to_be_visible()

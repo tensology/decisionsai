@@ -117,7 +117,7 @@ export function openSourceDrawer({ title, text, opener = document.activeElement,
             catch (e) { error.textContent = e?.message || 'Could not apply the change.'; error.hidden = false; apply.disabled = false; }
         });
     }
-    return { close, el: shell.el };
+    return shell;
 }
 
 // Generic right-side drawer shell (same chrome as the source drawer): `html` is trusted markup built by the

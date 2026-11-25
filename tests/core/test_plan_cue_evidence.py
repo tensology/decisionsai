@@ -19,6 +19,29 @@ def route():
     return {'url':'/projects','name':'projects','title':'Projects','group':'Commerce','source':'routes.js'}
 
 
+def test_literal_react_navigation_connects_declared_screens(tmp_path):
+    pages = tmp_path / "src" / "pages"
+    pages.mkdir(parents=True)
+    (pages / "routes.jsx").write_text(
+        'export const routes = [{url: "/shop/basket", view: "basket", name: "basket"},'
+        '{url: "/shop/checkout", view: "checkout", name: "checkout"}];'
+    )
+    (pages / "basket.jsx").write_text(
+        "const go = useNavigate();\n"
+        "const checkout = () => go('/shop/checkout/');\n"
+        "const unknown = () => go('/unknown');\n"
+        "const dynamic = (url) => go(url);\n"
+        "export default () => <button onClick={checkout}>Next</button>;\n"
+    )
+    routes = scan.scan_frontend_routes(tmp_path)
+    cues = scan.scan_page_cues(tmp_path, routes)
+    assert cues["/shop/basket"]["button_routes"] == {"Next": "/shop/checkout"}
+    assert cues["/shop/basket"]["links"] == []
+    generated = scan.build_flows(routes, project_name="Shop", cues=cues)
+    basket = next(block for block in generated.split("\n\n") if block.startswith('screen "Basket"'))
+    assert 'button "Next" variant=primary requirement=FR-001 route="/shop/checkout"' in basket
+
+
 def models():
     return [{'name':'Project','app':'app','fields':[{'name':'internal_payload','kind':'Text','mermaid':'string'}],
              'relations':[],'source':'models.py'}]

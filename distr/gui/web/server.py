@@ -349,6 +349,10 @@ def create_app() -> FastAPI:
             return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         response = await call_next(request)
         same_origin_frame = _allows_same_origin_framing(path)
+        development_origins = (
+            " http://localhost:* https://localhost:* http://127.0.0.1:* https://127.0.0.1:* http://[::1]:* https://[::1]:*"
+            if path.rstrip("/") in {"/development", "/workflows"} or path.startswith("/development/") else ""
+        )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "SAMEORIGIN" if same_origin_frame else "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -359,7 +363,7 @@ def create_app() -> FastAPI:
             "font-src 'self' data:; "
             "img-src 'self' data: https: http:; "
             "media-src 'self' blob:; "
-            "connect-src 'self' ws: wss:; "
+            f"connect-src 'self' ws: wss:{development_origins}; "
             + ("frame-ancestors 'self';" if same_origin_frame else "frame-ancestors 'none';")
         )
         return response

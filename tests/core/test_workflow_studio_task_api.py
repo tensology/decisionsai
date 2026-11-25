@@ -757,6 +757,22 @@ def test_existing_development_thread_message_resumes_direct_harness_not_workflow
     })]
 
 
+def test_schedule_receipt_does_not_claim_a_worker_started(monkeypatch):
+    calls = _patch_studio_dependencies(monkeypatch)
+    params = json.loads(calls["chat"].params)
+    params["development"].update(source_type="automation", source_ref="auto_11")
+    calls["chat"].params = json.dumps(params)
+    receipt = {"execution_mode": "automation_control", "status": "completed", "message": "The schedule has been updated."}
+    monkeypatch.setattr("distr.core.workflow.development_harness.dispatch_development_prompt", lambda *args, **kwargs: receipt)
+
+    response = _client().post("/api/workflows/studio/tasks/17/messages", json={"message": "Change this schedule to 10:00"})
+
+    assert response.status_code == 200
+    assert response.json()["started"] is False
+    assert response.json()["message"] == receipt["message"]
+    assert not calls.get("time_resumed")
+
+
 def test_existing_thread_message_uses_its_explicit_workflow(monkeypatch):
     calls = _patch_studio_dependencies(monkeypatch, autonomy="full", workflow_id=44)
 

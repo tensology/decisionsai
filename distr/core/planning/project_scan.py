@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+from html import unescape
 import json
 import os
 import re
@@ -121,12 +122,18 @@ _HERO_MARK = re.compile(
     re.IGNORECASE,
 )
 _ACTION_TEXT = re.compile(
-    r"<(button|Button|LongButton|SubmitButton)\b[^>]*>([\s\S]{0,160}?)</\1>",
+    r"<(button|Button|LongButton|SubmitButton)\b(?P<attrs>[^>]*)>(?P<body>[\s\S]{0,160}?)</\1>",
     re.IGNORECASE,
 )
 _LOCAL_LINK = re.compile(
     r"""<(?:a|DefaultLink|Link)\b([^>]*)>([^<{][^<]{0,60})</(?:a|DefaultLink|Link)>""",
     re.IGNORECASE,
+)
+_NAVIGATE_BINDING = re.compile(r"\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*useNavigate\s*\(\s*\)")
+_NAMED_CLICK = re.compile(r"\bonClick\s*=\s*\{\s*([A-Za-z_$][\w$]*)\s*\}")
+_SIMPLE_HANDLER = re.compile(
+    r"(?m)^[ \t]*(?:const|let)[ \t]+([A-Za-z_$][\w$]*)[ \t]*=[ \t]*\([^()\n]*\)[ \t]*=>[ \t]*"
+    r"(?:\{(?P<block>[^{}]{0,800})\}|(?P<expression>[^;\n]{1,240}))"
 )
 _IMPORT_DEFAULT = re.compile(r"""import\s+([A-Za-z_]\w*)\s+from\s+['"](\.[^'"]+)['"]""")
 _JSX_TAG = re.compile(r"<([A-Z][A-Za-z0-9]*)\b")
@@ -508,13 +515,7 @@ def _clean_cue_text(value: str) -> str:
     cleaned = _TEMPLATE_TRANSLATION.sub(lambda match: match["label"], value or "")
     cleaned = _TEMPLATE_EXPRESSION.sub(" ", cleaned)
     cleaned = re.sub(r"<[^>]+>", " ", cleaned)
-    cleaned = (
-        cleaned.replace("&amp;", "&")
-        .replace("&nbsp;", " ")
-        .replace("&#39;", "'")
-        .replace("&quot;", '"')
-    )
-    return re.sub(r"\s+", " ", cleaned).strip()
+    return re.sub(r"\s+", " ", unescape(cleaned)).strip()
 
 
 def _extract_screen_cues(source: str) -> dict[str, Any]:
@@ -558,7 +559,7 @@ def _extract_screen_cues(source: str) -> dict[str, Any]:
             headings.append(value)
 
     for match in _ACTION_TEXT.finditer(source):
-        value = _clean_cue_text(match.group(2))
+        value = _clean_cue_text(match["body"])
         if not value or len(value) < 2 or value.lower() in _DISMISS_LABELS:
             continue
         if value not in buttons and _usable_label(value):
@@ -648,6 +649,7 @@ def scan_page_cues(project_root: Path, routes: list[dict[str, str]]) -> dict[str
     """
     cues: dict[str, dict[str, Any]] = {}
     root = project_root.resolve()
+    route_targets = {_normalize_route(row["url"]): row for row in routes}
     for row in routes:
         if Path(row.get('source') or '').suffix.lower() not in {'.js', '.jsx', '.ts', '.tsx'}:
             # A same-named component is not evidence that a Python HTML handler
@@ -660,6 +662,43 @@ def scan_page_cues(project_root: Path, routes: list[dict[str, str]]) -> dict[str
             continue
         source = page.read_text(encoding="utf-8", errors="replace")[:80_000]
         cue = _extract_screen_cues(source)
+        # React Router navigation can be called from an event handler without a Link tag.
+        # Resolve only static destinations already declared by the project.
+        linked = {_normalize_route(link["route"]) for link in cue["links"] if link["route"]}
+        binding = _NAVIGATE_BINDING.search(source)
+        if binding:
+            call = re.compile(rf"""(?<![\w$.]){re.escape(binding[1])}\s*\(\s*(?P<quote>['"])(?P<url>/(?!/)[^'"?#\s]*)(?P=quote)\s*(?=[,)])""")
+            code = re.sub(r"(?m)^\s*//[^\n]*|/\*[\s\S]*?\*/", "", source)
+            # Preserve the button label when a simple named handler contains one
+            # unconditional navigation statement. Other calls stay route evidence.
+            handlers = {}
+            for handler in _SIMPLE_HANDLER.finditer(code):
+                body = handler["block"] if handler["block"] is not None else handler["expression"]
+                calls = list(call.finditer(body))
+                if len(calls) != 1:
+                    continue
+                nav = calls[0]
+                if body[body.rfind("\n", 0, nav.start()) + 1:nav.start()].strip():
+                    continue
+                if re.search(r"\b(?:if|else|return|switch|for|while|throw)\b", body[:nav.start()]):
+                    continue
+                handlers[handler[1]] = route_targets.get(_normalize_route(nav["url"]))
+            button_routes: dict[str, set[str]] = {}
+            for action in _ACTION_TEXT.finditer(code):
+                click = _NAMED_CLICK.search(action["attrs"])
+                target = handlers.get(click[1]) if click else None
+                label = _clean_cue_text(action["body"])
+                if label in cue["buttons"]:
+                    button_routes.setdefault(label, set()).add(target["url"] if target else "")
+            cue["button_routes"] = {label: route for label, urls in button_routes.items()
+                                    if len(urls) == 1 and (route := next(iter(urls))) and route != row["url"]}
+            linked.update(_normalize_route(url) for label, url in cue["button_routes"].items() if label in cue["buttons"][:3])
+            for match in call.finditer(code):
+                key = _normalize_route(match["url"])
+                target = route_targets.get(key)
+                if target and key != _normalize_route(row["url"]) and key not in linked:
+                    cue["links"].append({"label": target["title"], "route": target["url"]})
+                    linked.add(key)
         paths = [str(page.relative_to(project_root))]
         if not _cue_has_content(cue):
             used = set(_JSX_TAG.findall(source))
@@ -1143,6 +1182,14 @@ def _screen_lines(
             break
     types = cue.get("types") or {}
     links = list(cue.get("links") or [])
+    button_routes = cue.get("button_routes") or {}
+    def emit_button(button: str, index: int, indent: str) -> None:
+        req = f" requirement={fr_id}" if fr_id and index == 0 else ""
+        variant = " variant=primary" if index == 0 else ""
+        target = _wire_route(button_routes.get(button, ""))
+        destination = f' route="{_quote(target)}"' if target else ""
+        screen.append(f'{indent}button "{_quote(button)}"{variant}{req}{destination}')
+
     if fields:
         screen.append(f'    form "{title}"')
         for field in fields:
@@ -1151,19 +1198,14 @@ def _screen_lines(
             extra = f" type={kind}" if kind else ""
             bind_attr = f" bind={bind}" if bind else ""
             screen.append(f'      input "{_quote(field)}"{extra}{bind_attr}')
-        if buttons:
-            req = f" requirement={fr_id}" if fr_id else ""
-            screen.append(f'      button "{_quote(buttons[0])}" variant=primary{req}')
-            for button in buttons[1:3]:
-                screen.append(f'      button "{_quote(button)}"')
+        for index, button in enumerate(buttons):
+            emit_button(button, index, "      ")
         _emit_links(screen, links)
     else:
         for heading in headings:
             screen.append(f'    section "{_quote(heading)}"')
         for index, button in enumerate(buttons):
-            req = f" requirement={fr_id}" if fr_id and index == 0 else ""
-            variant = " variant=primary" if index == 0 else ""
-            screen.append(f'    button "{_quote(button)}"{variant}{req}')
+            emit_button(button, index, "    ")
         _emit_links(screen, links)
         if not headings and not buttons and not links:
             screen.append('    text "No fields or sections were found in this route\'s own template."')

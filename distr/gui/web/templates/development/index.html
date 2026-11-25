@@ -5,7 +5,7 @@
 {% block head_styles %}
 {{ super() }}
 <script>(function(){try{var p=location.pathname||"",s=location.search||"";if(/\/(?:development\/)?calendar(?:\/|$)/.test(p)){document.documentElement.classList.add("calendar-page");}if(/\/development\/(new)(?:\/|$)/.test(p)||/\/development\/threads\/\d+/.test(p)||/[?&]chat=/.test(s)||/[?&]new=1(?:&|$)/.test(s)||p==="/development/"||p==="/development"){document.documentElement.classList.add("dev-chat-route");if(/\/development\/new(?:\/|$)/.test(p)||/[?&]new=1(?:&|$)/.test(s))document.documentElement.classList.add("dev-new-route");}else if(/\/development\/boards\//.test(p)||/\/development\/terminals\/\d+/.test(p)||/\/development\/plan\/?$/.test(p))document.documentElement.classList.add("dev-board-route");}catch(e){}})();</script>
-<link rel="stylesheet" href="/static/development/styles.css?v=20261123-menu-consistency">
+<link rel="stylesheet" href="/static/development/styles.css?v=20261125-canvas-workspace">
 <link rel="stylesheet" href="/static/vendor/xterm/xterm.min.css">
 {% endblock %}
 
@@ -130,5 +130,5 @@
 <script src="/static/vendor/xterm/xterm.js"></script>
 <script src="/static/shared/js/assistant_identity.js?v={{ app_version or 'dev' }}-20261115"></script>
 <script src="/static/shared/js/notification_sound.js?v=20261030-crossroads"></script>
-<script type="module" src="/static/development/app.js?v=20261123-menu-consistency"></script>
+<script type="module" src="/static/development/app.js?v=20261125-canvas-workspace"></script>
 {% endblock %}

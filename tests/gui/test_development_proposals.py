@@ -46,9 +46,9 @@ def test_create_starts_once_and_moves_thread_into_project_only_on_success(panel,
     monkeypatch.setattr(widget,'_run_proposal_task',lambda operation,callback:jobs.append((operation,callback)))
     opened=[]
     widget._open_path=opened.append
-    button=widget.findChildren(QtWidgets.QPushButton)[0]
+    button=widget.findChild(QtWidgets.QPushButton, 'developmentProposalStart')
     button.click()
-    button=next(b for b in widget.findChildren(QtWidgets.QPushButton) if b.isVisible())
+    button=next(b for b in widget.findChildren(QtWidgets.QPushButton, 'developmentProposalStart') if b.isVisible())
     assert button.text() == 'Starting...'
     assert not button.isEnabled()
     widget._start_proposal(widget._proposals[0])
@@ -90,7 +90,7 @@ def test_unassigned_proposal_cannot_start_in_another_project(panel):
     widget,_=panel
     widget._proposals=[{'id':'unassigned','title':'Missing project'}]
     widget._render_proposals()
-    button=next(b for b in widget.findChildren(QtWidgets.QPushButton) if b.isVisible())
+    button=next(b for b in widget.findChildren(QtWidgets.QPushButton, 'developmentProposalStart') if b.isVisible())
     assert not button.isEnabled()
     assert 'Assign' in button.toolTip()
 

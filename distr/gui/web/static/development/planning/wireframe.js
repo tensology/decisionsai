@@ -13,7 +13,7 @@ const leaves = 'field input textarea select dropdown option checkbox radio toggl
 const types = new Set([...containers, ...leaves]);
 const common = 'id label width height gap padding bind binding requirement disabled'.split(' ');
 const attributes = {
-    screen: 'device uses route layer', template: 'uses', slot: 'name', content: 'name',
+    screen: 'device uses route layer method', template: 'uses', slot: 'name', content: 'name',
     grid: 'columns', row: '', sidebar: '', header: '', hero: '', footer: '', section: '', input: 'type name value placeholder required min max step',
     field: 'type name value placeholder required min max step', textarea: 'name value placeholder required rows',
     select: 'name value placeholder required options', dropdown: 'name value placeholder required options',
@@ -79,6 +79,7 @@ function validate(node, diagnostics) {
     if (node.attrs.type && !inputTypes.has(node.attrs.type)) diagnostic(diagnostics, node, 'INPUT_TYPE', `Unsupported input type "${node.attrs.type}"; use dedicated checkbox, radio or date components.`);
     if (node.attrs.device && !['desktop', 'tablet', 'mobile'].includes(node.attrs.device)) diagnostic(diagnostics, node, 'DEVICE', 'device must be desktop, tablet or mobile.');
     if (node.attrs.layer && !['frontend', 'backend', 'ajax', 'guidance'].includes(node.attrs.layer)) diagnostic(diagnostics, node, 'LAYER', 'layer must be frontend, backend, ajax or guidance.');
+    if (node.attrs.method && !/^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$/i.test(node.attrs.method)) diagnostic(diagnostics, node, 'METHOD', 'Unsupported HTTP method.');
     for (const key of ['href', 'route']) if (node.attrs[key] !== undefined && !localURL(node.attrs[key])) diagnostic(diagnostics, node, 'UNSAFE_URL', `${key} must be a local anchor or absolute local route.`);
     if (node.attrs.src !== undefined) diagnostic(diagnostics, node, 'UNSUPPORTED_SOURCE', 'Images are offline placeholders; src is not fetched.', 'warning');
     if (node.attrs.asset !== undefined && !/^[1-9]\d{0,15}$/.test(node.attrs.asset)) diagnostic(diagnostics, node, 'INVALID_ASSET', 'asset must be an uploaded project image ID.');
@@ -440,7 +441,7 @@ input::placeholder,textarea::placeholder{color:${palette.muted};opacity:1}
 input:not([type=checkbox]):not([type=radio]),textarea,select,progress{width:100%}
 .label+input,.label+textarea,.label+select{margin-top:6px}input,textarea,select{padding:10px 12px}textarea{resize:none}
 button{cursor:pointer;padding:10px 16px;font-weight:500;white-space:normal;overflow-wrap:anywhere}
-.button{padding:0!important}.button button{width:100%;height:100%;min-height:42px}
+.button:not([data-wf-padding]){padding:0!important}.button button{width:100%;height:100%;min-height:42px}
 button:hover{background:#eef2f7}button:disabled,input:disabled,select:disabled,textarea:disabled{opacity:.5;cursor:not-allowed}
 .button[data-wf-variant=primary] button,.button[data-wf-primary=true] button{background:${palette.accent};border-color:${palette.accent};color:white}
 .button[data-wf-variant=primary] button:hover,.button[data-wf-primary=true] button:hover{background:#182c4a}
@@ -468,6 +469,8 @@ const flowCSS = `
 .section{outline:1px dashed ${palette.line};border-radius:8px}
 .button button,.button .button-link{max-width:100%;height:auto;overflow-wrap:anywhere}
 .button,.badge,.avatar{width:fit-content!important;max-width:100%}.button button,.button .button-link{min-width:96px}.button .button-link{display:inline-flex;align-items:center;justify-content:center;height:100%;min-height:42px;padding:10px 16px;border:1px solid ${palette.line};border-radius:6px;background:white;text-decoration:none;color:inherit;font-weight:500}
+.node[data-wf-width]:is(.button,.badge,.avatar){width:100%!important;max-width:min(100%,var(--max-width))}
+.node[data-wf-width].button .button-link{width:100%}
 .spacer{min-height:max(24px,var(--min-height))}.image,.chart{min-height:max(140px,var(--min-height))}.divider{min-height:1px}
 .image[data-wf-asset]{min-height:var(--min-height)}
 .row,.grid{display:grid;gap:var(--gap)}.row{grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))}.grid{grid-template-columns:repeat(var(--columns),minmax(0,1fr))}
@@ -530,7 +533,15 @@ function invalidPreviewCopy(diagnostics) {
     return { title, tip, explained };
 }
 
-export function renderWireframe(source, title = 'Wireframe', pageId, assets = []) {
+const PREVIEW_ROUTE_BRIDGE = `document.addEventListener('click', event => {
+    const link = event.target.closest('a[data-preview-route]');
+    if (!link) return;
+    event.preventDefault();
+    window.parent.postMessage({ type: 'decisions-plan-route', route: link.dataset.previewRoute }, '*');
+});`;
+const PREVIEW_ROUTE_HASH = 'sha256-Rw4JOvKRX8OTjSnFYUTAK7NOPRcP3lf/c3nafkfNne8=';
+
+export function renderWireframe(source, title = 'Wireframe', pageId, assets = [], { interactive = false } = {}) {
     // Only the host supplies this manifest. DSL source can name an ID, never a URL.
     // Restrict even host-provided URLs to the exact project attachment endpoint.
     const assetURLs = Object.create(null);
@@ -560,13 +571,15 @@ export function renderWireframe(source, title = 'Wireframe', pageId, assets = []
     const svgHeight = box ? height : Math.max(height, offset + 24 + 20 + (1 + Math.min(4, wrap(invalid.tip, Math.max(280, width - 48), 13).length)) * 20 + 24);
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${svgHeight}" width="${width}" height="${svgHeight}" role="img" aria-label="${esc(safeTitle)}"><title>${esc(safeTitle)}</title><rect width="100%" height="100%" fill="${palette.background}"/><g fill="${palette.ink}" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">${content}</g></svg>`;
     // Defense in depth, including if opened outside the caller's sandboxed iframe.
-    // No scripts, external resources, form submission, raw HTML or executable URLs.
+    // Only the interactive preview opts into the fixed, hash-pinned navigation script.
     // srcdoc otherwise inherits its embedder's URL: fragment links could reload
     // that network URL inside the frame. Pin resolution to an offline about URL.
     // At narrow preview widths use native document flow instead of clipping the
     // desktop coordinate canvas. The AST, labels and control bindings stay intact.
     const imagePolicy = Object.values(assetURLs).map(esc).join(' ') || "'none'";
+    const scriptPolicy = interactive ? `'${PREVIEW_ROUTE_HASH}'` : "'none'";
+    const bridge = interactive ? `<script>${PREVIEW_ROUTE_BRIDGE}</script>` : '';
     const htmlBody = box ? renderHTML(box, assetURLs) : `<div class="wf-invalid" role="alert"><strong>${esc(invalid.title)}</strong><p>${esc(invalid.tip)}</p><p class="wf-next">Next: fix the first error in the outline, or open Sitemap / All pages to browse the rest.</p></div>`;
-    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'none'; img-src ${imagePolicy}; connect-src 'none'; form-action 'none'; base-uri about:"><base href="about:srcdoc"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(safeTitle)}</title><style>${css}${flowCSS}.wf-invalid{padding:20px;max-width:36rem;color:${palette.ink}}.wf-invalid strong{display:block;font-size:16px;margin-bottom:8px}.wf-invalid p{margin:0 0 8px;color:${palette.muted}}.wf-next{font-weight:500;color:${palette.accent}!important}</style></head><body><div class="sheet" style="padding:24px;--page-width:${width}px"><div class="canvas" style="width:${box?.width || 552}px;height:${box?.height || 64}px">${htmlBody}</div></div></body></html>`;
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src ${scriptPolicy}; img-src ${imagePolicy}; connect-src 'none'; form-action 'none'; base-uri about:"><base href="about:srcdoc"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(safeTitle)}</title><style>${css}${flowCSS}.wf-invalid{padding:20px;max-width:36rem;color:${palette.ink}}.wf-invalid strong{display:block;font-size:16px;margin-bottom:8px}.wf-invalid p{margin:0 0 8px;color:${palette.muted}}.wf-next{font-weight:500;color:${palette.accent}!important}</style></head><body><div class="sheet" style="padding:24px;--page-width:${width}px"><div class="canvas" style="width:${box?.width || 552}px;height:${box?.height || 64}px">${htmlBody}</div></div>${bridge}</body></html>`;
     return { svg, html, diagnostics, explanation: explainWireframeDiagnostics(diagnostics) };
 }

@@ -41,7 +41,8 @@ def _check(page):
         const top = rc ? document.elementFromPoint(rc.left + rc.width / 2, rc.top + rc.height / 2) : null;
         const pane = document.querySelector('#plan-artifacts').getBoundingClientRect();
         return { surface: [rs.left, rs.top, rs.width, rs.height], callout: rc && [rc.left, rc.top, rc.width, rc.height],
-                 uncovered: Boolean(top && c.contains(top)), grid: getComputedStyle(grid).backgroundImage, paneBottom: pane.bottom, surfaceBottom: rs.bottom,
+                 uncovered: Boolean(top && c.contains(top)), grid: getComputedStyle(grid).backgroundImage, paneBottom: pane.bottom,
+                 surfaceBottom: (document.querySelector('.plan-preview-dock') || s).getBoundingClientRect().bottom,
                  banner: Boolean(s.querySelector('.plan-canvas-callout')), map: Boolean(s.querySelector('.iface-viewport')) };
     }""")
     s, c = g["surface"], g["callout"]

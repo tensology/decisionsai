@@ -2408,6 +2408,175 @@ def _move_external_board_detail_cache_ticket(
         return True
 
 
+def _load_external_board_remote_catalog() -> dict:
+    """Fetch remote Jira/Trello board catalogs without local DB config."""
+    trello_boards: list[dict] = []
+    jira_boards: list[dict] = []
+    try:
+        from distr.core.settings import load_settings_from_db
+        import json as _json
+
+        settings = load_settings_from_db()
+        raw = settings.get("connected_accounts") or "[]"
+        if isinstance(raw, str):
+            try:
+                accounts = _json.loads(raw)
+            except Exception:
+                accounts = []
+        else:
+            accounts = raw if isinstance(raw, list) else []
+        if not accounts:
+            logger.info("External boards: no connected accounts found")
+            return {"trello": [], "jira": []}
+        logger.info("External boards: found %d connected accounts", len(accounts))
+        for acct in accounts:
+            provider = acct.get("provider", "").lower()
+            if provider == "trello" and acct.get("api_key") and acct.get("api_token") and acct.get("is_valid", True):
+                try:
+                    import requests
+
+                    resp = requests.get(
+                        "https://api.trello.com/1/members/me/boards",
+                        params={"key": acct["api_key"], "token": acct["api_token"], "fields": "name,url,closed"},
+                        timeout=10,
+                    )
+                    if resp.status_code == 200:
+                        for b in resp.json():
+                            if not b.get("closed", False):
+                                trello_boards.append({
+                                    "id": b["id"],
+                                    "name": b["name"],
+                                    "url": b.get("url", ""),
+                                    "can_create_ticket": True,
+                                })
+                except Exception as e:
+                    logger.warning("Trello board fetch failed: %s", e)
+            elif provider == "jira" and acct.get("email") and acct.get("api_token") and acct.get("is_valid", True):
+                domain = acct.get("domain") or ""
+                if not domain:
+                    server_url = (acct.get("server_url") or "").strip().rstrip("/")
+                    if server_url:
+                        domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
+                if not domain:
+                    continue
+                try:
+                    import requests
+                    from requests.auth import HTTPBasicAuth
+
+                    base_url = f"https://{domain}"
+                    start_at = 0
+                    for _ in range(5):
+                        resp = requests.get(
+                            f"{base_url}/rest/agile/1.0/board",
+                            params={"startAt": start_at, "maxResults": 100},
+                            auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
+                            headers={"Accept": "application/json"},
+                            timeout=10,
+                        )
+                        if resp.status_code != 200:
+                            break
+                        payload = resp.json() or {}
+                        values = payload.get("values", [])
+                        for b in values:
+                            location = b.get("location") or {}
+                            jira_boards.append({
+                                "id": str(b["id"]),
+                                "name": b["name"],
+                                "url": f"https://{domain}/jira/software/projects/{location.get('projectKey', '')}/boards/{b['id']}",
+                                "project_name": location.get("projectName") or "",
+                                "project_key": location.get("projectKey") or "",
+                                "can_create_ticket": True,
+                            })
+                        if payload.get("isLast", True) or not values:
+                            break
+                        start_at += len(values)
+                except Exception as e:
+                    logger.warning("Jira board fetch failed: %s", e)
+    except Exception as e:
+        logger.warning("External board fetch error: %s", e)
+    return {"trello": trello_boards, "jira": jira_boards}
+
+def _external_board_local_config_index() -> dict[str, dict]:
+    with get_session() as s:
+        external_config_boards = s.query(KanbanBoard).filter(KanbanBoard.source.in_(["trello", "jira"])).all()
+        project_ids = {int(b.default_project_id) for b in external_config_boards if b.default_project_id}
+        projects = {
+            p.id: p
+            for p in s.query(Project).filter(Project.id.in_(project_ids)).all()
+        } if project_ids else {}
+        out: dict[str, dict] = {}
+        for b in external_config_boards:
+            key = f"{b.source}:{b.external_board_id}"
+            default_project = projects.get(b.default_project_id)
+            out[key] = {
+                "local_id": b.id,
+                "has_local_config": True,
+                "modified_date": _external_board_activity_iso(b.modified_date),
+                "default_project_id": b.default_project_id,
+                **_project_context_payload(default_project, "default"),
+                "default_workflow_id": b.default_workflow_id,
+                "color": b.color,
+                "can_create_ticket": True,
+            }
+        return out
+
+def _merge_external_board_local_configs(remote_payload: dict | None) -> dict:
+    remote_payload = remote_payload or {"trello": [], "jira": []}
+    local_configs = _external_board_local_config_index()
+    merged: dict[str, list[dict]] = {"trello": [], "jira": []}
+    for provider in ("trello", "jira"):
+        rows: list[dict] = []
+        for board in remote_payload.get(provider) or []:
+            if not isinstance(board, dict):
+                continue
+            row = dict(board)
+            row.update(local_configs.get(f"{provider}:{board.get('id')}", {}))
+            rows.append(row)
+        merged[provider] = _sort_external_board_list(rows)
+    return merged
+
+def _external_board_list_fetch_worker() -> None:
+    global _EXTERNAL_BOARD_LIST_REFRESHING
+    body = _load_external_board_remote_catalog()
+    with _EXTERNAL_BOARD_LIST_LOCK:
+        _EXTERNAL_BOARD_LIST_CACHE.clear()
+        _EXTERNAL_BOARD_LIST_CACHE.update({"ready": True, "t": time.time(), "body": body})
+        _EXTERNAL_BOARD_LIST_REFRESHING = False
+
+def _schedule_external_board_list_refresh() -> None:
+    global _EXTERNAL_BOARD_LIST_REFRESHING
+    with _EXTERNAL_BOARD_LIST_LOCK:
+        if _EXTERNAL_BOARD_LIST_REFRESHING:
+            return
+        _EXTERNAL_BOARD_LIST_REFRESHING = True
+    threading.Thread(
+        target=_external_board_list_fetch_worker,
+        name="kanban-external-board-list",
+        daemon=True,
+    ).start()
+
+def external_board_catalog(force_refresh: bool = False) -> dict:
+    """Return cached Jira/Trello board catalogs immediately and refresh in the background when stale."""
+    if force_refresh:
+        _invalidate_external_board_list_cache()
+    now = time.time()
+    with _EXTERNAL_BOARD_LIST_LOCK:
+        ent = dict(_EXTERNAL_BOARD_LIST_CACHE) if _EXTERNAL_BOARD_LIST_CACHE else None
+    if ent and ent.get("ready"):
+        age = now - float(ent.get("t") or 0.0)
+        stale = age > _EXTERNAL_BOARD_LIST_STALE_AFTER_SEC
+        if stale:
+            _schedule_external_board_list_refresh()
+        payload = _merge_external_board_local_configs(ent.get("body") or {})
+        payload["cache_ready"] = True
+        payload["cache_stale"] = stale
+        return payload
+    _schedule_external_board_list_refresh()
+    payload = _merge_external_board_local_configs({"trello": [], "jira": []})
+    payload["cache_ready"] = False
+    payload["cache_stale"] = False
+    return payload
+
 def _invalidate_external_board_list_cache() -> None:
     global _EXTERNAL_BOARD_LIST_REFRESHING
     with _EXTERNAL_BOARD_LIST_LOCK:
@@ -4506,6 +4675,8 @@ def create_routes():
             )
             old_lane_id = t.lane_id
             old_lane = orm_get_by_id(s, KanbanLane,old_lane_id)
+            source_board_id = old_lane.board_id if old_lane else None
+            target_board_id = lane.board_id
             old_lane_name = old_lane.name if old_lane else ""
             board_name = ""
             if old_lane:
@@ -4528,7 +4699,7 @@ def create_routes():
                     from_lane=old_lane_name or None, to_lane=new_lane_name,
                     actor="user" if request_is_human_board_ui(request) else "system",
                     reason="board_move" if request_is_human_board_ui(request) else "http_move",
-                    source="http_move",
+                    source="http_move", publish_change=False,
                 )
             t.lane_id = payload.lane_id
             t.position = payload.position
@@ -4540,6 +4711,9 @@ def create_routes():
             for i, sib in enumerate(siblings):
                 new_pos = i if i < payload.position else i + 1
                 sib.position = new_pos
+        from distr.core.kanban.realtime import publish_ticket_move
+
+        publish_ticket_move(ticket_id=ticket_id, source_board_id=source_board_id, target_board_id=target_board_id)
         if notify_ctx:
             try:
                 from distr.core.kanban.ticket_chat_notify import notify_source_chat_ticket_moved
@@ -5711,175 +5885,9 @@ def create_routes():
 
     # ── External boards (Trello / Jira) ──
 
-    def _load_external_board_remote_catalog() -> dict:
-        """Fetch remote Jira/Trello board catalogs without local DB config."""
-        trello_boards: list[dict] = []
-        jira_boards: list[dict] = []
-        try:
-            from distr.core.settings import load_settings_from_db
-            import json as _json
-
-            settings = load_settings_from_db()
-            raw = settings.get("connected_accounts") or "[]"
-            if isinstance(raw, str):
-                try:
-                    accounts = _json.loads(raw)
-                except Exception:
-                    accounts = []
-            else:
-                accounts = raw if isinstance(raw, list) else []
-            if not accounts:
-                logger.info("External boards: no connected accounts found")
-                return {"trello": [], "jira": []}
-            logger.info("External boards: found %d connected accounts", len(accounts))
-            for acct in accounts:
-                provider = acct.get("provider", "").lower()
-                if provider == "trello" and acct.get("api_key") and acct.get("api_token") and acct.get("is_valid", True):
-                    try:
-                        import requests
-
-                        resp = requests.get(
-                            "https://api.trello.com/1/members/me/boards",
-                            params={"key": acct["api_key"], "token": acct["api_token"], "fields": "name,url,closed"},
-                            timeout=10,
-                        )
-                        if resp.status_code == 200:
-                            for b in resp.json():
-                                if not b.get("closed", False):
-                                    trello_boards.append({
-                                        "id": b["id"],
-                                        "name": b["name"],
-                                        "url": b.get("url", ""),
-                                        "can_create_ticket": True,
-                                    })
-                    except Exception as e:
-                        logger.warning("Trello board fetch failed: %s", e)
-                elif provider == "jira" and acct.get("email") and acct.get("api_token") and acct.get("is_valid", True):
-                    domain = acct.get("domain") or ""
-                    if not domain:
-                        server_url = (acct.get("server_url") or "").strip().rstrip("/")
-                        if server_url:
-                            domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
-                    if not domain:
-                        continue
-                    try:
-                        import requests
-                        from requests.auth import HTTPBasicAuth
-
-                        base_url = f"https://{domain}"
-                        start_at = 0
-                        for _ in range(5):
-                            resp = requests.get(
-                                f"{base_url}/rest/agile/1.0/board",
-                                params={"startAt": start_at, "maxResults": 100},
-                                auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
-                                headers={"Accept": "application/json"},
-                                timeout=10,
-                            )
-                            if resp.status_code != 200:
-                                break
-                            payload = resp.json() or {}
-                            values = payload.get("values", [])
-                            for b in values:
-                                location = b.get("location") or {}
-                                jira_boards.append({
-                                    "id": str(b["id"]),
-                                    "name": b["name"],
-                                    "url": f"https://{domain}/jira/software/projects/{location.get('projectKey', '')}/boards/{b['id']}",
-                                    "project_name": location.get("projectName") or "",
-                                    "project_key": location.get("projectKey") or "",
-                                    "can_create_ticket": True,
-                                })
-                            if payload.get("isLast", True) or not values:
-                                break
-                            start_at += len(values)
-                    except Exception as e:
-                        logger.warning("Jira board fetch failed: %s", e)
-        except Exception as e:
-            logger.warning("External board fetch error: %s", e)
-        return {"trello": trello_boards, "jira": jira_boards}
-
-    def _external_board_local_config_index() -> dict[str, dict]:
-        with get_session() as s:
-            external_config_boards = s.query(KanbanBoard).filter(KanbanBoard.source.in_(["trello", "jira"])).all()
-            project_ids = {int(b.default_project_id) for b in external_config_boards if b.default_project_id}
-            projects = {
-                p.id: p
-                for p in s.query(Project).filter(Project.id.in_(project_ids)).all()
-            } if project_ids else {}
-            out: dict[str, dict] = {}
-            for b in external_config_boards:
-                key = f"{b.source}:{b.external_board_id}"
-                default_project = projects.get(b.default_project_id)
-                out[key] = {
-                    "local_id": b.id,
-                    "has_local_config": True,
-                    "modified_date": _external_board_activity_iso(b.modified_date),
-                    "default_project_id": b.default_project_id,
-                    **_project_context_payload(default_project, "default"),
-                    "default_workflow_id": b.default_workflow_id,
-                    "color": b.color,
-                    "can_create_ticket": True,
-                }
-            return out
-
-    def _merge_external_board_local_configs(remote_payload: dict | None) -> dict:
-        remote_payload = remote_payload or {"trello": [], "jira": []}
-        local_configs = _external_board_local_config_index()
-        merged: dict[str, list[dict]] = {"trello": [], "jira": []}
-        for provider in ("trello", "jira"):
-            rows: list[dict] = []
-            for board in remote_payload.get(provider) or []:
-                if not isinstance(board, dict):
-                    continue
-                row = dict(board)
-                row.update(local_configs.get(f"{provider}:{board.get('id')}", {}))
-                rows.append(row)
-            merged[provider] = _sort_external_board_list(rows)
-        return merged
-
-    def _external_board_list_fetch_worker() -> None:
-        global _EXTERNAL_BOARD_LIST_REFRESHING
-        body = _load_external_board_remote_catalog()
-        with _EXTERNAL_BOARD_LIST_LOCK:
-            _EXTERNAL_BOARD_LIST_CACHE.clear()
-            _EXTERNAL_BOARD_LIST_CACHE.update({"ready": True, "t": time.time(), "body": body})
-            _EXTERNAL_BOARD_LIST_REFRESHING = False
-
-    def _schedule_external_board_list_refresh() -> None:
-        global _EXTERNAL_BOARD_LIST_REFRESHING
-        with _EXTERNAL_BOARD_LIST_LOCK:
-            if _EXTERNAL_BOARD_LIST_REFRESHING:
-                return
-            _EXTERNAL_BOARD_LIST_REFRESHING = True
-        threading.Thread(
-            target=_external_board_list_fetch_worker,
-            name="kanban-external-board-list",
-            daemon=True,
-        ).start()
-
     @router.get("/tickets/external-boards")
     async def get_external_boards(force_refresh: bool = False):
-        """Return cached Jira/Trello board catalogs immediately and refresh in the background when stale."""
-        if force_refresh:
-            _invalidate_external_board_list_cache()
-        now = time.time()
-        with _EXTERNAL_BOARD_LIST_LOCK:
-            ent = dict(_EXTERNAL_BOARD_LIST_CACHE) if _EXTERNAL_BOARD_LIST_CACHE else None
-        if ent and ent.get("ready"):
-            age = now - float(ent.get("t") or 0.0)
-            stale = age > _EXTERNAL_BOARD_LIST_STALE_AFTER_SEC
-            if stale:
-                _schedule_external_board_list_refresh()
-            payload = _merge_external_board_local_configs(ent.get("body") or {})
-            payload["cache_ready"] = True
-            payload["cache_stale"] = stale
-            return JSONResponse(payload)
-        _schedule_external_board_list_refresh()
-        payload = _merge_external_board_local_configs({"trello": [], "jira": []})
-        payload["cache_ready"] = False
-        payload["cache_stale"] = False
-        return JSONResponse(payload)
+        return JSONResponse(external_board_catalog(force_refresh))
 
     @router.post("/tickets/external-boards/{provider}/{ext_board_id}/touch")
     async def touch_external_board(provider: str, ext_board_id: str):

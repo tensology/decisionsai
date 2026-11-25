@@ -334,12 +334,12 @@ class BaseLLMService(LLMSharedMixin, LLMService):
                 tool_args = {}
             if getattr(self, '_is_telegram_request', False):
                 tool_args.setdefault("is_telegram_request", True)
-            if "last_user_message" not in tool_args:
-                for msg in reversed(getattr(self, "_messages", []) or []):
-                    if msg.get("role") == "user":
-                        content = msg.get("content", "")
-                        tool_args["last_user_message"] = content if isinstance(content, str) else str(content)
-                        break
+            tool_args.pop("last_user_message", None)
+            for msg in reversed(getattr(self, "_messages", []) or []):
+                if msg.get("role") == "user":
+                    content = msg.get("content", "")
+                    tool_args["last_user_message"] = content if isinstance(content, str) else str(content)
+                    break
 
             tool = self._tools_dict.get(tool_name) or next((t for t in self._tools if t.name == tool_name), None)
             if tool:

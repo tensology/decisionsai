@@ -140,10 +140,17 @@ export function buildIfaceModel({ sitemap = null, screens = [], captures = null,
         const shape = sidecar?.shape || defaultShape(base, shot);
         const note = sidecar?.note || comments.get(screenKey) || '';
         const rawMethod = String(screen?.attrs?.method || '').toUpperCase();
-        const method = /^(GET|POST|PUT|PATCH|DELETE|HEAD)$/.test(rawMethod) ? rawMethod : '';
+        const method = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$/.test(rawMethod) ? rawMethod : '';
         const lane = journey ? 'guidance' : pageLayer({ ...base, shape, screenKey }, screen);
         const kind = journey ? 'guidance' : (isEndpoint({ ...base, shape, screenKey, method, lane }, screen) || lane === 'ajax' ? 'endpoint' : 'page');
-        nodes.push({ ...base, key: base.key, screenId: screen ? String(screen.id) : '', screenKey, shot,
+        const summary = [];
+        const collect = node => {
+            const label = node.label || node.attrs?.label;
+            if (['button', 'link', 'input', 'section', 'form'].includes(node.type) && label && !summary.includes(label)) summary.push(label);
+            for (const child of node.children || []) if (summary.length < 3) collect(child);
+        };
+        if (screen) collect(screen);
+        nodes.push({ ...base, key: base.key, screenId: screen ? String(screen.id) : '', screenKey, shot, summary,
             shape, shapeSource: sidecar?.shape ? 'sidecar' : 'default', note, method, links: sidecar?.links || {},
             lane, kind, quiet: Boolean(shot?.notFound) && !screen });
     };
@@ -231,6 +238,17 @@ const a = bySitemap.get(e.from), b = bySitemap.get(e.to);
     // Outlined counts real pages only (guidance and endpoints are not pages).
     return { nodes, edges, byKey, coverage: graph.coverage, note: graph.note, hidden,
         outlined: nodes.filter((n) => n.screenId && n.lane !== 'guidance' && n.kind !== 'endpoint').length };
+}
+
+export function focusIfaceJourney(model, anchor) {
+    if (!anchor || !model.byKey.has(anchor)) return model;
+    const links = model.edges.filter(edge => !edge.chrome && edge.kind !== 'parent');
+    const incoming = links.filter(edge => edge.to === anchor).map(edge => edge.from);
+    const outgoing = links.filter(edge => edge.from === anchor).map(edge => edge.to);
+    const keys = new Set([...incoming, anchor, ...outgoing]);
+    const nodes = [...keys].map(key => ({ ...model.byKey.get(key) }));
+    return { ...model, nodes, byKey: new Map(nodes.map(node => [node.key, node])),
+        edges: links.filter(edge => keys.has(edge.from) && keys.has(edge.to)) };
 }
 
 const GENERATED = /^\s*#\s*@generated\s+scan:\S+\s+hash:([0-9a-f]{8})\s*$/;

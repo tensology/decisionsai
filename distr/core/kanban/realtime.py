@@ -39,3 +39,13 @@ def publish_kanban_changed(
         )
     except Exception:
         logger.debug("kanban change broadcast failed", exc_info=True)
+
+
+def publish_ticket_move(
+    *, ticket_id: int, source_board_id: int | None, target_board_id: int
+) -> None:
+    """Refresh each board affected by a committed move."""
+    for board_id in {source_board_id, target_board_id} - {None}:
+        publish_kanban_changed(
+            board_id=board_id, ticket_id=ticket_id, event="ticket_lane_move",
+        )

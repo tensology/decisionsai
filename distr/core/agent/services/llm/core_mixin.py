@@ -314,7 +314,14 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     try:
                         normalizer = getattr(self, "_normalize_tool_kwargs", None)
                         safe_arguments = normalizer(tool, arguments) if callable(normalizer) else arguments
-                        result = str(tool._run(**safe_arguments))
+                        from distr.core.agent.services.llm.tool_execution_policy import (
+                            remember_successful_tool_call, tool_execution_block_reason,
+                        )
+
+                        result = tool_execution_block_reason(self, tool_name, safe_arguments, latest_user_text)
+                        if not result:
+                            result = str(tool._run(**safe_arguments))
+                            remember_successful_tool_call(self, tool_name, safe_arguments, latest_user_text, result)
                     except Exception as exc:
                         result = f"Error executing tool: {exc}"
                     results[tool_name] = result
@@ -1003,12 +1010,16 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             # replaced the per-keyword exposure hacks that lived here.
             from distr.core.agent.tool_relevance import intent_tool_names
 
+            from distr.core.agent.services.llm.reply_context import reply_connector_names
+
+            reply_names = reply_connector_names(self, last_user_message)
+            reply_tools = [self._tools_dict[name] for name in reply_names if name in self._tools_dict]
             for intent_name in intent_tool_names(last_user_message):
                 intent_tool = self._tools_dict.get(intent_name)
                 if intent_tool is not None and intent_tool.name not in retrieved_names:
                     retrieved.append(intent_tool)
                     retrieved_names.add(intent_tool.name)
-            return retrieved + sticky
+            return reply_tools + [tool for tool in retrieved + sticky if tool.name not in reply_names]
         except Exception as e:
             logger.debug("_get_filtered_tools fallback: %s", e)
             return self._tools

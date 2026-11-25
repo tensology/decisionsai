@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 // Import as ESM without imposing package.json changes on the browser asset tree.
@@ -258,6 +259,17 @@ test('HTML and SVG escape labels and metadata; no executable URL, script, networ
     for (const url of ['javascript:alert(1)', 'https://evil.test', '//evil.test', '/\\evil.test', 'data:text/html,x']) {
         assert.ok(errors(renderWireframe(`screen X\n  link X href='${url.replaceAll('\\', '\\\\')}'`)).some(d => d.code === 'UNSAFE_URL'), url);
     }
+});
+
+test('interactive preview permits only the fixed route bridge', () => {
+    const dsl = 'screen X\n  link "</script><script>untrusted" route=/customers';
+    const { html } = renderWireframe(dsl, '', undefined, [], { interactive: true });
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+    assert.equal(scripts.length, 1);
+    const hash = createHash('sha256').update(scripts[0][1]).digest('base64');
+    assert.ok(html.includes(`script-src 'sha256-${hash}';`));
+    assert.match(html, /connect-src 'none'; form-action 'none'/);
+    assert.ok(!scripts[0][1].includes('untrusted'));
 });
 
 test('familiar controls use distinct SVG shapes and native HTML semantics', () => {

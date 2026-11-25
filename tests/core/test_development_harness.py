@@ -68,6 +68,9 @@ def test_explicit_audit_and_fix_remains_authorized_implementation():
     assert not harness._audit_only_request('Audit and fix the implementation, then run the tests.')
     assert not harness._audit_only_request('Fix those process defects and add regression tests.')
     assert not harness._audit_only_request("Fix Decisions. Don't change either other site.")
+    assert not harness._audit_only_request("Update Julie's draft. Invoice records are read-only.")
+    assert not harness._audit_only_request("Please carry out the document corrections. Invoice records are read-only.")
+    assert harness._audit_only_request("Review only. Update nothing.")
     assert harness._prompt_expects_project_change('Audit and fix the implementation', autonomy_level='full')
 
 
@@ -240,7 +243,8 @@ def test_cli_backed_owned_thread_uses_server_bound_schedule_control(tmp_path, mo
         "days": "1,2,3,4,5",
         "timezone": "",
     }
-    assert len(notices) == 2
+    assert paused["message"] == "This scheduled task is paused."
+    assert changed["message"] == "The schedule has been updated."
     assert run_now["automation_id"] == "auto_9"
     assert dispatched == [("auto_9", True)]
 
@@ -264,6 +268,35 @@ def test_owned_automation_schedule_parser_covers_supported_edits():
     once = harness._owned_automation_schedule_from_prompt("Run once tomorrow at 08:15", current)
     assert once["kind"] == "once"
     assert once["run_at"].endswith("T08:15")
+    assert harness._owned_automation_schedule_from_prompt("Continue the monthly billing run for 2026-11-25.", current) is None
+    assert harness._owned_automation_schedule_from_prompt("Change the onsite entry to include account setup at 10:45.", current) is None
+    assert harness._owned_automation_schedule_from_prompt("Change this schedule to 10:00. Review the billing PDF.", current) is None
+
+
+def test_owned_automation_schedule_control_completes_the_user_turn(tmp_path, monkeypatch):
+    get_session, chat_id, _ = _database(tmp_path, monkeypatch)
+    with get_session() as db:
+        row = Chat(parent_id=chat_id, input="Change this schedule to 10:00")
+        db.add(row)
+        db.flush()
+        turn_id = row.id
+        db.commit()
+    metadata = {"source_type": "automation", "source_ref": "auto_9"}
+    updated, completed = [], []
+    monkeypatch.setattr("distr.core.chat_turns.latest_active_turn_id", lambda selected: turn_id)
+    monkeypatch.setattr("distr.core.chat_turns.complete_turn", lambda selected, **kwargs: completed.append((selected, kwargs)))
+    monkeypatch.setattr("distr.core.automation.store.get_automation", lambda key: {"schedule": {"kind": "daily", "time": "09:00"}})
+    monkeypatch.setattr("distr.core.automation.store.update_automation", lambda key, **fields: updated.append(fields) or fields)
+
+    misleading = "Continue the monthly billing run on 2026-11-25. Remove the last invoice from the PDF and preserve the schedule."
+    assert harness._handle_owned_automation_control(chat_id, misleading, metadata, assessment={}) is None
+    assert updated == []
+    result = harness._handle_owned_automation_control(chat_id, "Change this schedule to 10:00", metadata, assessment={})
+    assert result["execution_mode"] == "automation_control"
+    assert updated[0]["schedule"]["time"] == "10:00"
+    assert completed == [(chat_id, {"turn_id": turn_id, "display_text": result["message"]})]
+    with get_session() as db:
+        assert db.get(Chat, turn_id).response == result["message"]
 
 
 def test_owned_automation_delete_confirmation_expires_rejects_and_clears_on_intervening_turn(tmp_path, monkeypatch):

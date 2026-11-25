@@ -143,3 +143,18 @@
 .board-edit-panel.hidden { display: none; }
 .board-edit-panel > small { color: #9ca3af; font-size: 0.75rem; line-height: 1.4; }
 #board-edit-notes { min-height: 11rem; font-family: var(--studio-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 0.82rem; }
+.studio-shell .project-select > .project-select-name {
+    flex-shrink: 1;
+}
+
+.project-jira-badge {
+    flex: none;
+    margin-inline-start: 6px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: #233861;
+    color: #c6ddff;
+    font-size: 10px;
+    font-weight: 650;
+    line-height: 14px;
+}

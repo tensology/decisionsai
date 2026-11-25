@@ -94,6 +94,20 @@ def test_get_filtered_tools_routes_explicit_tensology_mail_without_google(monkey
     assert "google_workspace" not in names
 
 
+def test_mailshot_stays_available_on_a_short_draft_follow_up(monkeypatch):
+    retriever = SimpleNamespace(retrieve=lambda *_: ["request_tool"])
+    monkeypatch.setattr("distr.core.agent.tool_retriever.get_tool_retriever", lambda: retriever)
+    h = _CoreHarness()
+    h._messages = [
+        {"role": "user", "content": "Can you see the email in Mailshot?"},
+        {"role": "assistant", "content": "I found it. Want me to draft a reply?"},
+    ]
+
+    tools = h._get_filtered_tools("Yeah, draft polite now.")
+
+    assert tools[0].name == "tensology_workspace"
+
+
 def test_get_filtered_tools_exposes_both_connected_mailboxes_for_generic_read(monkeypatch):
     class _Retriever:
         def retrieve(self, _msg, _model):
