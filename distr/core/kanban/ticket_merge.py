@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from importlib import import_module
 from typing import Any, Optional
 
@@ -14,6 +15,8 @@ from distr.core.db.kanban import (
     KanbanTicketTodo,
 )
 from distr.core.db.time import utc_now_naive
+
+logger = logging.getLogger(__name__)
 
 
 class TicketMergeError(ValueError):
@@ -302,10 +305,19 @@ def merge_ticket(
             model = getattr(import_module(module_name), class_name)
             column = getattr(model, column_name)
         except Exception:
+            # A model/column may not exist in this build; log so a genuinely
+            # missing reference target is not silently skipped during a merge.
+            logger.debug(
+                "Merge: reference target %s.%s unavailable", module_name, class_name, exc_info=True
+            )
             continue
         try:
             rows = session.query(model).filter(column == duplicate_ticket_id).all()
         except Exception:
+            logger.warning(
+                "Merge: could not repoint %s.%s from ticket %s to %s",
+                class_name, column_name, duplicate_ticket_id, keep_ticket_id, exc_info=True,
+            )
             continue
         updated = 0
         for row in rows:
