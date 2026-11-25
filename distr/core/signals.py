@@ -38,6 +38,9 @@ class SignalManager(QObject):
     enable_hands_free = pyqtSignal()
     disable_hands_free = pyqtSignal()
     hands_free_mode_changed = pyqtSignal(bool)
+    # Another agent's progress while we wait on an agent-to-agent reply:
+    # {type: start|token|done, agent_id, agent_name, text?}
+    agent_reply_progress = pyqtSignal(dict)
     hands_free_command_requested = pyqtSignal(bool, bool)
 
     # Push-to-talk signals (GUI -> Agent requests)

@@ -937,6 +937,10 @@ function startChatWebSocket(force) {
                     handleChatEventStreamError(msg);
                     return;
                 }
+                if (msg.event === 'agent_reply_progress') {
+                    handleAgentReplyProgress(msg);
+                    return;
+                }
                 if (msg.event === 'tool_executed') {
                     handleChatEventToolExecuted(msg);
                     return;
@@ -5134,6 +5138,27 @@ function setSendButtonStreaming(streaming) {
         messageInput.disabled = chatActivationInFlight;
     }
     handleInputChange();
+}
+
+function handleAgentReplyProgress(msg) {
+    // Another agent is replying while the orchestrator waits on it. Show a
+    // transient line so the turn does not look frozen.
+    const name = msg.agent_name || 'another agent';
+    let el = document.getElementById('agentReplyProgress');
+    if (msg.type === 'start' || msg.type === 'token') {
+        if (!el) {
+            const anchor = document.getElementById('streamingTypingIndicator')
+                || document.getElementById('typingIndicator');
+            if (!anchor || !anchor.parentNode) return;
+            el = document.createElement('div');
+            el.id = 'agentReplyProgress';
+            el.className = 'agent-reply-progress';
+            anchor.parentNode.insertBefore(el, anchor);
+        }
+        el.textContent = `Waiting for ${name}…`;
+    } else if (el) {
+        el.remove();
+    }
 }
 
 function createTypingIndicator() {

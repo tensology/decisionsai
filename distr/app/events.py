@@ -160,6 +160,10 @@ class EventHandlerMixin:
                         'current_chat_changed', 'model_hot_reload', 'load_chat'):
             self._evt_chat_lifecycle(event, data)
 
+        # --- Agent-to-agent progress (the other agent replying while we wait) ---
+        elif event == 'agent_reply_progress':
+            signal_manager.agent_reply_progress.emit(dict(data) if isinstance(data, dict) else {})
+
         # --- Chat stream ---
         elif event in ('chat_stream_started', 'chat_stream_token',
                         'chat_stream_finished', 'chat_stream_error',

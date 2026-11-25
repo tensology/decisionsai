@@ -159,7 +159,7 @@ def _get_tool_definitions(
         ("SelectThreadTool", {}),
         ("OpenThreadTool", {}),
         # Multi-agent: talk to another agent; workspace tools gated per agent capability set
-        ("MessageAgentTool", {}),
+        ("MessageAgentTool", dict(event_queue=event_queue)),
         ("CalendarBlocksTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
         ("SnippetsTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
         ("DevelopmentOverviewTool", {}),

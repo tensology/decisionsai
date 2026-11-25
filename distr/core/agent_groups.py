@@ -680,7 +680,7 @@ def agents_thread(a_id: int, b_id: int) -> int:
 
 
 def message_agent(from_agent_id: int, target: Any, message: str, *, group_id: Optional[int] = None,
-                  generate=None, max_replies: int = 3, chain: bool = True) -> dict:
+                  generate=None, emit: Optional[Emit] = None, max_replies: int = 3, chain: bool = True) -> dict:
     """Send a message from one agent to another and return the reply.
 
     With ``group_id`` the exchange happens in that group (both must be members);
@@ -695,7 +695,8 @@ def message_agent(from_agent_id: int, target: Any, message: str, *, group_id: Op
         raise GroupError(f"No other agent called {target!r}.")
     chat_id = int(group_id) if group_id else agents_thread(int(from_agent_id), recipient.id)
     replies = run_turn(chat_id, message, from_agent_id=int(from_agent_id), responders=[recipient.id],
-                       max_replies=max(1, int(max_replies)), chain=bool(chain), generate=generate)
+                       max_replies=max(1, int(max_replies)), chain=bool(chain), generate=generate,
+                       emit=emit)
     # The recipient's own reply is the answer; a chained reply from a third agent
     # is collaboration, not the answer to hand back.
     reply = next((r for r in replies if int(r.get("agent_id", 0)) == int(recipient.id)),

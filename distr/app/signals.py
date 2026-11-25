@@ -702,6 +702,19 @@ class SignalBridgeMixin:
                 _flush_stream_tokens()
         signal_manager.chat_stream_token.connect(on_chat_stream_token_web)
 
+        def on_agent_reply_progress_web(data):
+            # Another agent replying while the orchestrator waits: surface it in the
+            # web chat so the user sees progress instead of a frozen turn.
+            try:
+                _post_chat_event({
+                    "event": "agent_reply_progress",
+                    "chat_id": getattr(self, "_web_stream_chat_id", None),
+                    **(dict(data) if isinstance(data, dict) else {}),
+                })
+            except Exception:
+                logger.debug("agent reply progress forward failed", exc_info=True)
+        signal_manager.agent_reply_progress.connect(on_agent_reply_progress_web)
+
         def on_chat_stream_finished_web(chat_id):
             active_cid = getattr(self, "_web_stream_chat_id", None)
             resp_text = getattr(self, '_last_stream_response_text', None)

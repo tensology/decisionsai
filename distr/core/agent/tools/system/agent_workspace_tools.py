@@ -278,6 +278,21 @@ class MessageAgentTool(BaseTool):
                         "saved in your shared thread with that agent. Use when the user asks you to ask, tell, check "
                         "with or delegate to another agent.")
     args_schema: type[BaseModel] = MessageAgentInput
+    event_queue: Optional[Any] = Field(default=None, exclude=True)
+
+    def __init__(self, event_queue=None, **kwargs):
+        super().__init__(**kwargs)
+        self._event_queue = event_queue
+
+    def _emit(self, payload: dict) -> None:
+        """Forward another agent's progress to the UI while we wait on it."""
+        q = self._event_queue
+        if q is None:
+            return
+        try:
+            q.put(("agent_reply_progress", dict(payload)), block=False)
+        except Exception:
+            pass
 
     def _run(self, agent: str = "", message: str = "", **_: Any) -> str:
         from distr.core.agent_groups import GroupError, current_agent_id, message_agent
@@ -286,7 +301,7 @@ class MessageAgentTool(BaseTool):
         if not sender:
             return "No current agent to send from."
         try:
-            result = message_agent(sender, agent, message)
+            result = message_agent(sender, agent, message, emit=self._emit)
         except GroupError as exc:
             return str(exc)
         if result["error"]:
