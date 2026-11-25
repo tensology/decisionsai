@@ -6,8 +6,11 @@ Only bounded saved excerpts are included; no filesystem reads are performed.
 from __future__ import annotations
 
 import json
+import logging
 from itertools import zip_longest
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def _id(value):
@@ -123,7 +126,9 @@ def planning_snapshot(project_id: int | None, *, workspace_id: int | None = None
                 if ledger["requirements"]:
                     entry["requirements"] = {**ledger["counts"], "conflict_keys": ledger["conflict_keys"][:5]}
         except Exception:
-            pass
+            # Derived counts only; the inventory stays usable. Log so a silent
+            # schema/query drift is diagnosable instead of just missing numbers.
+            logger.warning("Requirements-ledger enrichment skipped", exc_info=True)
         coverage["item_omitted"] = coverage["item_total"] - len(items)
         coverage["chat_omitted"] = coverage["chat_total"] - len(chats)
     return result
