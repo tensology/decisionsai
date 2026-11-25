@@ -17,6 +17,7 @@ import logging
 import queue
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Any, Callable, Iterable, Optional
 
@@ -32,6 +33,9 @@ MAX_PER_AGENT = 2          # replies by one agent per user message
 # Hard cap on one agent's reply. A provider that never returns must not hang the
 # whole group turn or the agent-to-agent tool that is waiting on it.
 AGENT_REPLY_TIMEOUT_SECS = 120.0
+# Wall-clock budget for the whole turn (all hops together). Bounds a chain that
+# keeps handing off even when each individual reply is quick.
+TURN_BUDGET_SECS = 300.0
 HISTORY_LIMIT = 40         # transcript rows sent to the model
 
 Emit = Callable[[dict], None]
@@ -501,8 +505,13 @@ def _stream_agent(agent: ChatAgent, messages: list[dict], emit: Emit) -> str:
     provider = (agent.provider or "").strip().lower()
     if not provider or not (agent.model_name or "").strip():
         raise GroupError(f"{agent.name} has no model configured.")
+    deadline = time.monotonic() + AGENT_REPLY_TIMEOUT_SECS
     chunks = []
     for token in create_stream(provider, agent.model_name, messages, load_settings_from_db()):
+        # Belt-and-braces: the provider client has its own request timeout, but a
+        # stream that keeps trickling is also bounded here.
+        if time.monotonic() > deadline:
+            raise GroupError(f"{agent.name} took too long to reply.")
         chunks.append(token)
         emit({"type": "token", "agent_id": agent.id, "text": token})
     return "".join(chunks)
@@ -574,7 +583,12 @@ def run_turn(chat_id: int, message: str, *, emit: Optional[Emit] = None,
         return result
 
     depth = 0
+    turn_started = time.monotonic()
     while wave and depth < MAX_DEPTH:
+        if time.monotonic() - turn_started > TURN_BUDGET_SECS:
+            logger.warning("Group turn exceeded its %.0fs budget; stopping", TURN_BUDGET_SECS)
+            emit({"type": "capped", "limit": max_replies, "reason": "time_budget"})
+            break
         with lock:
             room = max_replies - len(replies)
             wave = [a for a in dict.fromkeys(wave) if counts.get(a.id, 0) < MAX_PER_AGENT][:max(room, 0)]

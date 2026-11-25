@@ -13,6 +13,12 @@ from distr.core.llm_errors import LLMModelError
 
 logger = logging.getLogger(__name__)
 
+# Per-request ceiling for a streamed reply. A hung cloud provider must not hold
+# the reply (or an agent-to-agent turn waiting on it) for the SDK's 600s default.
+# Ollama gets longer because a cold local model may still be loading.
+STREAM_REQUEST_TIMEOUT_SECS = 110.0
+OLLAMA_REQUEST_TIMEOUT_SECS = 600.0
+
 _PROVIDER_NORMALIZE = {
     "ollama": "Ollama",
     "openai": "OpenAI",
@@ -361,7 +367,7 @@ def _stream_ollama(
     from ollama import Client
 
     ollama_url = settings.get("ollama_url", "http://localhost:11434/")
-    client = Client(host=ollama_url)
+    client = Client(host=ollama_url, timeout=OLLAMA_REQUEST_TIMEOUT_SECS)
     stream = client.chat(model=model, messages=_provider_image_messages(messages, "ollama"), stream=True)
     for chunk in stream:
         if chunk and "message" in chunk:
@@ -383,7 +389,13 @@ def _stream_openai_compat(
     if not api_key:
         label = key_name.replace("_key", "").replace("_", " ").title()
         raise ValueError(f"{label} API key not configured")
-    kwargs: dict = {"api_key": api_key}
+    kwargs: dict = {
+        "api_key": api_key,
+        # Hard bound so one hung provider cannot hold the reply (and the
+        # agent-to-agent turn waiting on it) for the SDK's 600s default.
+        "timeout": STREAM_REQUEST_TIMEOUT_SECS,
+        "max_retries": 0,
+    }
     if base_url:
         kwargs["base_url"] = base_url
     client = OpenAI(**kwargs)
@@ -401,7 +413,7 @@ def _stream_anthropic(
     api_key = (settings.get("anthropic_key") or "").strip()
     if not api_key:
         raise ValueError("Anthropic API key not configured")
-    client = Anthropic(api_key=api_key)
+    client = Anthropic(api_key=api_key, timeout=STREAM_REQUEST_TIMEOUT_SECS, max_retries=0)
     system = None
     chat_messages = []
     for m in _provider_image_messages(messages, "anthropic"):
