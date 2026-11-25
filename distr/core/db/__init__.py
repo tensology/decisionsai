@@ -395,6 +395,12 @@ class Settings(Base):
     initiative_recommendations = Column(Boolean, default=False)
     initiative_own_channel = Column(String, default='')  # '' = Telegram if allowed, else log only
     initiative_owner_whatsapp = Column(String, default='')  # owner's own number for Own-outcomes updates
+    # Ambient suggestions from desktop awareness (see docs/superpowers/specs/2026-11-25-initiative-suggestions-design.md)
+    initiative_awareness_depth = Column(String, default='tier_ab')  # tier_a | tier_ab | visual
+    initiative_awareness_screens = Column(String, default='all')  # all | focused
+    initiative_suggestion_budget_per_day = Column(Integer, default=6)
+    initiative_interrupt_threshold = Column(Float, default=0.85)
+    initiative_visual_capture_seconds = Column(Integer, default=900)
     
     # Chat voice/speaker toggle
     chat_voice_enabled = Column(Boolean, default=True)
@@ -878,6 +884,11 @@ try:
                 ("initiative_recommendations", "BOOLEAN DEFAULT 0"),
                 ("initiative_own_channel", "VARCHAR DEFAULT ''"),
                 ("initiative_owner_whatsapp", "VARCHAR DEFAULT ''"),
+                ("initiative_awareness_depth", "VARCHAR DEFAULT 'tier_ab'"),
+                ("initiative_awareness_screens", "VARCHAR DEFAULT 'all'"),
+                ("initiative_suggestion_budget_per_day", "INTEGER DEFAULT 6"),
+                ("initiative_interrupt_threshold", "FLOAT DEFAULT 0.85"),
+                ("initiative_visual_capture_seconds", "INTEGER DEFAULT 900"),
                 # Google Gemini provider
                 ("gemini_enabled", "BOOLEAN DEFAULT 0"),
                 ("gemini_key", "VARCHAR DEFAULT ''"),

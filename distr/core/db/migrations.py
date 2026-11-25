@@ -1817,6 +1817,11 @@ def run_migrations():
         ("initiative_recommendations", "BOOLEAN DEFAULT 0"),
         ("initiative_own_channel", "VARCHAR DEFAULT ''"),
         ("initiative_owner_whatsapp", "VARCHAR DEFAULT ''"),
+        ("initiative_awareness_depth", "VARCHAR DEFAULT 'tier_ab'"),
+        ("initiative_awareness_screens", "VARCHAR DEFAULT 'all'"),
+        ("initiative_suggestion_budget_per_day", "INTEGER DEFAULT 6"),
+        ("initiative_interrupt_threshold", "FLOAT DEFAULT 0.85"),
+        ("initiative_visual_capture_seconds", "INTEGER DEFAULT 900"),
     ]
     for col_name, col_type in initiative_columns:
         try:

@@ -60,6 +60,7 @@ def _empty_cache() -> dict[str, Any]:
         "title": "",
         "focused": "",
         "ui": [],
+        "screens": [],
         "stale": True,
     }
 
@@ -184,6 +185,114 @@ def _tier_a_frontmost_and_title() -> tuple[str, str]:
         return "", ""
 
 
+_SYSTEM_WINDOW_OWNERS = frozenset(
+    {
+        "Window Server",
+        "Dock",
+        "SystemUIServer",
+        "Control Center",
+        "ControlCenter",
+        "Notification Center",
+        "NotificationCenter",
+        "Spotlight",
+        "Wallpaper",
+        "WindowManager",
+        "CoreServicesUIAgent",
+    }
+)
+
+
+def _display_for_point(
+    x: float, y: float, displays: list[tuple[int, float, float, float, float]]
+) -> int:
+    """Index of the display containing (x, y); first display if none matches."""
+    for idx, dx, dy, dw, dh in displays:
+        if dx <= x < dx + dw and dy <= y < dy + dh:
+            return idx
+    return displays[0][0] if displays else 1
+
+
+def _screens_scope() -> str:
+    """'all' (default) or 'focused'. Background-only; fail-open to 'all'."""
+    try:
+        from distr.core.settings import load_settings_from_db
+
+        raw = str(load_settings_from_db().get("initiative_awareness_screens") or "").strip().lower()
+    except Exception:
+        raw = ""
+    return raw if raw in ("all", "focused") else "all"
+
+
+def _tier_a_screens() -> list[dict[str, Any]]:
+    """Frontmost app + title per screen. Local-only, no sidecar. Fail-open to [].
+
+    CGWindowListCopyWindowInfo returns windows front-to-back, and CGWindowBounds
+    shares CGDisplayBounds' top-left origin, so a window's centre maps straight to
+    a display with no coordinate flip. The first window seen on a display is that
+    display's frontmost window.
+    """
+    try:
+        import platform
+
+        if platform.system() != "Darwin":
+            return []
+        import Quartz
+
+        wins = Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly
+            | Quartz.kCGWindowListExcludeDesktopElements,
+            Quartz.kCGNullWindowID,
+        ) or []
+
+        displays: list[tuple[int, float, float, float, float]] = []
+        try:
+            err, ids, count = Quartz.CGGetActiveDisplayList(16, None, None)
+            if err == 0 and ids:
+                for i in range(int(count)):
+                    b = Quartz.CGDisplayBounds(ids[i])
+                    displays.append((
+                        i + 1,
+                        float(b.origin.x),
+                        float(b.origin.y),
+                        float(b.size.width),
+                        float(b.size.height),
+                    ))
+        except Exception:
+            displays = []
+
+        per_screen: dict[int, dict[str, Any]] = {}
+        for w in wins:
+            # Only normal-layer, visible windows: the menu bar, wallpaper, status
+            # indicators and Dock all sit on higher layers and would otherwise be
+            # reported as the frontmost "app" on each screen.
+            try:
+                if int(w.get(Quartz.kCGWindowLayer) or 0) != 0:
+                    continue
+                if float(w.get(Quartz.kCGWindowAlpha) or 0.0) <= 0.0:
+                    continue
+            except Exception:
+                continue
+            owner = str(w.get(Quartz.kCGWindowOwnerName) or "").strip()
+            if not owner or owner in _SYSTEM_WINDOW_OWNERS:
+                continue
+            name = str(w.get(Quartz.kCGWindowName) or "").strip()
+            idx = 1
+            if displays:
+                try:
+                    b = w.get(Quartz.kCGWindowBounds) or {}
+                    cx = float(b.get("X", 0.0)) + float(b.get("Width", 0.0)) / 2.0
+                    cy = float(b.get("Y", 0.0)) + float(b.get("Height", 0.0)) / 2.0
+                except Exception:
+                    cx = cy = 0.0
+                idx = _display_for_point(cx, cy, displays)
+            if idx not in per_screen:
+                per_screen[idx] = {"screen": idx, "app": owner, "title": name[:80]}
+        return [per_screen[k] for k in sorted(per_screen)]
+    except Exception:
+        logger.debug("desktop_awareness: tier A screens failed", exc_info=True)
+        return []
+
+
 def _tier_b_interactive_labels(*, timeout_s: float) -> tuple[str, list[str], bool]:
     """Optional shallow tree via sidecar. Returns focused, ui labels, sidecar_ok."""
     if timeout_s <= 0.05:
@@ -240,6 +349,23 @@ def _format_line(*, app: str, title: str, focused: str, ui: list[str]) -> str:
     return line
 
 
+def _format_screens_line(screens: list[dict[str, Any]]) -> str:
+    """Compact per-screen line, e.g. 'screens: 1=Warp "π"; 2=ChatGPT "Audit"'."""
+    parts: list[str] = []
+    for s in screens or []:
+        app = str(s.get("app") or "").strip()
+        if not app:
+            continue
+        title = str(s.get("title") or "").strip()
+        entry = f'{s.get("screen")}={app}'
+        if title:
+            entry += f' "{title[:40]}"'
+        parts.append(entry)
+    if len(parts) <= 1:
+        return ""
+    return "screens: " + "; ".join(parts)
+
+
 def compact_desktop_snapshot(*, force_tier_b: bool = False) -> dict[str, Any]:
     """Budgeted snapshot for background refresh or explicit tool use. Fail-open."""
     started = time.monotonic()
@@ -249,6 +375,15 @@ def compact_desktop_snapshot(*, force_tier_b: bool = False) -> dict[str, Any]:
     except Exception:
         logger.debug("desktop_awareness: tier A failed", exc_info=True)
     elapsed = time.monotonic() - started
+
+    screens: list[dict[str, Any]] = []
+    if _screens_scope() == "all":
+        try:
+            screens = _tier_a_screens()
+        except Exception:
+            logger.debug("desktop_awareness: screens failed", exc_info=True)
+            screens = []
+
     focused, ui, sidecar_ok = "", [], False
     remain = TOTAL_REFRESH_BUDGET_S - elapsed
     if force_tier_b or (elapsed < TIER_A_BUDGET_S and remain > 0.08):
@@ -259,6 +394,9 @@ def compact_desktop_snapshot(*, force_tier_b: bool = False) -> dict[str, Any]:
         except Exception:
             focused, ui, sidecar_ok = "", [], False
     line = _format_line(app=app, title=title, focused=focused, ui=ui)
+    screens_line = _format_screens_line(screens)
+    if screens_line:
+        line = f"{line}\n{screens_line}" if line else screens_line
     return {
         "line": line,
         "content_hash": _hash_line(line) if line else "",
@@ -268,6 +406,7 @@ def compact_desktop_snapshot(*, force_tier_b: bool = False) -> dict[str, Any]:
         "title": title,
         "focused": focused,
         "ui": ui,
+        "screens": screens,
         "stale": False,
     }
 
@@ -361,6 +500,7 @@ def desktop_for_situational() -> dict[str, Any]:
         "content_hash": snap.get("content_hash") or "",
         "app": snap.get("app") or "",
         "title": snap.get("title") or "",
+        "screens": snap.get("screens") or [],
         "stale": bool(snap.get("stale")),
         "age_s": snap.get("age_s"),
     }
