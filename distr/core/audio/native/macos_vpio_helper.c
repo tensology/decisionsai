@@ -54,6 +54,7 @@
 #define MSG_STATS           0x03
 #define MSG_VOL             0x03
 #define MSG_QUIT            0x04
+#define MSG_VOICE_PROCESSING 0x05
 
 /* macOS 14+ ducking configuration (defined here so older SDKs still compile) */
 #ifndef kAUVoiceIOProperty_OtherAudioDuckingConfiguration
@@ -393,6 +394,14 @@ static void *stdin_thread_main(void *arg) {
             float v = 1.0f;
             memcpy(&v, payload, sizeof(v));
             store_volume(v);
+        } else if (type == MSG_VOICE_PROCESSING) {
+            /* payload[0] = 1 enables Apple voice processing (AEC + Voice
+             * Isolation); 0 bypasses it so the output sounds normal. */
+            UInt32 bypass = (len >= 1 && payload[0]) ? 0 : 1;
+            if (g_au != NULL) {
+                AudioUnitSetProperty(g_au, kAUVoiceIOProperty_BypassVoiceProcessing,
+                                     kAudioUnitScope_Global, 0, &bypass, sizeof(bypass));
+            }
         } else if (type == MSG_QUIT) {
             atomic_store_explicit(&g_running, false, memory_order_release);
             break;
@@ -500,8 +509,10 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* Enable Apple hardware AEC + noise suppression + beamforming */
-    UInt32 bypass = 0;
+    /* Apple voice processing (AEC + Voice Isolation) changes the output path,
+     * so it starts BYPASSED. The app turns it on only while continuous mode is
+     * active (MSG_VOICE_PROCESSING), keeping normal audio untouched for PTT. */
+    UInt32 bypass = 1;
     AudioUnitSetProperty(g_au, kAUVoiceIOProperty_BypassVoiceProcessing,
                          kAudioUnitScope_Global, 0, &bypass, sizeof(bypass));
     UInt32 mute_out = 0;

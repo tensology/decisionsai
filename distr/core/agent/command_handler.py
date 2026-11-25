@@ -665,7 +665,21 @@ def _cmd_set_hands_free(session, params):
         session.s2s_service.set_hands_free(enabled)
     _apply_mode_vad_params(session)
     _sync_audio_input_power(session, "set_hands_free")
+    # Apple voice processing (AEC + Voice Isolation) is only needed for
+    # continuous mode; PTT leaves the output path untouched.
+    _set_voice_processing(session, enabled)
     session.logger.debug("All services updated - audio input power synced to active voice mode")
+
+
+def _set_voice_processing(session, enabled: bool) -> None:
+    transport = getattr(session, "transport", None)
+    if transport is None or not hasattr(transport, "set_voice_processing"):
+        return
+    try:
+        transport.set_voice_processing(bool(enabled))
+        session.logger.info("Voice processing (AEC/Voice Isolation) %s", "on" if enabled else "off")
+    except Exception:
+        session.logger.debug("Could not toggle voice processing", exc_info=True)
 
 
 def _cmd_resume_after_wake(session, params):

@@ -73,6 +73,7 @@ _MSG_FLUSH = 0x02
 _MSG_STATS = 0x03
 _MSG_VOL = 0x03
 _MSG_QUIT = 0x04
+_MSG_VOICE_PROCESSING = 0x05
 
 # Playback end-of-reply tuning (seconds).
 # Quiet time after the speaker buffer drains before playback_finished is sent,
@@ -730,6 +731,16 @@ class MacOsVpioAudioTransport:
 
     def _send_volume_sync(self, volume: float) -> None:
         self._write_packet_sync(_MSG_VOL, struct.pack("<f", float(volume)))
+
+    def set_voice_processing(self, enabled: bool) -> None:
+        """Enable/disable Apple voice processing (AEC + Voice Isolation).
+
+        Continuous mode needs it; PTT does not, and it changes the output path,
+        so the helper starts bypassed and the app turns it on only while
+        hands-free is active.
+        """
+        self._voice_processing = bool(enabled)
+        self._write_packet_sync(_MSG_VOICE_PROCESSING, bytes([1 if enabled else 0]))
 
     def new_playback_id(self) -> str:
         import uuid

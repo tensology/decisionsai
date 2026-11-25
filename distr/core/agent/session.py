@@ -1901,6 +1901,12 @@ class AgentSession:
                     aec_reference_buffer=aec_ref_buf,
                 )
                 aec_filter = self.transport.aec_metrics
+                # Apple voice processing changes the output path; only continuous
+                # mode needs it, so PTT leaves the system sound untouched.
+                try:
+                    self.transport.set_voice_processing(bool(self.is_hands_free))
+                except Exception:
+                    pass
                 self.logger.info(
                     "Audio backend: vpio (macOS Apple VoiceProcessingIO, pipe_sr=%s out_sr=%s, hardware_aec=True)",
                     audio_config['input_sample_rate'],
