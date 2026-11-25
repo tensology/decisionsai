@@ -676,6 +676,9 @@ class MacOsVpioAudioTransport:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        # Drain stderr: an unread pipe fills at ~64KB and would block the helper
+        # mid-callback (dropping audio) with no visible cause.
+        self._stderr_task = asyncio.create_task(self._drain_stderr(self._proc))
         logger.info(
             "MacOS VPIO helper started (pid=%s, in=%r, out=%r)",
             self._proc.pid,
@@ -684,9 +687,26 @@ class MacOsVpioAudioTransport:
         )
         self._send_volume_sync(self._output._volume)
 
+    async def _drain_stderr(self, proc):
+        stream = proc.stderr
+        if stream is None:
+            return
+        try:
+            while True:
+                line = await stream.readline()
+                if not line:
+                    break
+                logger.debug("macOS VPIO helper stderr: %s", line.decode("utf-8", "replace").rstrip())
+        except Exception:
+            pass
+
     async def _terminate_helper_locked(self):
         proc = self._proc
         self._proc = None
+        stderr_task = getattr(self, "_stderr_task", None)
+        self._stderr_task = None
+        if stderr_task is not None:
+            stderr_task.cancel()
         if proc is None:
             return
         try:
