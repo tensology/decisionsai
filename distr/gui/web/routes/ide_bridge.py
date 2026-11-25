@@ -107,6 +107,7 @@ def create_routes() -> APIRouter:
     ):
         try:
             from distr.core.ide_bridge import list_ide_sessions
+            from distr.gui.web.pagination import clamp_limit
 
             return JSONResponse({
                 "success": True,
@@ -114,7 +115,7 @@ def create_routes() -> APIRouter:
                     source=source,
                     cwd=cwd,
                     project_id=project_id,
-                    limit=limit,
+                    limit=clamp_limit(limit, default=12),
                     include_terminal=include_terminal,
                 ),
             })

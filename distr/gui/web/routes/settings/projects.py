@@ -1397,12 +1397,13 @@ def register_routes(router, templates):
                 raise HTTPException(status_code=404, detail="Project not found")
         try:
             from distr.core.orchestrator import list_project_activity
+            from distr.gui.web.pagination import clamp_limit
 
             return JSONResponse(
                 list_project_activity(
                     project_id,
-                    event_limit=event_limit,
-                    rule_limit=rule_limit,
+                    event_limit=clamp_limit(event_limit, default=50),
+                    rule_limit=clamp_limit(rule_limit, default=20),
                 )
             )
         except Exception as e:

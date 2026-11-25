@@ -923,6 +923,7 @@ def register_routes(router, templates):
         limit: int = 40,
     ):
         from distr.core.services.llm_benchmark_service import build_llm_benchmark_payload
+        from distr.gui.web.pagination import clamp_limit
 
         payload = build_llm_benchmark_payload(
             llm_type=type,
@@ -930,7 +931,7 @@ def register_routes(router, templates):
             model=model,
             compare_model=compare_model,
             sort=sort,
-            limit=limit,
+            limit=clamp_limit(limit, default=40),
         )
         return JSONResponse(payload)
 
