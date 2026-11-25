@@ -96,6 +96,16 @@ def build_work_scan(settings: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         scan["unavailable_sources"].append({"source": "connected_sources", "reason": str(exc)})
 
+    # Recover lifecycles stuck on 'executing': a run that died (crash/kill) never
+    # moved them, so without this they would sit there forever.
+    try:
+        from distr.core.kanban.jira_work_lifecycle import reap_stale_executions as _reap_jira
+        from distr.core.kanban.whatsapp_work_lifecycle import reap_stale_executions as _reap_whatsapp
+
+        scan["reaped_lifecycles"] = int(_reap_jira()) + int(_reap_whatsapp())
+    except Exception as exc:
+        scan["unavailable_sources"].append({"source": "lifecycle_reaper", "reason": str(exc)})
+
     try:
         _scan_local_boards(scan, settings)
     except Exception as exc:

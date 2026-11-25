@@ -109,3 +109,44 @@ def test_send_claimed_once_failed_returns_pending(monkeypatch, tmp_path):
     )
     assert "already being applied" in duplicate["text"]
     assert len(calls) == 1
+
+
+def test_execution_start_ignores_a_duplicate_run(monkeypatch, tmp_path):
+    engine = _isolated(monkeypatch, tmp_path)
+    lifecycle.record_ticket_created(ticket_id=50, board_id=7, project_id=3, issue_key="ACME-9")
+    lifecycle.mark_execution_started(ticket_id=50, execution_kind="cli", run_id=99)
+    lifecycle.mark_execution_failed(ticket_id=50, error="boom", run_id=99)
+
+    # A duplicate dispatch of the SAME run must not resurrect the failed row.
+    lifecycle.mark_execution_started(ticket_id=50, execution_kind="cli", run_id=99)
+    with engine.connect() as conn:
+        status = conn.execute(text("SELECT status FROM jira_work_lifecycles WHERE ticket_id=50")).scalar_one()
+    assert status == "execution_failed"
+
+    # A genuinely new run still starts.
+    lifecycle.mark_execution_started(ticket_id=50, execution_kind="cli", run_id=100)
+    with engine.connect() as conn:
+        status = conn.execute(text("SELECT status FROM jira_work_lifecycles WHERE ticket_id=50")).scalar_one()
+    assert status == "executing"
+
+
+def test_reap_stale_executions_recovers_a_dead_run(monkeypatch, tmp_path):
+    import time
+
+    engine = _isolated(monkeypatch, tmp_path)
+    lifecycle.record_ticket_created(ticket_id=51, board_id=7, project_id=3, issue_key="ACME-10")
+    lifecycle.mark_execution_started(ticket_id=51, execution_kind="cli", run_id=1)
+    # Age the row so the reaper treats the run as dead.
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE jira_work_lifecycles SET updated_at=:t WHERE ticket_id=51"),
+            {"t": time.time() - 7200},
+        )
+
+    assert lifecycle.reap_stale_executions(older_than_seconds=3600) == 1
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT status, error FROM jira_work_lifecycles WHERE ticket_id=51")
+        ).one()
+    assert row[0] == "execution_failed"
+    assert "reaped" in (row[1] or "")

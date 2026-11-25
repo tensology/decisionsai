@@ -126,6 +126,7 @@ def mark_execution_started(*, ticket_id: int, execution_kind: str, run_id: int |
         conn.execute(text("""
             UPDATE jira_work_lifecycles SET execution_kind=:kind, run_id=:run_id,
               status='executing', updated_at=:now, error=NULL WHERE ticket_id=:ticket_id
+              AND NOT (run_id IS NOT NULL AND :run_id IS NOT NULL AND run_id = :run_id)
         """), {
             "kind": execution_kind,
             "run_id": run_id,
@@ -152,6 +153,26 @@ def mark_execution_failed(*, ticket_id: int, error: str, run_id: int | None = No
             "error": (str(error or "failed").strip() or "failed")[:500],
             "ticket_id": int(ticket_id),
         })
+
+
+STALE_EXECUTION_SECONDS = 60 * 60  # a run on 'executing' longer than this is dead
+
+
+def reap_stale_executions(*, older_than_seconds: int = STALE_EXECUTION_SECONDS) -> int:
+    """Move lifecycles stuck on 'executing' to 'execution_failed'.
+
+    A run that dies (crash/kill) never calls mark_execution_failed, so the row
+    would sit on 'executing' forever with no recovery path. Returns rows reaped.
+    """
+    ensure_tables()
+    cutoff = time.time() - max(60, int(older_than_seconds))
+    with engine.begin() as conn:
+        result = conn.execute(text("""
+            UPDATE jira_work_lifecycles SET status='execution_failed',
+              error='Run timed out with no completion (reaped)', updated_at=:now
+            WHERE status='executing' AND updated_at < :cutoff
+        """), {"now": time.time(), "cutoff": cutoff})
+        return int(result.rowcount or 0)
 
 
 def _resolve_outbound(ticket: Any, lifecycle: dict[str, Any]) -> tuple[str, str, str]:
