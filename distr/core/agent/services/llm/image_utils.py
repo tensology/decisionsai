@@ -154,6 +154,9 @@ def resolve_vision_model(settings: dict = None) -> Optional[Tuple[str, str]]:
                                 ("conversational_llm_provider", "conversational_llm_model")):
         provider = (settings.get(prov_key) or "").strip()
         model = (settings.get(model_key) or "").strip()
+        from distr.core.agent.tools.vision.vision_api import split_provider_model
+
+        provider, model = split_provider_model(provider, model)
         if provider and model and check_vision_model_support(model, provider):
             return provider, model
     return None

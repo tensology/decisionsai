@@ -65,6 +65,26 @@ def _is_false_image_refusal(content: str) -> bool:
     return False
 
 
+def split_provider_model(provider: str, model: str) -> tuple[str, str]:
+    """Return ``(provider, bare_model)`` with any provider prefix removed.
+
+    The settings UI stores provider and model separately, but a model saved or
+    pasted as ``openai/gpt-5.6-sol`` must not reach an OpenAI-compatible client
+    with the prefix attached: the endpoint wants the bare name and rejects
+    ``openai/gpt-5.6-sol`` as an unknown model. The prefix is only stripped when
+    it *equals* the configured provider, so multi-vendor names that legitimately
+    contain a slash (OpenRouter ``google/gemini-2.0-flash``, Ollama
+    ``meta-llama/llama-3-70b``) are left untouched.
+    """
+    provider = (provider or "").strip()
+    model = (model or "").strip()
+    if provider and "/" in model:
+        head, _, tail = model.partition("/")
+        if tail.strip() and head.strip().lower() == provider.lower():
+            return provider, tail.strip()
+    return provider, model
+
+
 def resolve_vision_llm_config(settings: dict) -> tuple[str, str]:
     """Resolve vision provider/model from global settings only."""
     provider = (
@@ -77,7 +97,7 @@ def resolve_vision_llm_config(settings: dict) -> tuple[str, str]:
         or (settings.get('conversational_llm_model') or '').strip()
         or ''
     )
-    return provider, model
+    return split_provider_model(provider, model)
 
 
 # Models known to support vision
@@ -163,6 +183,9 @@ def call_openai_vision(
 
     if not vision_model:
         vision_model = "gpt-5.4-mini"
+        logger.warning("ScreenshotAnalyzer: no vision model configured; falling back to %s", vision_model)
+    # A caller may hand us 'openai/gpt-5.6-sol'; the API wants the bare name.
+    _, vision_model = split_provider_model("openai", vision_model)
 
     create_kwargs: dict = {
         "model": vision_model,

@@ -65,17 +65,9 @@ def get_last_dropped_image() -> Optional[str]:
 
 def resolve_vision_llm_config(settings: dict) -> tuple[str, str]:
     """Resolve vision provider/model from global settings only."""
-    provider = (
-        (settings.get('vision_llm_provider') or '').strip()
-        or (settings.get('conversational_llm_provider') or '').strip()
-        or 'Ollama'
-    )
-    model = (
-        (settings.get('vision_llm_model') or '').strip()
-        or (settings.get('conversational_llm_model') or '').strip()
-        or ''
-    )
-    return provider, model
+    from distr.core.agent.tools.vision.vision_api import resolve_vision_llm_config as _resolve
+
+    return _resolve(settings)
 
 
 class VisionAnalyzerTool(BaseTool):

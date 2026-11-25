@@ -328,6 +328,9 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
 
         provider = (settings.get("vision_llm_provider") or "ollama").strip().lower()
         model = settings.get("vision_llm_model") or ""
+        from distr.core.agent.tools.vision.vision_api import split_provider_model
+
+        provider, model = split_provider_model(provider, model)
 
         # Build console log context for the prompt
         console_section = ""
