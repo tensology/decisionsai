@@ -544,7 +544,7 @@ def test_day_plan_builds_orchestration_actions_for_implied_lane_moves():
             "payload": {
                 "board_id": 22,
                 "ticket_ids": [501],
-                "target_lane": "Current",
+                "target_lane": "In Progress",
                 "source": "planner_orchestration",
                 "confidence": 0.74,
                 "risk_level": "low",
