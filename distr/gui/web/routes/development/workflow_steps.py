@@ -1,5 +1,6 @@
 """Workflow steps HTTP boundary. Existing URLs remain compatible."""
 from fastapi.responses import JSONResponse
+from distr.gui.web.pagination import clamp_limit
 import asyncio
 import logging
 
@@ -49,7 +50,7 @@ def register_routes(router, templates):
             result = current_step_activity(
                 workflow_id=workflow_id,
                 run_id=run_id,
-                limit=limit,
+                limit=clamp_limit(limit, default=60),
             )
             if not result.get("success"):
                 return JSONResponse(
@@ -95,7 +96,7 @@ def register_routes(router, templates):
     async def workflow_step_results(workflow_id: int, step_id: int, limit: int = 20):
         try:
             from distr.core.workflow.service import get_step_results
-            return JSONResponse(get_step_results(step_id, limit=limit))
+            return JSONResponse(get_step_results(step_id, limit=clamp_limit(limit, default=20)))
         except Exception as e:
             logger.error("Workflow step results failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)

@@ -349,8 +349,8 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
                     f"{base_url}/messages",
                     params={
                         "jid_phone": jid_phone,
-                        "limit": limit,
-                        "offset": offset,
+                        "limit": clamp_limit(limit, default=500),
+                        "offset": clamp_offset(offset),
                         "unprocessed_only": str(unprocessed_only).lower(),
                     },
                     headers=headers,

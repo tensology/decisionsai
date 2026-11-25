@@ -1,6 +1,7 @@
 """Workflow execution HTTP boundary. Existing URLs remain compatible."""
 from fastapi import BackgroundTasks, Request
 from fastapi.responses import JSONResponse
+from distr.gui.web.pagination import clamp_limit
 from typing import Optional
 import json
 import time
@@ -242,7 +243,7 @@ def register_routes(router, templates):
     async def workflow_active_runs(limit: int = 50, workflow_id: Optional[int] = None):
         try:
             from distr.core.workflow.service import get_active_runs
-            rows = await asyncio.to_thread(get_active_runs, limit=limit, workflow_id=workflow_id)
+            rows = await asyncio.to_thread(get_active_runs, limit=clamp_limit(limit, default=50), workflow_id=workflow_id)
             return JSONResponse(rows)
         except Exception as e:
             logger.error("Workflow active runs failed: %s", e, exc_info=True)
@@ -253,7 +254,7 @@ def register_routes(router, templates):
     async def workflow_runs(workflow_id: int, limit: int = 10, chat_id: Optional[int] = None):
         try:
             from distr.core.workflow.service import get_run_history
-            return JSONResponse(get_run_history(workflow_id, limit=limit, chat_id=chat_id))
+            return JSONResponse(get_run_history(workflow_id, limit=clamp_limit(limit, default=10), chat_id=chat_id))
         except Exception as e:
             logger.error("Workflow runs failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
@@ -275,7 +276,7 @@ def register_routes(router, templates):
                 ticket_id=ticket_id,
                 run_id=run_id,
                 board_id=board_id,
-                limit=limit,
+                limit=clamp_limit(limit, default=100),
             ))
         except Exception as e:
             logger.error("Workflow orchestrator events failed: %s", e, exc_info=True)
