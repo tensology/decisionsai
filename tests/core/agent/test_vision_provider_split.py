@@ -57,3 +57,37 @@ def test_resolve_vision_model_strips_the_prefix():
 
     settings = {"vision_llm_provider": "openai", "vision_llm_model": "openai/gpt-5.6-sol"}
     assert resolve_vision_model(settings) == ("openai", "gpt-5.6-sol")
+
+
+def test_call_openai_vision_refuses_an_unconfigured_model(monkeypatch):
+    """No silent 'gpt-5.4-mini' substitution: an empty model must raise."""
+    import distr.core.settings as settings_module
+    from distr.core.agent.tools.vision import vision_api
+
+    monkeypatch.setattr(settings_module, "load_settings_from_db", lambda: {"openai_key": "sk-test"})
+
+    with pytest.raises(ValueError) as excinfo:
+        vision_api.call_openai_vision(
+            base64_images=["AAAA"],
+            enhanced_prompt="describe",
+            vision_model="",
+            is_action_request=False,
+        )
+    assert "No vision model configured" in str(excinfo.value)
+
+
+def test_call_openai_vision_reports_the_model_before_the_key(monkeypatch):
+    """An empty model + no key should blame the model, not send the user chasing a key."""
+    import distr.core.settings as settings_module
+    from distr.core.agent.tools.vision import vision_api
+
+    monkeypatch.setattr(settings_module, "load_settings_from_db", lambda: {})
+
+    with pytest.raises(ValueError) as excinfo:
+        vision_api.call_openai_vision(
+            base64_images=["AAAA"],
+            enhanced_prompt="describe",
+            vision_model="",
+            is_action_request=False,
+        )
+    assert "No vision model configured" in str(excinfo.value)

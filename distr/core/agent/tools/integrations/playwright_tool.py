@@ -401,7 +401,14 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
                 swap_token_limit_param,
             )
 
-            model_id = model or "gpt-5.4-mini"
+            if not model:
+                # Never silently substitute a model the user did not choose.
+                logger.error(
+                    "Playwright vision analysis skipped: no vision model configured "
+                    "(set Vision provider/model in Settings \u2192 LLMs)"
+                )
+                return None
+            model_id = model
             req_payload = {
                 "model": model_id,
                 "messages": messages,

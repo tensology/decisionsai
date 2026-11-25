@@ -160,6 +160,16 @@ def call_openai_vision(
     from distr.core.settings import load_settings_from_db
 
     settings = load_settings_from_db()
+
+    # Validate the model first: an unconfigured vision model is the clearer, more
+    # common misconfiguration, and we must never silently substitute one.
+    # A caller may hand us 'openai/gpt-5.6-sol'; the API wants the bare name.
+    _, vision_model = split_provider_model("openai", vision_model)
+    if not vision_model:
+        raise ValueError(
+            "No vision model configured. Set the Vision provider and model in Settings \u2192 LLMs."
+        )
+
     openai_key = settings.get('openai_key', '')
     if not openai_key:
         raise ValueError("OpenAI API key not configured. Please set it in settings.")
@@ -181,12 +191,7 @@ def call_openai_vision(
 
     vision_messages = [{"role": "user", "content": content_items}]
 
-    if not vision_model:
-        vision_model = "gpt-5.4-mini"
-        logger.warning("ScreenshotAnalyzer: no vision model configured; falling back to %s", vision_model)
     # A caller may hand us 'openai/gpt-5.6-sol'; the API wants the bare name.
-    _, vision_model = split_provider_model("openai", vision_model)
-
     create_kwargs: dict = {
         "model": vision_model,
         "messages": vision_messages,

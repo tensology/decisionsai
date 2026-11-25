@@ -71,32 +71,41 @@ prefix can be present.
    for `provider == "openai"`, but it hardcodes `from openai import OpenAI` and
    `settings['openai_key']`. If a non-OpenAI provider is ever routed here it will
    use the wrong key and the wrong endpoint.
-2. **Hardcoded fallback model.** `if not vision_model: vision_model = "gpt-5.4-mini"`
-   — a silent substitution that hides an empty setting.
+2. ~~**Hardcoded fallback model.**~~ **Fixed.** It used to do
+   `if not vision_model: vision_model = "gpt-5.4-mini"`, silently calling a model
+   you did not choose. It now raises
+   `ValueError("No vision model configured. Set the Vision provider and model in
+   Settings → LLMs.")`, and the check runs **before** the API-key check so the
+   clearer misconfiguration is reported first. The same silent fallback in
+   `playwright_tool.py` (`model or "gpt-5.4-mini"`) now logs an error and skips
+   analysis instead of substituting.
 3. **`check_vision_model_support` is a name regex**, not a real capability check:
    `(gpt-4|gpt-5|claude-3|claude-4|gemini|gemma-3|llama-4|qwen.*vl|vision|pixtral|llava|moondream)`.
    A model named `gpt-5.6-sol` passes on the `gpt-5` substring even if the
    provider can't serve it, so the chat path happily calls and fails.
 
-## The fix (not yet applied)
-Normalize the model name in **one** place and use it in all three paths:
+## The fix (applied)
+A single `split_provider_model(provider, model)` helper in `vision_api.py`, used
+by `resolve_vision_llm_config` (both copies — `vision_analyzer` now delegates),
+`resolve_vision_model`, `call_openai_vision`, and `playwright_tool.py`, so the
+bare name always reaches the client. The prefix is stripped **only when it
+equals the configured provider**, so multi-vendor names are untouched:
 
 ```python
 def split_provider_model(provider: str, model: str) -> tuple[str, str]:
-    """Return (provider, bare_model). 'openai/gpt-5.6-sol' -> ('openai', 'gpt-5.6-sol')."""
-    provider = (provider or "").strip().lower()
+    provider = (provider or "").strip()
     model = (model or "").strip()
-    if "/" in model:
-        head, tail = model.split("/", 1)
-        if not provider or head.lower() == provider:
-            provider = head.lower()
-            model = tail
+    if provider and "/" in model:
+        head, _, tail = model.partition("/")
+        if tail.strip() and head.strip().lower() == provider.lower():
+            return provider, tail.strip()
     return provider, model
 ```
 
-Then call it in `resolve_vision_llm_config` (all copies), `resolve_vision_model`,
-and the playwright tool, so `vision_model` is always the bare name by the time it
-reaches any client.
+Silent model substitution was removed: an unconfigured vision model now raises a
+clear `ValueError` instead of quietly calling `gpt-5.4-mini`.
+
+Tests: `tests/core/agent/test_vision_provider_split.py`.
 
 ## How to confirm before/after
 1. Save a **prefixed** vision model (e.g. `openai/gpt-5.6-sol`) and run a
