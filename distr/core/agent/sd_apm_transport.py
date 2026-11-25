@@ -201,6 +201,7 @@ def _open_sd_stream(cls, *, device, requested_rate: int, callback, channels: int
     last_err = None
     for sr in rates:
         blocksize = max(160, int(round(sr * _CALLBACK_BLOCK_SECS)))
+        stream = None
         try:
             stream = cls(
                 callback=callback,
@@ -214,6 +215,13 @@ def _open_sd_stream(cls, *, device, requested_rate: int, callback, channels: int
             return stream, sr
         except Exception as exc:
             last_err = exc
+            # cls(...) may have succeeded before start() raised; close it so the
+            # device handle is not leaked while we try the next rate.
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
             logger.debug("sounddevice %s failed at %d Hz (%s); trying next rate", cls.__name__, sr, exc)
     raise RuntimeError(f"Could not open {cls.__name__} on device={device!r}: {last_err}")
 
