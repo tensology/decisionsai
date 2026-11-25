@@ -248,9 +248,6 @@ Please provide a detailed analysis of this image. Describe what you see, any tex
                     
                     client = OpenAI(api_key=openai_key)
                     
-                    if not vision_model:
-                        vision_model = "gpt-5.4-mini"
-                    
                     from distr.core.agent.tools.vision.vision_api import (
                         openai_token_limit_param,
                         swap_token_limit_param,
@@ -322,10 +319,6 @@ Please provide a detailed analysis of this image. Describe what you see, any tex
                     if not ollama_url.endswith('/'):
                         ollama_url += '/'
                     
-                    # Use vision model from settings, or fallback
-                    if not vision_model or vision_model == "":
-                        vision_model = "llava"  # Default Ollama vision model
-                    
                     logger.info(f"VisionAnalyzer: Calling Ollama vision API with model: {vision_model}")
                     
                     # Ollama vision API uses /api/chat endpoint with images
@@ -381,7 +374,7 @@ Please provide a detailed analysis of this image. Describe what you see, any tex
                     )
 
                     # OpenRouter uses OpenAI-compatible API for vision
-                    or_model = vision_model or "openai/gpt-5.4-mini"
+                    or_model = vision_model
                     or_payload = {
                         "model": or_model,
                         "messages": vision_messages,
@@ -459,9 +452,6 @@ Please provide a detailed analysis of this image. Describe what you see, any tex
                     
                     client = Anthropic(api_key=anthropic_key)
                     
-                    if not vision_model:
-                        vision_model = "claude-3-5-sonnet-20241022"
-                    
                     # Anthropic uses different message format
                     anthropic_messages = [
                         {
@@ -525,7 +515,7 @@ Please provide a detailed analysis of this image. Describe what you see, any tex
                         openai_token_limit_param,
                         swap_token_limit_param,
                     )
-                    compat_model = vision_model or "openai/gpt-5.4-mini"
+                    compat_model = vision_model
                     compat_payload = {
                         "model": compat_model,
                         "messages": vision_messages,

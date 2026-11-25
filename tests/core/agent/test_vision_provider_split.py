@@ -91,3 +91,22 @@ def test_call_openai_vision_reports_the_model_before_the_key(monkeypatch):
             is_action_request=False,
         )
     assert "No vision model configured" in str(excinfo.value)
+
+
+def test_require_vision_model_returns_bare_name():
+    from distr.core.agent.tools.vision.vision_api import require_vision_model
+
+    assert require_vision_model("openai", "openai/gpt-5.6-sol") == "gpt-5.6-sol"
+    assert require_vision_model("ollama", "llava") == "llava"
+    assert require_vision_model("openrouter", "google/gemini-2.0-flash") == "google/gemini-2.0-flash"
+
+
+@pytest.mark.parametrize("provider,model", [("openai", ""), ("ollama", "   "), ("", None)])
+def test_require_vision_model_refuses_empty(provider, model):
+    from distr.core.agent.tools.vision.vision_api import require_vision_model
+
+    with pytest.raises(ValueError) as excinfo:
+        require_vision_model(provider, model)
+    assert "No vision model configured" in str(excinfo.value)
+    if provider:
+        assert provider in str(excinfo.value)

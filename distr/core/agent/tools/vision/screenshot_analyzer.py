@@ -38,6 +38,7 @@ from distr.core.agent.tools.vision.vision_api import (  # noqa: F401
     build_action_prompt,
     build_summary_prompt,
     call_openai_vision,
+    require_vision_model,
     resolve_vision_llm_config,
 )
 from distr.core.agent.services.vision.action_mode import resolve_execute_action
@@ -1102,6 +1103,14 @@ class ScreenshotAnalyzerTool(BaseTool):
         from distr.core.settings import load_settings_from_db
         settings = load_settings_from_db()
 
+        # Resolve the model once, up front, and never substitute a default:
+        # a misconfigured vision model must be visible, not a quiet call to a
+        # model the user did not choose.
+        try:
+            vision_model = require_vision_model(vision_provider_key, vision_model)
+        except ValueError as exc:
+            return f"Error: {exc}"
+
         # Build OpenAI-compatible content items (used by openai, openrouter, kilocode, groq)
         content_items: list[dict] = [{"type": "text", "text": enhanced_prompt}]
         for i, b64 in enumerate(base64_images):
@@ -1145,8 +1154,6 @@ class ScreenshotAnalyzerTool(BaseTool):
                 ollama_url = settings.get('ollama_url', 'http://localhost:11434/')
                 if not ollama_url.endswith('/'):
                     ollama_url += '/'
-                if not vision_model:
-                    vision_model = "llava"
 
                 # Resize images before sending to Ollama.
                 # Retina screenshots can be 6000+ px wide; vision encoders like
@@ -1227,7 +1234,7 @@ class ScreenshotAnalyzerTool(BaseTool):
                 )
 
                 logger.info("ScreenshotAnalyzer: Calling %s vision API with model: %s", vision_provider_key, vision_model)
-                model_id = vision_model or "openai/gpt-5.4-mini"
+                model_id = vision_model
                 req_payload = {
                     "model": model_id,
                     "messages": vision_messages,
@@ -1273,8 +1280,6 @@ class ScreenshotAnalyzerTool(BaseTool):
                 api_key = settings.get('anthropic_key', '')
                 if not api_key:
                     return "Error: Anthropic API key not configured. Please set it in settings."
-                if not vision_model:
-                    vision_model = "claude-3-5-sonnet-20241022"
                 client = Anthropic(api_key=api_key)
                 # Anthropic uses a different image format
                 content_parts: list[dict] = [{"type": "text", "text": enhanced_prompt}]

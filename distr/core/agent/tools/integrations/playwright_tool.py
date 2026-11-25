@@ -331,6 +331,13 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
         from distr.core.agent.tools.vision.vision_api import split_provider_model
 
         provider, model = split_provider_model(provider, model)
+        if not model:
+            # Never silently substitute a model the user did not choose.
+            logger.error(
+                "Playwright vision analysis skipped: no vision model configured "
+                "(set Vision provider/model in Settings \u2192 LLMs)"
+            )
+            return None
 
         # Build console log context for the prompt
         console_section = ""
@@ -381,7 +388,7 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
             resp = _requests.post(
                 f"{ollama_url}api/chat",
                 json={
-                    "model": model or "llava",
+                    "model": model,
                     "messages": [{"role": "user", "content": prompt, "images": [b64_image]}],
                     "stream": False,
                 },
@@ -442,7 +449,7 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
                 from anthropic import Anthropic
                 client = Anthropic(api_key=api_key)
                 resp = client.messages.create(
-                    model=model or "claude-3-5-sonnet-20241022",
+                    model=model,
                     max_tokens=1000,
                     messages=[{
                         "role": "user",
@@ -477,7 +484,7 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
                 openai_token_limit_param,
                 swap_token_limit_param,
             )
-            compat_model = model or "openai/gpt-5.4-mini"
+            compat_model = model
             compat_payload = {
                 "model": compat_model,
                 "messages": messages,

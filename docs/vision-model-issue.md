@@ -68,21 +68,29 @@ prefix can be present.
 
 ## Secondary issues found
 1. **`call_openai_vision` ignores the configured provider.** It is only reached
-   for `provider == "openai"`, but it hardcodes `from openai import OpenAI` and
-   `settings['openai_key']`. If a non-OpenAI provider is ever routed here it will
-   use the wrong key and the wrong endpoint.
-2. ~~**Hardcoded fallback model.**~~ **Fixed.** It used to do
-   `if not vision_model: vision_model = "gpt-5.4-mini"`, silently calling a model
-   you did not choose. It now raises
-   `ValueError("No vision model configured. Set the Vision provider and model in
-   Settings → LLMs.")`, and the check runs **before** the API-key check so the
-   clearer misconfiguration is reported first. The same silent fallback in
-   `playwright_tool.py` (`model or "gpt-5.4-mini"`) now logs an error and skips
-   analysis instead of substituting.
+   for `provider == "openai"` (provider routing lives in
+   `screenshot_analyzer._call_vision_api`), but it hardcodes `from openai import
+   OpenAI` and `settings['openai_key']`. Left as-is deliberately: it is the
+   OpenAI-only path, and every other provider has its own branch. The trap is a
+   *future* caller reusing it for a non-OpenAI model — the function name says
+   OpenAI, so keep it that way.
+2. ~~**Hardcoded fallback models.**~~ **Fixed.** Nine silent substitutions were
+   removed across `screenshot_analyzer.py` (`llava`, `openai/gpt-5.4-mini`,
+   `claude-3-5-sonnet-20241022`), `vision_analyzer.py` (the same three),
+   `playwright_tool.py` (`llava`, `openai/gpt-5.4-mini`,
+   `claude-3-5-sonnet-20241022`) and `image_generator.py` (`gpt-image-1`).
+   They now go through `require_vision_model(provider, model)` — which returns
+   the bare name or raises `ValueError("No vision model configured …")` — or a
+   loud error + skip. `_call_vision_api` resolves the model **once, up front**
+   and returns the error string, so no branch can quietly pick its own default.
 3. **`check_vision_model_support` is a name regex**, not a real capability check:
    `(gpt-4|gpt-5|claude-3|claude-4|gemini|gemma-3|llama-4|qwen.*vl|vision|pixtral|llava|moondream)`.
    A model named `gpt-5.6-sol` passes on the `gpt-5` substring even if the
-   provider can't serve it, so the chat path happily calls and fails.
+   provider can't serve it, so the chat path happily calls and fails. It only
+   gates the *conversational fallback* (a real configured vision model is never
+   gated), so it is low risk — but it is still a guess, not a check.
+4. **Voice/STT still substitute defaults** (`session.py`: `gpt-realtime-2.1`,
+   `gpt-4o-mini-transcribe`). Out of scope for the vision fix; same class of bug.
 
 ## The fix (applied)
 A single `split_provider_model(provider, model)` helper in `vision_api.py`, used

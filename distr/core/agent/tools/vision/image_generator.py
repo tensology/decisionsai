@@ -216,7 +216,12 @@ class ImageGeneratorTool(BaseTool):
                 # Note: DALL-E 3 doesn't support direct image input, so we describe the reference
                 # For true image-to-image, would need DALL-E 2 or other models
             
-            model_id = (model or "gpt-image-1").strip() or "gpt-image-1"
+            model_id = (model or "").strip()
+            if not model_id:
+                # Never silently substitute a model the user did not choose.
+                raise ValueError(
+                    "No image model configured. Set the Image provider and model in Settings \u2192 LLMs."
+                )
             logger.info(f"Generating image with OpenAI {model_id}: {enhanced_prompt[:100]}...")
 
             response = client.images.generate(

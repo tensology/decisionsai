@@ -85,6 +85,23 @@ def split_provider_model(provider: str, model: str) -> tuple[str, str]:
     return provider, model
 
 
+def require_vision_model(provider: str, model: str) -> str:
+    """Return the bare vision model name, or raise if none is configured.
+
+    Never substitute a default: an unconfigured vision model must be visible,
+    not a quiet call to a model the user did not choose.
+    """
+    provider = (provider or "").strip()
+    _, bare = split_provider_model(provider, model)
+    if not bare:
+        where = f" for {provider}" if provider else ""
+        raise ValueError(
+            f"No vision model configured{where}. "
+            "Set the Vision provider and model in Settings \u2192 LLMs."
+        )
+    return bare
+
+
 def resolve_vision_llm_config(settings: dict) -> tuple[str, str]:
     """Resolve vision provider/model from global settings only."""
     provider = (
@@ -163,12 +180,7 @@ def call_openai_vision(
 
     # Validate the model first: an unconfigured vision model is the clearer, more
     # common misconfiguration, and we must never silently substitute one.
-    # A caller may hand us 'openai/gpt-5.6-sol'; the API wants the bare name.
-    _, vision_model = split_provider_model("openai", vision_model)
-    if not vision_model:
-        raise ValueError(
-            "No vision model configured. Set the Vision provider and model in Settings \u2192 LLMs."
-        )
+    vision_model = require_vision_model("openai", vision_model)
 
     openai_key = settings.get('openai_key', '')
     if not openai_key:
