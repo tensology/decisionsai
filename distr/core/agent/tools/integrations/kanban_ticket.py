@@ -2710,6 +2710,10 @@ class KanbanTicketTool(BaseTool):
                 moved_on_board = new_lane.board_id
         if moved_on_board is not None:
             self._publish_ticket_move(ticket_id, moved_on_board, moved_on_board)
+        else:
+            # A non-lane edit (title, description, priority, workflow link) still
+            # changes the card on any open board, so refresh it too.
+            self._publish_ticket_changed(ticket_id)
         return voice_then_reference("I saved those ticket changes.", f"Updated ticket #{ticket_id}")
 
     def _action_attach_file(self, ticket_id, file_path) -> str:
@@ -2956,6 +2960,22 @@ class KanbanTicketTool(BaseTool):
         from distr.core.kanban.realtime import publish_ticket_move
 
         publish_ticket_move(**data)
+
+    def _publish_ticket_changed(self, ticket_id: int) -> None:
+        """Refresh the ticket's board after a non-lane edit (status, text, delete)."""
+        board_id = None
+        try:
+            from distr.core.db.kanban import KanbanLane, KanbanTicket
+
+            with self._get_session() as s:
+                t = orm_get_by_id(s, KanbanTicket, int(ticket_id))
+                if t is not None and t.lane_id:
+                    lane = orm_get_by_id(s, KanbanLane, int(t.lane_id))
+                    board_id = int(lane.board_id) if lane is not None else None
+        except Exception:
+            logger.debug("Could not resolve board for ticket %s", ticket_id, exc_info=True)
+        if board_id:
+            self._publish_ticket_move(int(ticket_id), board_id, board_id)
 
     def _action_move_ticket(
         self,
