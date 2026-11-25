@@ -253,6 +253,16 @@ class OpenAICompatibleLLMService(BaseLLMService):
         local-model loading).  The former blanket 90 second wrapper cancelled
         Pi before that policy could do its job.
         """
+        if func_name == "message_agent":
+            # Agent-to-agent chains up to a few replies; the ceiling must cover
+            # the budget (AGENT_REPLY_TIMEOUT_SECS per reply) or a legitimate
+            # chain is cancelled mid-flight and the tool reports a timeout.
+            try:
+                from distr.core.agent_groups import AGENT_REPLY_TIMEOUT_SECS
+
+                return 3 * float(AGENT_REPLY_TIMEOUT_SECS) + 60.0
+            except Exception:
+                return 420.0
         if func_name in cls._LONG_RUNNING_TOOL_TIMEOUTS:
             return cls._LONG_RUNNING_TOOL_TIMEOUTS[func_name]
         if func_name != "pi_agent":

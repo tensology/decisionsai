@@ -17,7 +17,7 @@ import logging
 import queue
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Any, Callable, Iterable, Optional
 
 from distr.core.db import (AgentConversation, Chat, ChatAgent, ChatAgentPrefs, ChatGroupMember,
@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 MAX_AGENT_REPLIES = 6      # agent replies per user message (loop guard)
 MAX_DEPTH = 3              # delegation hops per user message
 MAX_PER_AGENT = 2          # replies by one agent per user message
+# Hard cap on one agent's reply. A provider that never returns must not hang the
+# whole group turn or the agent-to-agent tool that is waiting on it.
+AGENT_REPLY_TIMEOUT_SECS = 120.0
 HISTORY_LIMIT = 40         # transcript rows sent to the model
 
 Emit = Callable[[dict], None]
@@ -580,7 +583,32 @@ def run_turn(chat_id: int, message: str, *, emit: Optional[Emit] = None,
         for agent in wave:
             counts[agent.id] = counts.get(agent.id, 0) + 1
         with ThreadPoolExecutor(max_workers=len(wave)) as pool:
-            results = list(pool.map(answer, wave))
+            futures = {pool.submit(answer, agent): agent for agent in wave}
+            done, _pending = wait(list(futures), timeout=AGENT_REPLY_TIMEOUT_SECS)
+            results = []
+            for future in list(futures):
+                agent = futures[future]
+                if future in done:
+                    try:
+                        results.append(future.result())
+                    except Exception as exc:
+                        logger.warning("Group agent %s failed: %s", agent.id, exc)
+                        results.append({
+                            "id": None, "agent_id": agent.id, "agent_name": agent.name,
+                            "content": f"{agent.name} couldn't answer: {str(exc)[:300] or 'model error'}",
+                            "error": True,
+                        })
+                else:
+                    future.cancel()
+                    logger.warning(
+                        "Group agent %s exceeded %.0fs and was skipped",
+                        agent.id, AGENT_REPLY_TIMEOUT_SECS,
+                    )
+                    results.append({
+                        "id": None, "agent_id": agent.id, "agent_name": agent.name,
+                        "content": f"{agent.name} took longer than {AGENT_REPLY_TIMEOUT_SECS:.0f}s to reply.",
+                        "error": True,
+                    })
         replies.extend(results)
         depth += 1
         if not chain:
@@ -638,21 +666,29 @@ def agents_thread(a_id: int, b_id: int) -> int:
 
 
 def message_agent(from_agent_id: int, target: Any, message: str, *, group_id: Optional[int] = None,
-                  generate=None) -> dict:
+                  generate=None, max_replies: int = 3, chain: bool = True) -> dict:
     """Send a message from one agent to another and return the reply.
 
     With ``group_id`` the exchange happens in that group (both must be members);
-    otherwise in the two agents' direct thread. One reply, no further chaining.
+    otherwise in the two agents' direct thread. The recipient answers, and may
+    @mention another member to pull them in — bounded by ``max_replies``,
+    ``MAX_DEPTH`` hops and ``MAX_PER_AGENT`` replies per agent, so a chain can
+    never run away. The sender gets the recipient's own reply back (the rest of
+    the exchange is in the shared thread).
     """
     recipient = resolve_agent(target, exclude=int(from_agent_id))
     if recipient is None:
         raise GroupError(f"No other agent called {target!r}.")
     chat_id = int(group_id) if group_id else agents_thread(int(from_agent_id), recipient.id)
     replies = run_turn(chat_id, message, from_agent_id=int(from_agent_id), responders=[recipient.id],
-                       max_replies=1, chain=False, generate=generate)
-    reply = replies[0] if replies else {"content": "", "error": True}
+                       max_replies=max(1, int(max_replies)), chain=bool(chain), generate=generate)
+    # The recipient's own reply is the answer; a chained reply from a third agent
+    # is collaboration, not the answer to hand back.
+    reply = next((r for r in replies if int(r.get("agent_id", 0)) == int(recipient.id)),
+                 replies[0] if replies else {"content": "", "error": True})
     return {"chat_id": chat_id, "agent_id": recipient.id, "agent_name": recipient.name,
-            "reply": reply["content"], "error": bool(reply.get("error"))}
+            "reply": reply["content"], "error": bool(reply.get("error")),
+            "replies": len(replies)}
 
 
 def current_agent_id(strict: bool = False) -> Optional[int]:

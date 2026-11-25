@@ -593,3 +593,32 @@ def test_new_tool_intents():
     assert 'web_browser' in forced('open https://example.com and read it')
     assert 'web_browser' in forced('check the weather on news24.com')
     assert 'message_agent' not in forced('email paul@example.com')
+
+
+def test_a_hung_agent_is_bounded_and_the_others_still_answer(ma, monkeypatch):
+    """One agent's provider hanging must not hang the whole turn.
+
+    A fixed per-reply ceiling (AGENT_REPLY_TIMEOUT_SECS) bounds each agent, so a
+    stuck model is reported as an error while its peers reply normally — and the
+    agent-to-agent tool waiting on the turn is not left hanging either.
+    """
+    import time
+
+    from distr.core import agent_groups as ag
+
+    monkeypatch.setattr(ag, "AGENT_REPLY_TIMEOUT_SECS", 0.3)
+    ids = ma["ids"]
+    group = ag.create_group([ids["Hayley"], ids["Ada"]])
+
+    def gen(agent, messages, emit):
+        if agent.name == "Hayley":
+            time.sleep(5)  # a provider that never returns in time
+            return "late"
+        return f"{agent.name} here."
+
+    replies = ag.run_turn(group["id"], "@Hayley and @Ada, go", generate=gen)
+
+    hayley = next(r for r in replies if r["agent_id"] == ids["Hayley"])
+    ada = next(r for r in replies if r["agent_id"] == ids["Ada"])
+    assert hayley["error"] and "longer than" in hayley["content"]
+    assert not ada["error"] and ada["content"] == "Ada here."
