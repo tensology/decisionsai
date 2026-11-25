@@ -230,7 +230,10 @@ def call_openai_vision(
                 raise RuntimeError("Vision API returned empty response.")
             content = response.choices[0].message.content or ""
             if not content:
-                raise RuntimeError("Vision API returned empty content.")
+                raise RuntimeError(
+                    f"Vision model '{vision_model}' returned empty content. "
+                    "Check the model can see images, or pick another in Settings \u2192 LLMs."
+                )
             if _is_false_image_refusal(content):
                 if attempt < max_retries:
                     logger.warning(
@@ -249,7 +252,17 @@ def call_openai_vision(
                     }
                     create_kwargs["messages"] = [{"role": "user", "content": retry_items}]
                     continue
-                raise RuntimeError("Vision model repeatedly refused the attached screenshot.")
+                snippet = " ".join((content or "").split())[:240]
+                logger.error(
+                    "Vision model %r refused to inspect the attached image. It said: %s",
+                    vision_model,
+                    snippet or "(empty)",
+                )
+                raise RuntimeError(
+                    f"Vision model '{vision_model}' will not inspect images "
+                    f"(it replied: {snippet or 'no usable content'!r}). "
+                    "Pick a vision-capable model in Settings \u2192 LLMs."
+                )
             break
         except Exception as retry_err:
             last_err = retry_err

@@ -129,3 +129,36 @@ Should the vision model field accept `provider/model`, or should it be a bare
 model name with the provider chosen separately (as it is now)? The UI posts them
 separately (`vision_provider` + `vision_model`), so the cleanest answer is: the
 model field is a **bare name**, and any prefix is stripped defensively.
+
+---
+
+## Update: the actual failure after the prefix fix
+
+After restarting, the log showed the model name was now correct:
+
+```
+ScreenshotAnalyzer: Calling vision API with 1 image(s), model: gpt-5.6-sol
+vision_api - WARNING - Vision API falsely refused an attached image on attempt 1; retrying
+vision_analyzer - ERROR - Vision API returned empty content
+```
+
+So the prefix bug was real and is fixed — but **`gpt-5.6-sol` does not inspect
+images**. It returns a capability refusal ("I cannot see the image") or empty
+content. Retrying the identical image cannot help, and the old error
+(`"Vision model repeatedly refused the attached screenshot."`) did not say which
+model or what it actually replied.
+
+The errors now name the model and quote what it said:
+
+```
+RuntimeError: Vision model 'gpt-5.6-sol' will not inspect images
+(it replied: '...'). Pick a vision-capable model in Settings → LLMs.
+```
+
+**Action for the operator:** set the Vision model to a genuinely vision-capable
+model. The name check (`check_vision_model_support`) passes anything starting
+`gpt-5`, which is how a non-vision model got selected.
+
+**Remaining gap (not fixed):** nothing validates a *typed* cloud model for vision
+capability — the `vision` capability filter in `static/settings/js/llms.js` only
+applies to the Ollama browser list, not to the OpenAI/OpenRouter model field.
