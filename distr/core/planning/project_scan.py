@@ -261,6 +261,20 @@ def _parse_route_block(block: str) -> dict[str, str] | None:
     }
 
 
+def _read_text_prefix(path: Path, limit: int) -> str:
+    """Read at most ``limit`` characters instead of loading the whole file.
+
+    ``path.read_text()[:limit]`` still allocates the entire file first, so a
+    huge bundle or log in a scanned project would blow up memory for a prefix
+    we immediately throw away. Returns "" if the file cannot be read.
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as stream:
+            return stream.read(limit)
+    except OSError:
+        return ""
+
+
 def scan_frontend_routes(project_root: Path) -> list[dict[str, str]]:
     """Parse common React/JS route tables into ordered route rows."""
     rows: list[dict[str, str]] = []
@@ -456,7 +470,7 @@ def _readme_excerpt(project_root: Path, limit: int = 2500) -> str:
     for name in ("README.md", "README", "readme.md", "AGENTS.md"):
         path = project_root / name
         if path.is_file():
-            return path.read_text(encoding="utf-8", errors="replace")[:limit].strip()
+            return _read_text_prefix(path, limit).strip()
     return ""
 
 
@@ -660,7 +674,7 @@ def scan_page_cues(project_root: Path, routes: list[dict[str, str]]) -> dict[str
             page = _resolve_page_file(project_root, row["name"])
         if page is None:
             continue
-        source = page.read_text(encoding="utf-8", errors="replace")[:80_000]
+        source = _read_text_prefix(page, 80_000)
         cue = _extract_screen_cues(source)
         # React Router navigation can be called from an event handler without a Link tag.
         # Resolve only static destinations already declared by the project.
@@ -709,7 +723,7 @@ def scan_page_cues(project_root: Path, routes: list[dict[str, str]]) -> dict[str
                 child = _component_file(page, spec, root)
                 if child is None or child == page:
                     continue
-                child_text = child.read_text(encoding="utf-8", errors="replace")[:80_000]
+                child_text = _read_text_prefix(child, 80_000)
                 child_cue = _extract_screen_cues(child_text)
                 _merge_cues(cue, child_cue)
                 if _cue_has_content(child_cue):
@@ -1590,10 +1604,7 @@ def _sitemap_slug(value: str) -> str:
 
 
 def _read_limited(path: Path) -> str:
-    try:
-        return path.read_text(encoding="utf-8", errors="replace")[:_SITEMAP_READ_LIMIT]
-    except OSError:
-        return ""
+    return _read_text_prefix(path, _SITEMAP_READ_LIMIT)
 
 
 def iter_sitemap_sources(project_root: Path) -> list[Path]:
