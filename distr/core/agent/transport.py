@@ -123,16 +123,29 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
             self._params.audio_in_channels,
             num_frames,
         )
-        self._in_stream = self._py_audio.open(
-            format=self._py_audio.get_format_from_width(2),
-            channels=self._params.audio_in_channels,
-            rate=self._sample_rate,
-            frames_per_buffer=num_frames,
-            stream_callback=self._audio_in_callback,
-            input=True,
-            input_device_index=self._params.input_device_index,
-        )
-        self._in_stream.start_stream()
+        try:
+            self._in_stream = self._py_audio.open(
+                format=self._py_audio.get_format_from_width(2),
+                channels=self._params.audio_in_channels,
+                rate=self._sample_rate,
+                frames_per_buffer=num_frames,
+                stream_callback=self._audio_in_callback,
+                input=True,
+                input_device_index=self._params.input_device_index,
+            )
+            self._in_stream.start_stream()
+        except Exception as e:
+            logger.error("Error opening audio input stream: %s", e)
+            # open() may have succeeded before start_stream() raised; close it so
+            # the device handle is not leaked.
+            try:
+                if self._in_stream is not None:
+                    self._in_stream.stop_stream()
+                    self._in_stream.close()
+            except Exception:
+                pass
+            self._in_stream = None
+            return
         self._input_stream_opened_at = time.time()
         self._input_last_callback_at = 0.0
 
@@ -1605,6 +1618,14 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             return True
         except Exception as e:
             logger.error(f"Error opening new output stream: {e}")
+            # open() may have succeeded before start_stream() raised; close it so
+            # the device handle is not leaked.
+            try:
+                if self._out_stream is not None:
+                    self._out_stream.stop_stream()
+                    self._out_stream.close()
+            except Exception:
+                pass
             self._out_stream = None
             return False
 
