@@ -376,7 +376,15 @@ def _ensure_local_ticket_for_thread(
     """Create the one ticket owned by a thread when it joins a local board."""
     from distr.core.db.kanban import KanbanLane, KanbanTicket
 
-    existing = db.query(KanbanTicket).filter(KanbanTicket.source_chat_id == int(root.id)).first()
+    existing = (
+        db.query(KanbanTicket)
+        .filter(
+            KanbanTicket.source_chat_id == int(root.id),
+            KanbanTicket.merged_into_ticket_id.is_(None),
+        )
+        .order_by(KanbanTicket.id.desc())
+        .first()
+    )
     target_board = development_board(db, board_key=board_key)
 
     def _thread_is_running():
@@ -1037,7 +1045,15 @@ def rebind_development_thread(
             board_ticket_title = metadata.get("board_ticket_title")
             board_ticket_lane = metadata.get("board_ticket_lane")
         from distr.core.db.kanban import KanbanTicket
-        owned_ticket = db.query(KanbanTicket).filter(KanbanTicket.source_chat_id == root.id).first()
+        owned_ticket = (
+            db.query(KanbanTicket)
+            .filter(
+                KanbanTicket.source_chat_id == root.id,
+                KanbanTicket.merged_into_ticket_id.is_(None),
+            )
+            .order_by(KanbanTicket.id.desc())
+            .first()
+        )
         clear_binding = not preserve_scope and not any((board_key, board_provider, ticket_id, board_ticket_key))
         next_ticket_id = int(ticket_id) if ticket_id is not None else (
             owned_ticket.id if owned_ticket is not None and not clear_binding else None

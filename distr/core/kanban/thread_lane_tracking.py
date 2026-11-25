@@ -75,7 +75,17 @@ def _linked_ticket(db, root_id: int):
     if item is not None and item.local_ticket_id is not None:
         ticket = db.get(KanbanTicket, int(item.local_ticket_id))
     if ticket is None:
-        ticket = db.query(KanbanTicket).filter(KanbanTicket.source_chat_id == int(root_id)).first()
+        # A chat may now raise several tickets; prefer the newest unmerged one so
+        # lane tracking cannot pick an arbitrary (or superseded) row.
+        ticket = (
+            db.query(KanbanTicket)
+            .filter(
+                KanbanTicket.source_chat_id == int(root_id),
+                KanbanTicket.merged_into_ticket_id.is_(None),
+            )
+            .order_by(KanbanTicket.id.desc())
+            .first()
+        )
     return ticket, item
 
 

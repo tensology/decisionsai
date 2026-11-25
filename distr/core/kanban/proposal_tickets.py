@@ -130,7 +130,15 @@ def find_existing_ticket_for_proposal(session: Any, proposal: dict[str, Any], pr
     from distr.core.db.workflow import DevelopmentWorkItem
 
     if chat_id is not None:
-        owned = session.query(KanbanTicket).filter(KanbanTicket.source_chat_id == int(chat_id)).first()
+        owned = (
+            session.query(KanbanTicket)
+            .filter(
+                KanbanTicket.source_chat_id == int(chat_id),
+                KanbanTicket.merged_into_ticket_id.is_(None),
+            )
+            .order_by(KanbanTicket.id.desc())
+            .first()
+        )
         if owned is not None:
             return owned
         item = session.query(DevelopmentWorkItem).filter(DevelopmentWorkItem.chat_id == int(chat_id)).first()
@@ -393,7 +401,15 @@ def _stamp_proposal_source_on_ticket(chat_id: int, proposal: dict[str, Any]) -> 
     if not preferred:
         return
     with get_session() as db:
-        ticket = db.query(KanbanTicket).filter(KanbanTicket.source_chat_id == int(chat_id)).first()
+        ticket = (
+            db.query(KanbanTicket)
+            .filter(
+                KanbanTicket.source_chat_id == int(chat_id),
+                KanbanTicket.merged_into_ticket_id.is_(None),
+            )
+            .order_by(KanbanTicket.id.desc())
+            .first()
+        )
         if ticket is None:
             return
         current = str(ticket.source_external_id or "").strip()
