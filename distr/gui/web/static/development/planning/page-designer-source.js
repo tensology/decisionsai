@@ -1,4 +1,4 @@
-import { parseWireframe } from './wireframe.js?v=20261125-canvas-workspace';
+import { parseWireframe } from './wireframe.js?v=20261125-artboard-continuity';
 
 export const WIDGETS = {
     row: 'row',

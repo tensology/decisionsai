@@ -1,4 +1,4 @@
-import { createPlanConversation } from './conversation.js?v=20261125-canvas-workspace';
+import { createPlanConversation } from './conversation.js?v=20261125-artboard-continuity';
 import { scanHint, watchPlanScan } from './scan-watch.js?v=20261112-scan-refresh';
 import { createLoadGuard, isAbort } from './load-guard.js?v=20261102-verify';
 

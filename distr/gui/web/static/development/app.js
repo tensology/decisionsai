@@ -5,7 +5,7 @@ import { createThreadSession } from './threads/session.js?v=20261115-workflow-di
 import { createCatalogLoader } from './shell/catalog.js';
 import { installNavigationGuard } from './shell/navigation-guard.js';
 import { catalogModels, providerLabel } from './shared/models.js';
-import { createPlanning } from './planning/index.js?v=20261125-canvas-workspace';
+import { createPlanning } from './planning/index.js?v=20261125-artboard-continuity';
 import { seedPlanHistory } from './planning/back.js?v=20261102-verify';
 import { planCrumbs, renderPlanCrumbs, clearPlanCrumbs } from './planning/breadcrumb.js?v=20261111-nav-apply-chrome4';
 import { setOverflowLabel } from './shared/overflow-names.js?v=20261111-overflow-names3';

@@ -377,7 +377,7 @@ function calendarCells(node) {
     return { month: iso.slice(0, 7), title: `${['January','February','March','April','May','June','July','August','September','October','November','December'][month - 1]} ${year}`, selected: Number(iso.slice(8,10)), cells: ['S', 'M', 'T', 'W', 'T', 'F', 'S', ...Array.from({ length: Math.ceil((first + days) / 7) * 7 }, (_, i) => i >= first && i < first + days ? String(i - first + 1) : '')] };
 }
 
-function renderHTML(box, assetURLs = {}) {
+function renderHTML(box, assetURLs, standalone) {
     const { node, padding: p } = box, t = node.type, a = node.attrs;
     // SVG needs conservative line estimates. HTML must let the browser shape
     // and wrap actual words, particularly when the inspector is resized.
@@ -388,7 +388,10 @@ function renderHTML(box, assetURLs = {}) {
     const accessible = ` id="${esc(controlId)}" aria-label="${esc(shown(node) || t)}"${bools}`;
     const metadata = Object.entries(a).map(([key, value]) => ` data-wf-${key}="${esc(value)}"`).join('');
     const style = `left:${box.x}px;top:${box.y}px;width:${box.width}px;height:${box.height}px;padding:${p}px;--gap:${numeric(node, 'gap', 20)}px;--columns:${numeric(node, 'columns', 2)};--min-height:${numeric(node, 'height', 0)}px;--max-width:${box.width}px;`;
-    const children = box.children.map(child => renderHTML(child, assetURLs)).join('');
+    const children = box.children.map(child => renderHTML(child, assetURLs, standalone)).join('');
+    const navigation = url => !standalone && url.startsWith('/')
+        ? `href="#${esc(url)}" data-preview-route="${esc(url)}"`
+        : `href="${esc(url)}"`;
     let body = label ? `<div class="label${t === 'heading' ? ' heading' : ''}">${label}</div>` : '';
     const controlStyle = ` style="height:${Math.max(36, box.height - p * 2 - box.titleHeight - (box.titleHeight ? 6 : 0))}px"`;
     if (fields.has(t)) {
@@ -402,13 +405,12 @@ function renderHTML(box, assetURLs = {}) {
     else if (t === 'button') {
         const nav = a.href || a.route;
         if (nav) {
-            const url = String(nav).startsWith('/') ? `#${nav}` : nav;
-            body = `<a href="${esc(url)}"${String(nav).startsWith('/') ? ` data-preview-route="${esc(nav)}"` : ''} class="button-link"${enabled(node, 'active') ? ' aria-current="page"' : ''}>${label || 'Button'}</a>`;
+            body = `<a ${navigation(nav)} class="button-link"${enabled(node, 'active') ? ' aria-current="page"' : ''}>${label || 'Button'}</a>`;
         } else body = `<button${accessible} type="button">${label || 'Button'}</button>`;
     }
     else if (t === 'link') {
         const url = a.href || a.route || '#';
-        body = `<a href="${esc(url.startsWith('/') ? `#${url}` : url)}"${url.startsWith('/') ? ` data-preview-route="${esc(url)}"` : ''}${enabled(node, 'active') ? ' aria-current="page"' : ''}>${label || 'Link'}</a>`;
+        body = `<a ${navigation(url)}${enabled(node, 'active') ? ' aria-current="page"' : ''}>${label || 'Link'}</a>`;
     } else if (t === 'calendar') {
         const calendar = calendarCells(node);
         body += `<div class="calendar-month">${calendar.title}</div><div class="calendar-days" role="group" aria-label="Calendar">${calendar.cells.map((value, i) => i < 7 || !value ? `<span>${value}</span>` : `<button type="button" aria-label="${calendar.month}-${value.padStart(2, '0')}"${Number(value) === calendar.selected ? ' aria-pressed="true"' : ''}${bools}>${value}</button>`).join('')}</div>`;
@@ -474,6 +476,7 @@ const flowCSS = `
 .spacer{min-height:max(24px,var(--min-height))}.image,.chart{min-height:max(140px,var(--min-height))}.divider{min-height:1px}
 .image[data-wf-asset]{min-height:var(--min-height)}
 .row,.grid{display:grid;gap:var(--gap)}.row{grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))}.grid{grid-template-columns:repeat(var(--columns),minmax(0,1fr))}
+.node:is(.row,.stack):not(:has(>.node,>.label)){min-height:max(40px,var(--min-height))}
 .row>.node,.grid>.node{margin:0}.row>.label,.grid>.label{grid-column:1/-1}
 .row:has(>.button):not(:has(>.node:not(.button):not(.link))){display:flex;flex-wrap:wrap;gap:12px}
 .nav,.menu{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
@@ -541,12 +544,17 @@ const PREVIEW_ROUTE_BRIDGE = `document.addEventListener('click', event => {
 });`;
 const PREVIEW_ROUTE_HASH = 'sha256-Rw4JOvKRX8OTjSnFYUTAK7NOPRcP3lf/c3nafkfNne8=';
 
-export function renderWireframe(source, title = 'Wireframe', pageId, assets = [], { interactive = false } = {}) {
+export function renderWireframe(source, title = 'Wireframe', pageId, assets = [], { interactive = false, standalone = false } = {}) {
     // Only the host supplies this manifest. DSL source can name an ID, never a URL.
     // Restrict even host-provided URLs to the exact project attachment endpoint.
     const assetURLs = Object.create(null);
     for (const asset of assets) {
         if (!/^image\/(?:png|jpeg|webp|svg\+xml)$/.test(asset.mime_type || '')) continue;
+        if (standalone) {
+            const prefix = `data:${asset.mime_type};base64,`;
+            if (asset.url?.startsWith(prefix) && /^[A-Za-z0-9+/]+={0,2}$/.test(asset.url.slice(prefix.length))) assetURLs[String(asset.id)] = asset.url;
+            continue;
+        }
         try {
             const url = new URL(asset.url);
             if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) continue;
@@ -576,10 +584,13 @@ export function renderWireframe(source, title = 'Wireframe', pageId, assets = []
     // that network URL inside the frame. Pin resolution to an offline about URL.
     // At narrow preview widths use native document flow instead of clipping the
     // desktop coordinate canvas. The AST, labels and control bindings stay intact.
-    const imagePolicy = Object.values(assetURLs).map(esc).join(' ') || "'none'";
-    const scriptPolicy = interactive ? `'${PREVIEW_ROUTE_HASH}'` : "'none'";
-    const bridge = interactive ? `<script>${PREVIEW_ROUTE_BRIDGE}</script>` : '';
-    const htmlBody = box ? renderHTML(box, assetURLs) : `<div class="wf-invalid" role="alert"><strong>${esc(invalid.title)}</strong><p>${esc(invalid.tip)}</p><p class="wf-next">Next: fix the first error in the outline, or open Sitemap / All pages to browse the rest.</p></div>`;
-    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src ${scriptPolicy}; img-src ${imagePolicy}; connect-src 'none'; form-action 'none'; base-uri about:"><base href="about:srcdoc"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(safeTitle)}</title><style>${css}${flowCSS}.wf-invalid{padding:20px;max-width:36rem;color:${palette.ink}}.wf-invalid strong{display:block;font-size:16px;margin-bottom:8px}.wf-invalid p{margin:0 0 8px;color:${palette.muted}}.wf-next{font-weight:500;color:${palette.accent}!important}</style></head><body><div class="sheet" style="padding:24px;--page-width:${width}px"><div class="canvas" style="width:${box?.width || 552}px;height:${box?.height || 64}px">${htmlBody}</div></div>${bridge}</body></html>`;
+    const imagePolicy = standalone ? 'data:' : (Object.values(assetURLs).map(esc).join(' ') || "'none'");
+    const hasBridge = interactive && !standalone;
+    const scriptPolicy = hasBridge ? `'${PREVIEW_ROUTE_HASH}'` : "'none'";
+    const bridge = hasBridge ? `<script>${PREVIEW_ROUTE_BRIDGE}</script>` : '';
+    const basePolicy = standalone ? "'none'" : 'about:';
+    const base = standalone ? '' : '<base href="about:srcdoc">';
+    const htmlBody = box ? renderHTML(box, assetURLs, standalone) : `<div class="wf-invalid" role="alert"><strong>${esc(invalid.title)}</strong><p>${esc(invalid.tip)}</p><p class="wf-next">Next: fix the first error in the outline, or open Sitemap / All pages to browse the rest.</p></div>`;
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src ${scriptPolicy}; img-src ${imagePolicy}; connect-src 'none'; form-action 'none'; base-uri ${basePolicy}">${base}<meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(safeTitle)}</title><style>${css}${flowCSS}.wf-invalid{padding:20px;max-width:36rem;color:${palette.ink}}.wf-invalid strong{display:block;font-size:16px;margin-bottom:8px}.wf-invalid p{margin:0 0 8px;color:${palette.muted}}.wf-next{font-weight:500;color:${palette.accent}!important}</style></head><body><div class="sheet" style="padding:24px;--page-width:${width}px"><div class="canvas" style="width:${box?.width || 552}px;height:${box?.height || 64}px">${htmlBody}</div></div>${bridge}</body></html>`;
     return { svg, html, diagnostics, explanation: explainWireframeDiagnostics(diagnostics) };
 }

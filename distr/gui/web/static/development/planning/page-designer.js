@@ -1,6 +1,6 @@
-import { renderWireframe } from './wireframe.js?v=20261125-canvas-workspace';
-import { addWidget, designPage, editWidgetLabel, editWidgetLayout, insertionLayout, moveWidget, removeWidget, WIDGETS } from './page-designer-source.js?v=20261125-canvas-workspace';
-import { openSourceDrawer } from './canvas-chrome.js?v=20261125-canvas-workspace';
+import { renderWireframe } from './wireframe.js?v=20261125-artboard-continuity';
+import { addWidget, designPage, editWidgetLabel, editWidgetLayout, insertionLayout, moveWidget, removeWidget, WIDGETS } from './page-designer-source.js?v=20261125-artboard-continuity';
+import { openSourceDrawer } from './canvas-chrome.js?v=20261125-artboard-continuity';
 
 const PALETTE = { row: 'Row', stack: 'Stack', heading: 'Heading', text: 'Text', button: 'Button', input: 'Field' };
 const WIDGET_DRAG = 'application/x-decisions-widget';
@@ -9,7 +9,54 @@ const SPACING = { width: [80, 1600], height: [0, 20000], gap: [0, 80], padding: 
 const CONTAINERS = new Set(['screen', 'content', 'main', 'section', 'row', 'stack', 'card', 'form', 'grid', 'header', 'footer', 'hero']);
 const GLYPHS = { row: '▥', stack: '▤', heading: 'H', text: 'T', button: '⊡', input: '▭' };
 
-export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onDraft, onSave, onDiscard }) {
+export function artboardWidthControls() {
+    return `<div class="plan-design-viewport" role="group" aria-label="Artboard width">
+        <button type="button" data-width="wide">Desktop</button>
+        <button type="button" data-width="phone">Phone</button>
+    </div>`;
+}
+
+export function bindArtboardWidth(group, board, state) {
+    const buttons = group.querySelectorAll('[data-width]');
+    const apply = () => {
+        board.dataset.width = state.width;
+        buttons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.width === state.width)));
+    };
+    for (const button of buttons) button.onclick = () => {
+        state.width = button.dataset.width;
+        apply();
+    };
+    apply();
+}
+
+export async function standalonePageHTML(source, title, page, assets) {
+    const referenced = new Set();
+    function collect(node) {
+        if (node.type === 'image' && node.attrs.asset) referenced.add(node.attrs.asset);
+        node.children.forEach(collect);
+    }
+    collect(page);
+    const embedded = await Promise.all([...referenced].map(async id => {
+        const asset = assets.find(entry => String(entry.id) === id);
+        if (!asset) throw new Error(`Project image ${id} is unavailable.`);
+        const response = await fetch(asset.url);
+        if (!response.ok) throw new Error(`Could not load project image ${id}.`);
+        const blob = await response.blob();
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve({ ...asset, url: reader.result });
+            reader.onerror = () => reject(new Error(`Could not embed project image ${id}.`));
+            reader.readAsDataURL(new Blob([blob], { type: asset.mime_type }));
+        });
+    }));
+    const result = renderWireframe(source, title, page.id, embedded, { standalone: true });
+    if (result.diagnostics.some(entry => entry.severity === 'error')) {
+        throw new Error('Fix the page outline before exporting it.');
+    }
+    return result.html;
+}
+
+export function mountPageDesigner(surface, { item, pageIndex, draft, assets, artboard, onDraft, onSave, onDiscard }) {
     const source = () => draft.source;
     let selection = draft.line;
     let model;
@@ -21,10 +68,7 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
                 <span>Inherits <strong data-template-name></strong></span>
                 <button type="button" class="header-button" data-template-edit>Edit base template</button>
             </div>
-            <div class="plan-design-viewport" role="group" aria-label="Canvas width">
-                <button type="button" data-width="wide" aria-pressed="true">Full width</button>
-                <button type="button" data-width="phone" aria-pressed="false">Phone</button>
-            </div>
+            ${artboardWidthControls()}
             <div class="plan-design-save">
                 <button type="button" class="header-button" data-design-undo aria-label="Undo" title="Undo (Ctrl+Z)" disabled>Undo</button>
                 <button type="button" class="header-button" data-design-redo aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
@@ -39,7 +83,7 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
             </aside>
             <div class="plan-design-board">
                 <div class="plan-design-artboard-name"></div>
-                <iframe title="Design canvas" sandbox="allow-same-origin allow-scripts" referrerpolicy="no-referrer"></iframe>
+                <div class="plan-artboard-scroll"><iframe title="Design canvas" sandbox="allow-same-origin allow-scripts" referrerpolicy="no-referrer"></iframe></div>
                 <div class="plan-design-palette" role="toolbar" aria-label="Add widgets">
                     ${Object.keys(WIDGETS).map(type => `<button type="button" class="header-button" data-widget="${type}" draggable="true" aria-label="Add ${PALETTE[type].toLowerCase()}" title="Add ${PALETTE[type].toLowerCase()}"><strong aria-hidden="true">${GLYPHS[type]}</strong><span>${PALETTE[type]}</span></button>`).join('')}
                 </div>
@@ -254,26 +298,17 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
         const doc = frame.contentDocument;
         if (!doc || doc.URL !== 'about:srcdoc') return;
         const style = doc.createElement('style');
-        style.textContent = `body,.sheet{background:#fff;color:#222630}
-            .sheet{padding:clamp(12px,3.3vw,28px)!important}
-            .canvas{border:0;border-radius:0;box-shadow:none;overflow:visible;background:transparent}
-            .node:not(.plain),.form,.hero{background:#f6f7f9!important;border-radius:3px;box-shadow:none;outline:1px solid #dde0e6}
-            .node[data-design-layer]:is(.section,.row,.stack,.grid,.card,.form){border-radius:2px;outline:1px dashed #bac1cc;outline-offset:3px}
-            .node :is(input,textarea,select,button,.button-link){border:1px solid #969ea9;border-radius:2px;background:#fff;color:#25272b}
-            .button[data-wf-variant=primary] :is(button,.button-link),.button[data-wf-primary=true] button{background:#e7ecf5;color:#1f3053;border-color:#9aaac1}
-            .node img{filter:grayscale(1)}
-            .node[data-design-layer]{cursor:grab;user-select:none}
+        style.textContent = `.node[data-design-layer]{cursor:grab;user-select:none}
             .node[data-design-layer]:hover{outline:1px dashed #4774d0;outline-offset:2px}
-            .node.design-selected,.node[data-design-layer].design-selected{outline:1px solid #2866e9;outline-offset:2px}
-            .design-selection-controls{position:absolute;inset:-3px;z-index:9;pointer-events:none}
+            .node.design-selected,.node[data-design-layer].design-selected{outline:1px solid #2866e9;outline-offset:-1px}
+            .design-selection-controls{position:absolute;inset:0;z-index:9;pointer-events:none}
             .design-selection-controls i{position:absolute;width:8px;height:8px;border:1px solid #2866e9;background:white}
-            .design-selection-controls i:nth-child(1){top:-4px;left:-4px}
-            .design-selection-controls i:nth-child(2){top:-4px;right:-4px}
-            .design-selection-controls i:nth-child(3){bottom:-4px;left:-4px}
-            .design-selection-controls i:nth-child(4){bottom:-4px;right:-4px;pointer-events:auto;cursor:ew-resize;touch-action:none}
+            .design-selection-controls i:nth-child(1){top:1px;left:1px}
+            .design-selection-controls i:nth-child(2){top:1px;right:1px}
+            .design-selection-controls i:nth-child(3){bottom:1px;left:1px}
+            .design-selection-controls i:nth-child(4){bottom:1px;right:1px;pointer-events:auto;cursor:ew-resize;touch-action:none}
             .node[data-design-layer].design-target{outline:2px dashed #315fc0;outline-offset:3px}
-            .node[data-design-empty]{min-height:40px;outline:1px dashed #8298c9;border-radius:4px}
-            .node[data-design-empty]::after{content:"Drop widgets here";padding:8px;color:#405a84;font:12px system-ui}
+            .node[data-design-empty]{outline:1px dashed #8298c9}
             .node.design-insert-before{box-shadow:0 -3px 0 #315fc0}
             .node.design-insert-after{box-shadow:0 3px 0 #315fc0}
             .row > .node.design-insert-before, .node.design-row-child.design-insert-before{box-shadow:-3px 0 0 #315fc0}
@@ -408,12 +443,7 @@ export function mountPageDesigner(surface, { item, pageIndex, draft, assets, onD
         highlight(doc, true);
     });
 
-    root.querySelectorAll('[data-width]').forEach(button => {
-        button.onclick = () => {
-            root.dataset.width = button.dataset.width;
-            root.querySelectorAll('[data-width]').forEach(toggle => toggle.setAttribute('aria-pressed', String(toggle === button)));
-        };
-    });
+    bindArtboardWidth(root.querySelector('.plan-design-viewport'), root.querySelector('.plan-artboard-scroll'), artboard);
     palette.forEach(button => {
         button.onclick = () => change(addWidget(source(), insertionLayout(model, selection), button.dataset.widget));
         button.ondragstart = event => {

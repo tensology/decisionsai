@@ -105,12 +105,40 @@ def test_page_designer_saves_a_responsive_stencil(page: Page, plan_server, tmp_p
     expect(canvas.locator(".design-selected")).to_have_attribute("data-wf-width", "180")
 
     designer.get_by_role("button", name="Phone", exact=True).click()
-    if width == 1440:
-        expect(designer.locator("iframe")).to_have_css("width", "390px")
+    expect(designer.locator("iframe")).to_have_css("width", "390px")
     expect(canvas.locator(".row input").last).to_be_visible()
     tops = canvas.locator(".row input").evaluate_all("inputs => inputs.map(input => input.getBoundingClientRect().top)")
     assert tops[1] > tops[0]
-    designer.get_by_role("button", name="Full width").click()
+    geometry = """el => {
+        const style = getComputedStyle(el), box = el.getBoundingClientRect();
+        return [box.x, box.width, box.height, style.padding, style.color, style.border, style.backgroundColor];
+    }"""
+    field = canvas.get_by_role("textbox", name="Bike model")
+    in_design = field.evaluate(geometry)
+    page.get_by_role("button", name="Preview", exact=True).click()
+    expect(page.get_by_text("Unsaved design preview", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="Phone", exact=True)).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#plan-preview iframe")).to_have_css("width", "390px")
+    field_in_preview = page.frame_locator("#plan-preview iframe").get_by_role("textbox", name="Bike model")
+    assert field_in_preview.evaluate(geometry) == in_design
+    if width == 1440:
+        with page.expect_download() as exported:
+            page.get_by_role("button", name="Export HTML", exact=True).click()
+        html_file = tmp_path / "saved.html"
+        exported.value.save_as(html_file)
+        output = page.context.new_page()
+        output.set_viewport_size({"width": 390, "height": 900})
+        output.goto(html_file.as_uri())
+        assert output.get_by_role("textbox", name="Bike model").evaluate(geometry) == in_design
+        expect(output.get_by_role("link", name="Back to customers")).to_have_attribute("href", "/customers")
+        logo = output.get_by_role("img", name="Example logo")
+        expect(logo).to_be_visible()
+        assert logo.evaluate("img => img.naturalWidth > 0 && img.src.startsWith('data:image/')")
+        output.close()
+    page.get_by_role("button", name="Desktop", exact=True).click()
+    expect(page.locator("#plan-preview iframe")).to_have_css("width", "900px")
+    page.get_by_role("button", name="Design", exact=True).click()
+    expect(designer.get_by_role("button", name="Desktop", exact=True)).to_have_attribute("aria-pressed", "true")
     out = Path(os.environ.get("DECISIONS_DESIGN_EVIDENCE", str(tmp_path)))
     out.mkdir(parents=True, exist_ok=True)
     page.locator(".plan-detail-body").evaluate("body => { body.scrollTop = 0; }")
@@ -120,9 +148,6 @@ def test_page_designer_saves_a_responsive_stencil(page: Page, plan_server, tmp_p
         designer.get_by_label("Widget label").scroll_into_view_if_needed()
         page.screenshot(path=out / "page-designer-390-inspector.png", animations="disabled")
 
-    page.get_by_role("button", name="Preview", exact=True).click()
-    expect(page.frame_locator('#plan-preview iframe').get_by_role("textbox", name="Bike model")).to_have_count(0)
-    page.get_by_role("button", name="Design", exact=True).click()
     expect(canvas.get_by_role("textbox", name="Bike model")).to_be_visible()
     with page.expect_response(lambda response: response.request.method == "PATCH" and "/plan-items/" in response.url) as saved:
         designer.get_by_role("button", name="Save design").click()

@@ -1476,11 +1476,14 @@ button.plan-doc-add:hover { color: var(--studio-text); }
     background: #dfe3e9 radial-gradient(#bbc2cd 0.65px, transparent 0.75px) 0 0 / 18px 18px;
 }
 .plan-design-artboard-name { justify-self: start; max-width: 100%; color: #485467; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.plan-design-board iframe {
-    display: block; width: 100%; max-width: 1200px; height: 100%; min-height: 0;
+.plan-artboard-scroll { display: flex; width: 100%; min-width: 0; min-height: 0; overflow-x: auto; }
+.plan-preview-artboard { height: 100%; min-height: 280px; }
+.plan-artboard-scroll > iframe {
+    display: block; flex: none; width: 900px; height: 100%; min-height: 0; margin-inline: auto;
     background: #fff; box-shadow: 0 0 0 1px #343d5029, 0 6px 16px #27324a18;
 }
-.plan-designer[data-width="phone"] iframe { width: min(100%, 390px); }
+.plan-artboard-scroll[data-width="phone"] > iframe { width: 390px; }
+.plan-preview-draft { align-self: center; color: var(--studio-muted); font-size: 12px; }
 .plan-design-palette {
     flex-wrap: nowrap; max-width: 100%; padding: 4px; gap: 2px; border: 1px solid #4d5564; border-radius: 9px;
     background: #252b35; box-shadow: 0 3px 10px #27324a40;

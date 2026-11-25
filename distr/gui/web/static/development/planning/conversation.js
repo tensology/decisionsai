@@ -1,5 +1,5 @@
-import { parseWireframe, renderWireframe, explainWireframeDiagnostics } from './wireframe.js?v=20261125-canvas-workspace';
-import { mountPageDesigner } from './page-designer.js?v=20261125-canvas-workspace';
+import { parseWireframe, renderWireframe, explainWireframeDiagnostics } from './wireframe.js?v=20261125-artboard-continuity';
+import { artboardWidthControls, bindArtboardWidth, mountPageDesigner, standalonePageHTML } from './page-designer.js?v=20261125-artboard-continuity';
 import { endpointExample, HTTP_METHODS, openEndpointEditor, saveEndpointExample } from './endpoint-editor.js?v=20261125-canvas-workspace';
 import { createPlanPolling } from './polling.js';
 import { buildResultsHtml } from './build-results.js';
@@ -1456,6 +1456,8 @@ export function createPlanConversation(host, root) {
                 const page = screens.length === 1 ? screens[0] : (screens.find((s) => String(s.id) === String(openId)) || null);
                 session.pages[item.id] = page?.id;
                 const layer = session.pageLayers[item.id];
+                const artboard = ((session.artboards ||= {})[item.id] ||= { width: 'wide' });
+                const designDraft = session.designerDrafts?.[item.id];
                 if (page) {
                     const toolbar = document.createElement('div');
                     toolbar.className = 'plan-preview-toolbar';
@@ -1467,7 +1469,9 @@ export function createPlanConversation(host, root) {
                        </div>`;
                     toolbar.innerHTML = `${openId ? '<button type="button" class="iface-back" data-iface-back aria-label="Back to all pages">← All pages</button>' : ''}
                         ${layer !== 'design' && openId && session.ifacePicker?.[item.id]?.hasSelection ? '<button type="button" data-iface-page-results>Back to results</button>' : ''}
-                        ${layerButtons}${layer === 'preview' ? `<button type="button" class="plan-preview-mode" data-preview-mode="${session.previewModes[item.id]}" title="Switch the preview rendering">${session.previewModes[item.id] === 'html' ? 'Show stencil' : 'Show interactive'}</button>` : ''}`;
+                        ${layerButtons}${layer === 'preview' ? `${designDraft ? '<span class="plan-preview-draft" role="status">Unsaved design preview</span>' : ''}
+                        <button type="button" class="plan-preview-mode" data-preview-mode="${session.previewModes[item.id]}" title="Switch the preview rendering">${session.previewModes[item.id] === 'html' ? 'Show schematic' : 'Show page preview'}</button>
+                        ${session.previewModes[item.id] === 'html' ? `${artboardWidthControls()}<button type="button" data-export-page>Export HTML</button>` : ''}` : ''}`;
                     panel.insertBefore(toolbar, preview);
                     const ctx = nodeCtx(session, item);
                     (ifaceTools || toolbar).append(nodeButton(page.label || 'Page', (opener) => openNodePopover(opener, screenNode(page), ctx), ifaceTools ? 'erd-dock-button erd-dock-wide' : ''));
@@ -1547,7 +1551,7 @@ export function createPlanConversation(host, root) {
                     const drafts = session.designerDrafts ||= {};
                     const draft = drafts[item.id] || { source: item.content, baseSource: item.content, revision: revisionOf(item) };
                     mountPageDesigner(preview, {
-                        item, pageIndex: screens.indexOf(page), draft, assets: previewAssets,
+                        item, pageIndex: screens.indexOf(page), draft, assets: previewAssets, artboard,
                         onDraft: (changed) => {
                             if (changed.source === changed.baseSource) delete drafts[item.id];
                             else drafts[item.id] = changed;
@@ -1628,7 +1632,10 @@ export function createPlanConversation(host, root) {
                 }
 
                 const interactive = session.previewModes[item.id] === 'html';
-                const result = renderWireframe(item.content, item.title, page?.id, previewAssets, { interactive });
+                const source = designDraft?.source ?? item.content;
+                const previewScreens = designDraft ? parseWireframe(source).screens : screens;
+                const previewPageId = previewScreens[screens.indexOf(page)]?.id ?? page?.id;
+                const result = renderWireframe(source, item.title, previewPageId, previewAssets, { interactive });
                 preview.innerHTML = `<div class="plan-wireframe-preview">${result.svg}</div>${diagnosticsHtml(result.diagnostics)}`;
                 if (interactive) {
                     const frame = document.createElement('iframe');
@@ -1651,7 +1658,32 @@ export function createPlanConversation(host, root) {
                     window.addEventListener('message', listen);
                     session.previewCleanup = () => { window.removeEventListener('message', listen); cleanup?.(); };
                     frame.srcdoc = result.html;
-                    preview.querySelector('.plan-wireframe-preview').replaceWith(frame);
+                    const artboardScroll = document.createElement('div');
+                    artboardScroll.className = 'plan-artboard-scroll plan-preview-artboard';
+                    artboardScroll.append(frame);
+                    preview.querySelector('.plan-wireframe-preview').replaceWith(artboardScroll);
+                    const widthControls = panel.querySelector('.plan-preview-toolbar .plan-design-viewport');
+                    if (widthControls) bindArtboardWidth(widthControls, artboardScroll, artboard);
+                    const exportButton = panel.querySelector('[data-export-page]');
+                    if (exportButton) {
+                        exportButton.disabled = result.diagnostics.some(entry => entry.severity === 'error');
+                        exportButton.onclick = async () => {
+                            exportButton.disabled = true;
+                            try {
+                                const html = await standalonePageHTML(source, item.title, previewScreens[screens.indexOf(page)], previewAssets);
+                                const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+                                const download = document.createElement('a');
+                                download.href = url;
+                                download.download = `${slugId(page.label || item.title)}.html`;
+                                download.click();
+                                setTimeout(() => URL.revokeObjectURL(url), 1000);
+                            } catch (error) {
+                                host.toast?.(error.message || 'Could not export the page.', 'error');
+                            } finally {
+                                exportButton.disabled = false;
+                            }
+                        };
+                    }
                 }
                 if (page) mountPageDescription(session, item, page, screens.indexOf(page), preview);
             } catch (error) {
