@@ -9,6 +9,7 @@ from pathlib import Path
 import logging
 
 from .review_document import development_review_document
+from distr.gui.web.pagination import clamp_limit
 
 
 def _inline_content_disposition(name: str) -> str:
@@ -83,7 +84,7 @@ def register_routes(router, templates):
         try:
             from distr.core.work_intake import get_work_intake_service
 
-            items = await asyncio.to_thread(get_work_intake_service().list_inbox, limit=limit)
+            items = await asyncio.to_thread(get_work_intake_service().list_inbox, limit=clamp_limit(limit, default=40))
             return JSONResponse({"items": items})
         except Exception as e:
             logger.error("Workflow intake inbox failed: %s", e, exc_info=True)
@@ -96,7 +97,7 @@ def register_routes(router, templates):
         try:
             from distr.core.incoming.service import list_development_incoming
 
-            return JSONResponse(await asyncio.to_thread(list_development_incoming, limit=limit))
+            return JSONResponse(await asyncio.to_thread(list_development_incoming, limit=clamp_limit(limit, default=100)))
         except Exception as e:
             logger.error("Development incoming load failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
@@ -113,7 +114,7 @@ def register_routes(router, templates):
             from distr.core.incoming.source_context import scope_whatsapp_proposal
 
             payload = await asyncio.to_thread(
-                list_incoming_proposals, limit=limit, force=bool(refresh),
+                list_incoming_proposals, limit=clamp_limit(limit, default=100), force=bool(refresh),
             )
             payload = await asyncio.to_thread(incoming_merge_recovery, payload)
             return JSONResponse({

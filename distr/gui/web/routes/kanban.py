@@ -28,6 +28,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
 from distr.core.paths import DB_DIR
+from distr.gui.web.pagination import clamp_limit, clamp_offset
 from distr.core.integrations.telegram.utils import relay_internal_token
 from distr.core.integrations.whatsapp.paths import resolve_whatsapp_media_disk_path
 from distr.core.kanban.ticket_policy import (
@@ -3929,7 +3930,7 @@ def create_routes():
         try:
             from distr.core.orchestrator import list_board_activity
 
-            return JSONResponse(list_board_activity(board_id, event_limit=event_limit, rule_limit=rule_limit))
+            return JSONResponse(list_board_activity(board_id, event_limit=clamp_limit(event_limit, default=50), rule_limit=clamp_limit(rule_limit, default=20)))
         except Exception as e:
             logger.error("Board activity failed: %s", e, exc_info=True)
             raise HTTPException(500, str(e))
@@ -4331,7 +4332,7 @@ def create_routes():
                 "workflow_id": workflow_id,
                 "sessions": list_execution_sessions_for_workflow(
                     workflow_id,
-                    limit=limit,
+                    limit=clamp_limit(limit, default=50),
                     active_only=active_only,
                 ),
             }
@@ -4752,7 +4753,7 @@ def create_routes():
             t = orm_get_by_id(s, KanbanTicket, ticket_id)
             if not t:
                 raise HTTPException(404, "Ticket not found")
-            entries = list_lane_history(s, int(ticket_id), limit=limit)
+            entries = list_lane_history(s, int(ticket_id), limit=clamp_limit(limit, default=50))
             return JSONResponse({"success": True, "ticket_id": int(ticket_id), "entries": entries})
 
 
@@ -7170,8 +7171,8 @@ source: kanban_ticket_{t.id}
                 return JSONResponse({"messages": [], "total": 0, "error": "WhatsApp not connected"})
             result = whatsapp_manager.get_stored_messages(
                 jid_phone=jid_phone or None,
-                limit=limit,
-                offset=offset,
+                limit=clamp_limit(limit, default=50),
+                offset=clamp_offset(offset),
                 unprocessed_only=unprocessed_only,
                 sort=sort,
             )

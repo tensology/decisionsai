@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
 from distr.core.paths import DB_DIR
+from distr.gui.web.pagination import clamp_limit, clamp_offset
 from distr.core.integrations.whatsapp import RELAY_MEDIA_CHUNK_BYTES
 from distr.core.integrations.whatsapp.paths import (
     media_path_for_database,
@@ -742,7 +743,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             whatsapp_manager = getattr(_app, "whatsapp_manager", None) if _app else None
             if not whatsapp_manager:
                 return JSONResponse({"chats": [], "total": 0, "error": "WhatsApp not connected"})
-            result = whatsapp_manager.get_chats(limit=limit, offset=offset, search=search)
+            result = whatsapp_manager.get_chats(limit=clamp_limit(limit, default=100), offset=clamp_offset(offset), search=search)
             return JSONResponse(result)
         except Exception as e:
             logger.error(f"WhatsApp chats query error: {e}")

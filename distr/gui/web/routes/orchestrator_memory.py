@@ -8,6 +8,8 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from distr.gui.web.pagination import clamp_limit
+
 
 class MemoryCreateRequest(BaseModel):
     content: str
@@ -40,7 +42,7 @@ def create_routes() -> APIRouter:
                 "success": True,
                 "memories": list_user_memories(
                     category=category or None,
-                    limit=limit,
+                    limit=clamp_limit(limit, default=100),
                     include_disabled=include_disabled,
                 ),
             })

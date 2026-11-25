@@ -1,6 +1,7 @@
 """Workflows HTTP boundary. Existing URLs remain compatible."""
 from fastapi import Request, File, UploadFile, WebSocket
 from fastapi.responses import JSONResponse
+from distr.gui.web.pagination import clamp_limit
 from typing import Optional
 import json
 import re
@@ -24,7 +25,7 @@ def register_routes(router, templates):
                 await asyncio.to_thread(ensure_builtin_workflows)
             except Exception as seed_error:
                 logger.warning("Built-in workflow seeding skipped: %s", seed_error)
-            rows = await asyncio.to_thread(list_workflows, limit=limit, search=search, workflow_type=type)
+            rows = await asyncio.to_thread(list_workflows, limit=clamp_limit(limit, default=50), search=search, workflow_type=type)
             return JSONResponse(rows)
         except Exception as e:
             logger.error("Workflow list failed: %s", e, exc_info=True)
@@ -130,7 +131,7 @@ def register_routes(router, templates):
                 board_id=board_id,
                 project_id=project_id,
                 include_global=include_global,
-                limit=limit,
+                limit=clamp_limit(limit, default=50),
             )
             return JSONResponse({"success": True, "visual_baselines": baselines})
         except Exception as e:
@@ -157,7 +158,7 @@ def register_routes(router, templates):
                 baseline_set_id=baseline_set_id,
                 name=name,
                 include_global=include_global,
-                limit=limit,
+                limit=clamp_limit(limit, default=50),
             )
             return JSONResponse({"success": True, "visual_baseline_readiness": readiness})
         except Exception as e:
