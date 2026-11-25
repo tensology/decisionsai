@@ -1087,8 +1087,8 @@ class ScreenshotAnalyzerTool(BaseTool):
     # Call vision LLM API (supports all providers)
     # ------------------------------------------------------------------
 
+    @staticmethod
     def _call_vision_api(
-        self,
         vision_provider_key: str,
         vision_model: str,
         base64_images: list[str],

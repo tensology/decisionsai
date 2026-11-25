@@ -889,6 +889,30 @@ def register_routes(router, templates):
             profile["pricing"]["output_per_1m"] = benchmark_metrics.get("output_price_per_1m")
         return JSONResponse({"profile": profile})
 
+    @router.post("/llms/vision/validate")
+    @route_handler("validate vision model", fallback={"ok": False, "reason": "Validation failed"})
+    async def validate_vision_model(payload: dict | None = None):
+        """Probe whether the given (or currently configured) vision model can see images.
+
+        Nothing else validates a typed cloud model: the settings capability filter
+        only covers the Ollama browser list. This sends a small solid-colour image
+        and checks the model names the colour.
+        """
+        data = payload or {}
+        provider = str(data.get("provider") or "").strip()
+        model = str(data.get("model") or "").strip()
+        if not provider or not model:
+            from distr.core.settings import load_settings_from_db
+
+            settings = load_settings_from_db()
+            provider = provider or str(settings.get("vision_llm_provider") or "").strip()
+            model = model or str(settings.get("vision_llm_model") or "").strip()
+
+        from distr.core.agent.tools.vision.vision_probe import probe_vision_capability
+
+        result = await asyncio.to_thread(probe_vision_capability, provider, model)
+        return JSONResponse(result)
+
     @router.post("/llms/models/reload")
     @route_handler("reload model catalog cache", fallback={"success": False})
     async def reload_llm_models_cache(payload: dict | None = None):

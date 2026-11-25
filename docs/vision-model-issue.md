@@ -159,6 +159,25 @@ RuntimeError: Vision model 'gpt-5.6-sol' will not inspect images
 model. The name check (`check_vision_model_support`) passes anything starting
 `gpt-5`, which is how a non-vision model got selected.
 
-**Remaining gap (not fixed):** nothing validates a *typed* cloud model for vision
-capability — the `vision` capability filter in `static/settings/js/llms.js` only
-applies to the Ollama browser list, not to the OpenAI/OpenRouter model field.
+**Remaining gap — now fixed.** Nothing validated a *typed* cloud model for vision
+capability: the `vision` capability filter in `static/settings/js/llms.js` only
+applies to the Ollama browser list. Added a **live probe** instead of another name
+guess:
+
+- `distr/core/agent/tools/vision/vision_probe.py::probe_vision_capability` sends a
+  small solid-colour PNG (generated without Pillow) and asks the model to name the
+  colour in JSON. A model that cannot see images refuses or answers wrongly.
+- `POST /api/llms/vision/validate` (`{provider, model}`, or the configured values
+  when omitted) returns `{ok, reason, model, reply}`.
+- `ScreenshotAnalyzerTool._call_vision_api` is now a `@staticmethod` so the probe
+  reuses the exact provider routing the real call uses.
+
+Verified against the live account: `gpt-5.6-sol` **passes** the probe (PNG, WebP
+and JPEG), which corrects the earlier reading — the model *can* see images, it
+just emits a capability disclaimer on the first attempt and the existing retry
+recovers (see the 21:47 log: refusal on attempt 1, `Vision analysis complete
+(2539 chars)` on attempt 2).
+
+**Still open:** the flaky first-attempt refusal costs ~7s per screenshot. The
+retry hides it, but the disclaimer should be suppressed by the prompt rather than
+absorbed by a retry.
