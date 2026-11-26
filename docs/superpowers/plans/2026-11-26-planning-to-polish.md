@@ -162,6 +162,50 @@ So the scan now knows it was looking at an API. **What it does not yet do is
 switch to the React stack and stencil from there** - that is P1/P2 below, and it
 is the next real piece of work.
 
+### P1 - Stencil from the stack that holds the pages (DONE)
+
+`scan_react_pages()` finds page components and the route each answers - from a
+router table when there is one, and from path comparisons when the router is
+hand-rolled (`if (currentPath === '/x')`), which Tensology's is. The cue extractor
+already reads JSX, so a React page needed no new parser; it needed the scan
+pointed at the app. `widen_routes_with_sitemap` now stencils from the detected
+page stack.
+
+**Structure coverage, measured:**
+
+| | screens | with real content | coverage |
+|---|---|---|---|
+| before | 81 | 1 | **1%** |
+| after | 41 | 25 | **61%** |
+
+and a page is a page now:
+
+```
+screen "Contact" device=desktop route="/contact"
+  stack
+    heading "Contact"
+    form "Contact"
+      input "Name"
+      input "Email" type=email
+      input "Phone" type=tel
+```
+
+### P2 - Compose the extends chain (DONE)
+
+A page is base + page, so `_compose_template_cue` walks `{% extends %}` (depth
+capped, cycle safe, a missing parent is not an error), composes outermost-first so
+the page wins on a shared key, and merges into the page's cue. The shell - header,
+nav, footer - is now part of the stencil.
+
+### P1b - Widen the cue extractor (NEXT, and it is the cheapest remaining win)
+
+Found while writing P2's tests: the extractor recognises `<input label=...>` and
+component-style `<Button>`, but **not** plain `<h1>`, `<button>`, `<section>` or
+`<table>`. So a plain-HTML project yields almost nothing, and **19 of the 57 React
+pages that yielded no cue are likely this rather than a genuine absence.**
+
+That is the next piece: teach it the ordinary HTML elements, and re-measure.
+
 ### P5 - The base template governs the render
 Every stencil renders through the base template: tokens, form standard, table
 styling, grid. This is what makes it look like one product instead of 81 sketches.
