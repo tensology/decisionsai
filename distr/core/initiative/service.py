@@ -401,6 +401,68 @@ def build_initiative_boundaries(settings: dict) -> dict:
     }
 
 
+def _maybe_suggest_from_desktop_awareness(settings: dict) -> None:
+    """Ambient suggestions: observe -> assess -> speak. Fail-closed all the way."""
+    if not bool(settings.get("initiative_recommendations")):
+        return
+
+    from distr.core.initiative.situation_log import summarise as situation_summary
+
+    digest = situation_summary()
+    if not digest:
+        return
+
+    try:
+        budget = max(0, int(settings.get("initiative_suggestion_budget_per_day", 6)))
+    except (TypeError, ValueError):
+        budget = 6
+    try:
+        threshold = float(settings.get("initiative_interrupt_threshold", 0.85))
+    except (TypeError, ValueError):
+        threshold = 0.85
+
+    # Build a "seen" predicate backed by the existing notice-dedup store.
+    from distr.core.initiative.notice_dedup import should_post
+
+    def known(key: str) -> bool:
+        return not should_post(key, fingerprint=key, window_sec=24 * 60 * 60)
+
+    from distr.core.initiative.assessor import assess
+
+    assessment = assess(digest, settings=settings)
+    if assessment is None:
+        return
+
+    from distr.core.initiative.suggestion_gate import gate
+
+    inbox, interrupts = gate(
+        [assessment],
+        interrupt_threshold=threshold,
+        budget_remaining=budget,
+        seen=known,
+    )
+
+    if not inbox:
+        return
+
+    # Log the inbox entry so Phase 2 can surface it. Interrupts will be wired
+    # to chat/voice when Phase 2 lands.
+    for item in inbox:
+        logger.info(
+            "Initiative suggestion (kind=%s confidence=%.2f): %s",
+            item.get("kind"),
+            float(item.get("confidence", 0)),
+            str(item.get("text", ""))[:120],
+        )
+    if interrupts:
+        logger.info(
+            "Initiative suggestion ABOVE INTERRUPT THRESHOLD (kind=%s confidence=%.2f): %s",
+            interrupts[0].get("kind"),
+            float(interrupts[0].get("confidence", 0)),
+            str(interrupts[0].get("text", ""))[:200],
+        )
+
+
 class _InitiativeQtBridge(QObject):
     """Bridge signals so timer mutations always execute on Qt thread."""
     reset_idle_timer_requested = pyqtSignal()
@@ -683,6 +745,11 @@ class InitiativeService:
 
             purge_dead_desktop_awareness()
             refresh_desktop_awareness_cache()
+            # Record the refreshed situation so the assessor can see change over time.
+            from distr.core.desktop_awareness import desktop_for_situational
+            from distr.core.initiative.situation_log import record as record_situation
+
+            record_situation(desktop_for_situational())
         except Exception:
             logger.debug("desktop_awareness refresh skipped", exc_info=True)
         # R3: DB-backed proactive tasks (Morning Brief, planners, etc.)
@@ -712,6 +779,12 @@ class InitiativeService:
             maybe_send_recommendations(settings)
         except Exception:
             logger.debug("daily recommendations round-up skipped", exc_info=True)
+        # Ambient suggestions from desktop awareness: observe -> assess -> speak.
+        # Only runs when the master switch is on and the level permits.
+        try:
+            _maybe_suggest_from_desktop_awareness(settings)
+        except Exception:
+            logger.debug("ambient suggestion cycle skipped", exc_info=True)
         level = self._get_level(settings)
         if level not in ("operate", "own"):
             return
