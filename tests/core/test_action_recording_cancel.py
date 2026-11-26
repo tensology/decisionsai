@@ -4,12 +4,25 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 
-def test_waiting_for_action_name_dialog_cancel_deletes_action():
+def test_dismissing_the_naming_dialog_keeps_the_recording():
+    """A dismissed naming dialog must not destroy a just-finished recording.
+
+    This used to call cancel_recorded_action(action_id), which deleted the action
+    and its recording file - so an Esc, a click-away or a stray right-click lost
+    the recording. Naming is not a destructive decision.
+    """
     from pathlib import Path
 
     source = Path("distr/app/main.py").read_text(encoding="utf-8")
-    assert "cancel_recorded_action(action_id)" in source
-    assert "if not ok:" in source
+    start = source.index("def _on_waiting_for_action_name")
+    end = source.index("def _install_macos_wake_observer")
+    handler = source[start:end]
+
+    assert "cancel_recorded_action(action_id)" not in handler, (
+        "dismissing the naming dialog must not delete the recording"
+    )
+    assert "keep_title" in handler
+    assert "Rename it any time from the Actions list" in handler
 
 
 def test_cancel_recorded_action_deletes_action_and_recording(tmp_path):

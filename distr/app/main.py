@@ -765,16 +765,32 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
                 signal_manager.set_action_name.emit(action_id, chosen)
                 return
 
-            if not ok:
-                if hasattr(self, "recorder_host") and self.recorder_host:
-                    self.recorder_host.cancel_recorded_action(action_id)
-                return
+            # Anything else KEEPS the recording. Dismissing the dialog (Esc, a
+            # click-away, a stray right-click) used to call
+            # cancel_recorded_action(), which deleted the action AND its recording
+            # file - so a mis-click destroyed a just-finished recording. Deleting
+            # an action is explicit, from the actions list; naming is not a
+            # destructive decision.
+            keep_title = chosen or current_title
+            if keep_title:
+                signal_manager.set_action_name.emit(action_id, keep_title)
+                logger.info(
+                    "Action naming dismissed for %s; kept recording under %r",
+                    action_id, keep_title,
+                )
+            else:
+                logger.info(
+                    "Action naming dismissed for %s with no title; kept recording unnamed",
+                    action_id,
+                )
+            try:
+                from distr.app.events import speak_text_directly_event_queue
 
-            # OK with blank text: keep the auto-generated title when one exists.
-            if current_title:
-                signal_manager.set_action_name.emit(action_id, current_title)
-            elif hasattr(self, "recorder_host") and self.recorder_host:
-                self.recorder_host.cancel_recorded_action(action_id)
+                speak_text_directly_event_queue(
+                    "Recording saved. Rename it any time from the Actions list."
+                )
+            except Exception:
+                logger.debug("Could not announce the kept recording", exc_info=True)
         except Exception as e:
             logger.error("Failed to show action naming popup: %s", e, exc_info=True)
     

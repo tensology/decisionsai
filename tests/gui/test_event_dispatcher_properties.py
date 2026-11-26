@@ -192,7 +192,8 @@ def test_transition_lookup(config: SkinConfig, from_hook: str, to_hook: str) -> 
     config=skin_config_strategy(),
     initial_hook=st.sampled_from([h for h in EVENT_HOOKS
                                   if h not in ("tts_response", "talking")
-                                  and h not in ("ptt_active", "hands_free_listening", "dictation", "ticket_dictation")]),
+                                  and h not in ("ptt_active", "hands_free_listening", "dictation", "ticket_dictation",
+                                                "recording_action")]),
 )
 def test_tts_response_reverts_to_previous_state(
     config: SkinConfig, initial_hook: str
@@ -253,16 +254,36 @@ def test_talking_temporarily_overrides_hands_free_then_reverts() -> None:
 
 
 def test_hidden_recording_stop_is_not_resurrected_after_talking() -> None:
+    """A hook hidden by a higher-priority one must not come back when it ends.
+
+    recording_action now outranks talking, so the vehicle for this property is
+    thinking (20) hidden by talking (50).
+    """
+    dispatcher = EventHookDispatcher()
+
+    dispatcher.fire_hook("thinking", trigger="thinking_started")
+    dispatcher.fire_hook("talking", trigger="tts_started")
+    assert dispatcher.get_current_hook() == "talking"
+
+    dispatcher.revert_hook("thinking", trigger="thinking_finished")
+    assert dispatcher.get_current_hook() == "talking"
+
+    dispatcher.revert_hook("talking", trigger="playback_finished")
+    assert dispatcher.get_current_hook() == "idle"
+
+
+def test_recording_stays_visible_while_the_announcement_speaks() -> None:
+    """The 'Recording started.' announcement must not hide the recording state."""
     dispatcher = EventHookDispatcher()
 
     dispatcher.fire_hook("recording_action", trigger="recording_started")
     dispatcher.fire_hook("talking", trigger="tts_started")
-    assert dispatcher.get_current_hook() == "talking"
-
-    dispatcher.revert_hook("recording_action", trigger="recording_stopped")
-    assert dispatcher.get_current_hook() == "talking"
+    assert dispatcher.get_current_hook() == "recording_action"
 
     dispatcher.revert_hook("talking", trigger="playback_finished")
+    assert dispatcher.get_current_hook() == "recording_action"
+
+    dispatcher.revert_hook("recording_action", trigger="recording_stopped")
     assert dispatcher.get_current_hook() == "idle"
 
 
@@ -318,13 +339,10 @@ def test_recording_cancel_signal_clears_recording_state() -> None:
 
 
 def test_overlapping_agent_states_never_resurrect_after_completion() -> None:
+    from distr.gui.oracle.event_dispatcher import HOOK_PRIORITY
+
     hooks = ("thinking", "recording_action", "talking", "dictation")
-    priority = {
-        "thinking": 20,
-        "recording_action": 30,
-        "talking": 50,
-        "dictation": 60,
-    }
+    priority = {hook: HOOK_PRIORITY[hook] for hook in hooks}
 
     for start_order in permutations(hooks):
         for finish_order in permutations(hooks):

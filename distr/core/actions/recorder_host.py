@@ -212,6 +212,21 @@ class ActionRecorderHost(QObject):
 
         self._show_countdown(_after_countdown)
 
+    def _request_listening(self, enabled: bool) -> None:
+        """Ask the app to turn the microphone on/off for the duration of a recording.
+
+        Recording used to leave the mic wherever the user had it, so in
+        push-to-talk mode nothing was transcribed and a spoken "stop recording"
+        could never be heard - the recording appeared to ignore you. The previous
+        state is restored when the recording ends.
+        """
+        try:
+            from distr.core.signals import signal_manager
+
+            signal_manager.voice_set_is_listening.emit(bool(enabled))
+        except Exception:
+            logger.debug("Could not request listening state for recording", exc_info=True)
+
     def _do_start_recording(self, action_id: int, action_title: str):
         """Actually start the recorder process (called after countdown)."""
         try:
@@ -228,7 +243,12 @@ class ActionRecorderHost(QObject):
                 self.current_action_id = action_id
                 logger.info(f"[RECORDER_HOST] Recording started, filename={result}")
                 signal_manager.action_recording_started.emit(action_id)
-                speak_text_directly_event_queue("Recording started.")
+                # Listen while recording so "stop recording" is actually heard.
+                self._listening_forced_for_recording = True
+                self._request_listening(True)
+                speak_text_directly_event_queue(
+                    "Recording started. Say 'stop recording' or press Escape to finish."
+                )
                 self._start_recording_key_listener()
             else:
                 logger.error(f"[RECORDER_HOST] Failed to start recording: {result}")
@@ -278,6 +298,9 @@ class ActionRecorderHost(QObject):
                 self.current_recording_filename = result
                 logger.info(f"[RECORDER_HOST] Step recording started, filename={result}")
                 signal_manager.step_recording_started.emit(step_id)
+                # Same as a normal recording: listen so "stop recording" is heard.
+                self._listening_forced_for_recording = True
+                self._request_listening(True)
                 self._start_recording_key_listener()
             else:
                 logger.error(f"[RECORDER_HOST] Failed to start step recording: {result}")
@@ -293,6 +316,9 @@ class ActionRecorderHost(QObject):
     def _on_stop_step_recording(self):
         """Stop recording for a step, create a linked Action entity, and save to step DB."""
         self._stop_recording_key_listener()
+        if getattr(self, "_listening_forced_for_recording", False):
+            self._listening_forced_for_recording = False
+            self._request_listening(False)
         step_id = self._recording_for_step_id
         if not step_id:
             logger.warning("No step recording in progress")
@@ -359,6 +385,10 @@ class ActionRecorderHost(QObject):
     def _stop_recording(self):
         """Stop recording and save to DB (no UI)."""
         self._stop_recording_key_listener()
+        # Restore the microphone to whatever it was before the recording started.
+        if getattr(self, "_listening_forced_for_recording", False):
+            self._listening_forced_for_recording = False
+            self._request_listening(False)
         if self._stopping_recording:
             logger.debug("Stop recording already in progress, ignoring duplicate call")
             return

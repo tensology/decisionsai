@@ -27,12 +27,16 @@ HOOK_PRIORITY = {
     "thinking": 20,
     "running_action": 30,
     "running_step_runner": 30,
-    "recording_action": 30,
     "needs_attention": 35,
     "snippet_copied": 40,
     "file_drop_success": 40,
     "tts_response": 50,
     "talking": 50,
+    # Above talking: while a recording is live the recording indicator is the
+    # truth, and the "Recording started." announcement used to hide it (the
+    # avatar showed talking instead). Below ptt_active/dictation, which are
+    # user-held states.
+    "recording_action": 55,
     "ptt_active": 60,
     "dictation": 60,
     "ticket_dictation": 60,
