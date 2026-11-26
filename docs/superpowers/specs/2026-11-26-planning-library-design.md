@@ -128,6 +128,23 @@ Tickets become add / update / remove operations against library components,
 templated from the same library, rather than free prose. This is the section that
 fixes the "tickets from planning are terrible" complaint.
 
+**Destination.** Plans and the tickets built from them are persisted in, and read
+back from, the **project's planning folder** (`<project>/planning/`), matching the
+existing convention where plan items are files (`174-flows-and-wireframes.wire`)
+and the database holds only metadata:
+
+    <project>/planning/
+        sitemap.json     the structured plan
+        sitemap.wire     the rendered wireframe document
+        library/         entries specific to THIS project (scope product:<slug>)
+        tickets/         component-level tickets, one file per page + an index
+
+This is a **different destination** from `downloads/DecisionsAI/Tickets/`, which is
+where the internal agent writes improvements about the **Decisions platform
+itself** (its own frustrations and mechanics) when running in **debug mode**.
+Planning tickets never go there, and platform notes never go in the planning
+folder.
+
 ## Section H - Frustration scoring (designed separately)
 
 The agent noticing its own and the operator's friction and scoring it. A
