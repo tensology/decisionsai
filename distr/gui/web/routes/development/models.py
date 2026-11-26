@@ -468,3 +468,20 @@ class PlanRestoreRequest(BaseModel):
 class PlanMemoryRequest(BaseModel):
     enabled: Optional[bool] = None
     scope: str = Field(default="chat", max_length=16)
+
+
+class PlanPlaceRequest(BaseModel):
+    """Drop a library entry into a plan (sitemap level, or into a page)."""
+    entry: str
+    page: str = ""
+    title: str = ""
+    route: str = ""
+    parent: str = ""
+    span: int | None = None
+
+
+class PlanTicketsRequest(BaseModel):
+    """Build component-level tickets from a plan."""
+    heading: str = "Plan tickets"
+    current: dict[str, list[str]] | None = None
+    changed: list[str] | None = None

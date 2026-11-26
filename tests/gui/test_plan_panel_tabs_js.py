@@ -84,3 +84,15 @@ def test_the_styles_hide_the_inactive_panel():
     assert '.plan-panel-tab.active' in css
     assert '.plan-library[hidden]' in css
     assert '.plan-chat-body[hidden]' in css
+
+
+def test_a_pick_is_placed_and_persisted():
+    """The pick posts to /plan/place, which writes into the project's planning folder."""
+    source = CONVERSATION.read_text(encoding='utf-8')
+    assert "plan-library-pick" in source
+    assert "'/plan/place'" in source
+    # sitemap level creates a page; inside a page the canvas names the target
+    assert "screen === 'sitemap'" in source
+    assert 'session.libraryPage' in source
+    # a failed place must not look like success
+    assert 'placed === false' in source

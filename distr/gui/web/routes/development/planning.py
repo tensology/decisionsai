@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 import asyncio
 import logging
 from distr.gui.web.security import require_internal_token_dependency
-from .models import PlanBuildRequest, PlanChatActionRequest, PlanInterfaceShotRequest, PlanInterfaceLayoutRequest, PlanMemoryRequest, PlanRestoreRequest, PlanChatCreateRequest, PlanChatUpdateRequest, PlanMessageRequest, PlanFileReconcileRequest, PlanInstructionRequest, PlanItemCreateRequest, PlanItemUpdateRequest, PlanWorkspaceEnsureRequest
+from .models import PlanBuildRequest, PlanChatActionRequest, PlanInterfaceShotRequest, PlanInterfaceLayoutRequest, PlanMemoryRequest, PlanRestoreRequest, PlanChatCreateRequest, PlanChatUpdateRequest, PlanMessageRequest, PlanFileReconcileRequest, PlanInstructionRequest, PlanItemCreateRequest, PlanItemUpdateRequest, PlanWorkspaceEnsureRequest, PlanPlaceRequest, PlanTicketsRequest
 
 logger = logging.getLogger(__name__)
 
@@ -748,3 +748,124 @@ def register_routes(router, templates):
             }
 
         return JSONResponse(await asyncio.to_thread(_load))
+
+    def _workspace_plan_root(workspace_id: int) -> str:
+        """The workspace's planning folder - where a plan is persisted and read."""
+        from distr.core.planning.service import get_workspace
+
+        workspace = get_workspace(workspace_id) or {}
+        return str(workspace.get("root_path") or "").strip()
+
+    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/plan")
+    async def get_workspace_plan(workspace_id: int):
+        """The plan as it lives in the project's planning folder."""
+        from distr.core.planning import plan_store
+
+        def _load() -> dict:
+            root = _workspace_plan_root(workspace_id)
+            if not root:
+                return {"sitemap": None, "root": "", "error": "no planning folder for this workspace"}
+            sm = plan_store.load_sitemap(root)
+            wire, missing = sm.to_wire()
+            return {
+                "root": root,
+                "sitemap": sm.as_dict(),
+                "wire": wire,
+                "missing": missing,
+                "pages": sm.count(),
+                "routes": sm.routes(),
+                "tickets": plan_store.load_tickets_index(root),
+            }
+
+        return JSONResponse(await asyncio.to_thread(_load))
+
+    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/plan/place")
+    async def place_plan_entry(workspace_id: int, data: PlanPlaceRequest):
+        """Drop a library entry into the plan, then persist it.
+
+        A page template at sitemap level creates a page; anything else is added as
+        a block on the named page. The plan is written straight back to the
+        project's planning folder, so the file stays the source of truth.
+        """
+        from distr.core.planning import library, plan_store
+        from distr.core.planning.page import Block
+
+        def _place() -> dict:
+            root = _workspace_plan_root(workspace_id)
+            if not root:
+                return {"placed": False, "error": "no planning folder for this workspace"}
+
+            entry = library.get(data.entry)
+            if entry is None:
+                return {"placed": False, "error": f"{data.entry!r} is not in the library"}
+
+            sm = plan_store.load_sitemap(root)
+            page_name = (data.page or "").strip().lower()
+
+            if entry.kind == "page-template" and not page_name:
+                node = sm.drop_template(
+                    entry,
+                    title=(data.title or "").strip() or entry.title,
+                    route=(data.route or "").strip(),
+                    parent=(data.parent or "").strip().lower() or None,
+                )
+                if node is None:
+                    return {"placed": False, "error": "could not add the page"}
+                created = node.name
+            else:
+                node = sm.find(page_name)
+                if node is None:
+                    return {"placed": False, "error": f"page {page_name!r} is not in the plan"}
+                existing = [b.ref for b in node.page.blocks]
+                if entry.name in existing:
+                    return {"placed": False, "error": f"{entry.name!r} is already on {page_name!r}"}
+                node.page = type(node.page)(
+                    name=node.page.name,
+                    title=node.page.title,
+                    route=node.page.route,
+                    base=node.page.base,
+                    blocks=tuple(node.page.blocks) + (Block(ref=entry.name, span=data.span),),
+                    overrides=dict(node.page.overrides),
+                )
+                created = ""
+
+            wire, missing = sm.to_wire()
+            saved = plan_store.save_sitemap(root, sm, wire=wire)
+            return {
+                "placed": bool(saved.get("saved")),
+                "error": "" if saved.get("saved") else str(saved.get("error") or "write failed"),
+                "created_page": created,
+                "page": page_name or created,
+                "entry": entry.as_dict(),
+                "pages": sm.count(),
+                "wire": wire,
+                "missing": missing,
+            }
+
+        return JSONResponse(await asyncio.to_thread(_place))
+
+    @router.post("/workflows/studio/plan-workspaces/{workspace_id}/plan/tickets")
+    async def build_plan_tickets(workspace_id: int, data: PlanTicketsRequest):
+        """Build component-level tickets from the plan and write them into it.
+
+        Tickets belong in the PROJECT'S planning folder, never in downloads.
+        """
+        from distr.core.planning import plan_store, plan_tickets
+
+        def _build() -> dict:
+            root = _workspace_plan_root(workspace_id)
+            if not root:
+                return {"built": False, "error": "no planning folder for this workspace"}
+            sm = plan_store.load_sitemap(root)
+            tickets = plan_tickets.tickets_for_sitemap(sm, current=data.current, changed=data.changed or [])
+            saved = plan_store.save_tickets(root, tickets, heading=data.heading or "Plan tickets")
+            return {
+                "built": bool(saved.get("saved")),
+                "error": "" if saved.get("saved") else str(saved.get("error") or "write failed"),
+                "tickets": tickets,
+                "count": len(tickets),
+                "dir": str(saved.get("dir") or ""),
+                "pages": saved.get("pages") or [],
+            }
+
+        return JSONResponse(await asyncio.to_thread(_build))

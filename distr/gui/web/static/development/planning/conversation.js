@@ -572,6 +572,30 @@ export function createPlanConversation(host, root) {
                     session,
                     onLibrary: (screen) => { libraryPanel.setScreen(screen); },
                 });
+                // Consume the pick: place the entry in the plan and persist it into
+                // the project's planning folder. At sitemap level a page template
+                // creates a page; inside a page the canvas names the target page
+                // (session.libraryPage) because only it knows which page is open.
+                root.addEventListener('plan-library-pick', async (event) => {
+                    const entry = (event && event.detail) || {};
+                    if (!entry.name) return;
+                    const screen = libraryPanel.getScreen();
+                    const body = screen === 'sitemap'
+                        ? { entry: entry.name, title: entry.title || '' }
+                        : { entry: entry.name, page: session.libraryPage || '' };
+                    try {
+                        const result = await api(path(session, '/plan/place'), { method: 'POST', body });
+                        if (!result || result.placed === false) {
+                            console.warn('[plan] could not place the entry:', (result && result.error) || 'unknown');
+                            return;
+                        }
+                        session.planDirty = true;
+                        root.dispatchEvent(new CustomEvent('plan-changed', { detail: result, bubbles: true }));
+                        controls(session);
+                    } catch (err) {
+                        console.warn('[plan] place failed', err);
+                    }
+                });
             }
         } catch (err) {
             console.warn('[plan] library panel unavailable', err);
