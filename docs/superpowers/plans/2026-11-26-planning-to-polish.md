@@ -74,13 +74,35 @@ That single line explains the 81 blank stencils. It is not a template-resolution
 bug to be chased per framework: the Python path was never wired to the cue
 extractor at all.
 
-**So P1 is not "fix resolution" - it is "extract cues from the Python stack".**
-The route inventory already exists (`python_routes.inventory_fastapi_routes`,
-plus the Django route scan); what is missing is turning a resolved Python view or
-template into `fields / headings / buttons / links`, the same shape the JS path
-produces.
+That is only half the story, and the second half is more useful. The Django
+machinery is **already there and works**:
 
-**Exit (done):** root cause identified and written down. No code changed.
+- `_template_index()` indexes the project's templates (Tensology: **50**);
+- `{% extends %}` / `{% include %}` are resolved;
+- `_template_cue()` extracts a real cue from **33 of those 50**;
+- `widen_routes_with_sitemap()` merges template cues into `_observed_cues()`,
+  which is what the stencil builder reads.
+
+**What is missing is one link: view -> template.** Measured on Tensology:
+
+```
+page nodes:                    53
+nodes with a resolved template:  4      <- 49 of 53 are blank
+  /locale | view: locale | template: ''
+templates indexed:              50
+templates yielding a cue:       33
+template_cues keyed to routes:   0
+```
+
+The route knows its **view** (`locale`). The template (`locale.html`) is indexed.
+Nothing joins them, so `node["template"]` is empty, so no cue is produced, so
+every stencil falls through to "No fields or sections were found".
+
+**So P1 is: resolve `view` -> `template` for the Python stack** - a name-based
+join, not a rewrite. Everything downstream of it already exists and is tested.
+
+**Exit (done):** root cause identified, measured, and written down. No code
+changed.
 
 ### P1 - Resolve the template, for real (the biggest single win)
 Fix template resolution per stack: Django (`urls.py` -> view -> template),
