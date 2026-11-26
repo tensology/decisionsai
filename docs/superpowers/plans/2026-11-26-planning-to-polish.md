@@ -128,7 +128,41 @@ Map extracted elements onto the **library**: a `<form>` becomes `form`, a table
 **Exit:** stencils are library references; a ticket from the plan names real
 components (Section G already does this - it just has nothing to name today).
 
-### P4 - The base template governs the render
+### P4 - The base template governs the render (DONE)
+
+**Fixed.** The tokens applied but nothing else did: a link rendered a bare `<a>`
+with no class, so it stayed browser-blue and underlined, and headings stayed
+browser-sized. The renderer already emits each node's type as a class, so the fix
+was in `to_css()`: style `.node.heading`, `.node.link a`, `.node.button button`,
+`.node.input input`, `.node.table`, `.node.divider`, `.node.image` and the field
+label, all from tokens.
+
+Verified by computed style, not by eye: link `rgb(59,110,245)` (the base accent),
+`text-decoration: none`, heading 28px (`font.size.5`).
+
+### P4b - Endpoints are not pages (DONE)
+
+53 "pages" -> **14 pages + 40 endpoints** for Tensology. A Django page view names
+a template; a view that does not answers with data, however it is spelled
+(`identity()` returns a project-local `api_response(...)`). Endpoints are now
+reported, not drawn as blank boxes.
+
+### P4c - Stack detection (DONE)
+
+`stack_detect.py` answers, before anything is stencilled: which stacks are present,
+and whether each serves pages or only data. The verdict rides in the sitemap.
+
+```
+Tensology   -> Pages come from react (161 files). Also present: django.
+               django: pages=16 data_only=46 serves_pages=False
+DecisionsAI -> react, rust, pyqt present
+```
+
+So the scan now knows it was looking at an API. **What it does not yet do is
+switch to the React stack and stencil from there** - that is P1/P2 below, and it
+is the next real piece of work.
+
+### P5 - The base template governs the render
 Every stencil renders through the base template: tokens, form standard, table
 styling, grid. This is what makes it look like one product instead of 81 sketches.
 
