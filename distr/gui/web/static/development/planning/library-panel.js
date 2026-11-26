@@ -119,19 +119,6 @@ export function mountLibraryPanel(container, options = {}) {
     root.innerHTML = '';
     root.classList.add('plan-library-panel');
 
-    const tabs = document.createElement('div');
-    tabs.className = 'plan-library-tabs';
-    tabs.setAttribute('role', 'tablist');
-    const chatTab = document.createElement('button');
-    chatTab.type = 'button';
-    chatTab.textContent = 'Chat';
-    chatTab.dataset.mode = 'chat';
-    const libraryTab = document.createElement('button');
-    libraryTab.type = 'button';
-    libraryTab.textContent = 'Library';
-    libraryTab.dataset.mode = 'library';
-    tabs.append(chatTab, libraryTab);
-
     const status = document.createElement('p');
     status.className = 'plan-library-status';
     status.setAttribute('role', 'status');
@@ -143,7 +130,7 @@ export function mountLibraryPanel(container, options = {}) {
     list.className = 'plan-library-list';
     list.setAttribute('aria-label', 'Library');
 
-    root.append(tabs, status, preview, list);
+    root.append(status, preview, list);
 
     // The plan itself, rendered through the same renderer the canvas uses and
     // with the base template's CSS, so what you see is governed by the real
@@ -156,11 +143,8 @@ export function mountLibraryPanel(container, options = {}) {
     }
 
     function paintTabs() {
-        for (const tab of [chatTab, libraryTab]) {
-            const active = tab.dataset.mode === currentMode;
-            tab.classList.toggle('active', active);
-            tab.setAttribute('aria-selected', active ? 'true' : 'false');
-        }
+        // The tab strip lives in the chat header (see renderChatHeader); the panel
+        // only records which one is active.
         root.dataset.mode = currentMode;
     }
 
@@ -223,9 +207,6 @@ export function mountLibraryPanel(container, options = {}) {
         currentScreen = normalizeScreen(next);
         if (currentMode === 'library') reload();
     }
-
-    chatTab.addEventListener('click', () => setMode('chat'));
-    libraryTab.addEventListener('click', () => setMode('library'));
 
     paintTabs();
     if (currentMode === 'library') reload();

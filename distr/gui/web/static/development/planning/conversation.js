@@ -568,9 +568,15 @@ export function createPlanConversation(host, root) {
                 })
                 : null;
             if (libraryPanel) {
-                session.planPanelTabs = mountPlanPanelTabs(root.querySelector('#plan-panel-tabs') || root, {
+                session.planPanelTabs = mountPlanPanelTabs(root, {
                     session,
-                    onLibrary: (screen) => { libraryPanel.setScreen(screen); },
+                    onLibrary: (screen) => {
+                        // The tab strip lives in the header, so the panel has to be
+                        // told to switch as well - otherwise it stays in chat mode
+                        // and never loads anything.
+                        libraryPanel.setMode('library');
+                        libraryPanel.setScreen(screen);
+                    },
                 });
                 // Consume the pick: place the entry in the plan and persist it into
                 // the project's planning folder. At sitemap level a page template
@@ -598,6 +604,13 @@ export function createPlanConversation(host, root) {
                     } catch (err) {
                         console.warn('[plan] place failed', err);
                     }
+                });
+                // Delegated, so it survives renderChatHeader replacing the header
+                // wholesale and never depends on when the tabs were mounted.
+                root.addEventListener('click', (event) => {
+                    const button = event.target && event.target.closest && event.target.closest('[data-panel-tab]');
+                    if (!button) return;
+                    session.planPanelTab = session.planPanelTabs?.setTab(button.dataset.panelTab) || 'chat';
                 });
                 // Show the plan as it already exists in the planning folder.
                 api(path(session, '/plan')).then((plan) => {
@@ -2800,6 +2813,17 @@ export function createPlanConversation(host, root) {
         header.hidden = false;
         header.innerHTML = Array.isArray(session.conversation.chats) ? chatHeaderHtml(session, esc) : '';
         if (collapse) header.prepend(collapse);
+        // renderChatHeader replaces the header wholesale, so the Chat/Library tab
+        // strip has to be re-added here or it is wiped on every refresh.
+        {
+            const nav = document.createElement('nav');
+            nav.className = 'plan-panel-tabs';
+            nav.id = 'plan-panel-tabs';
+            nav.setAttribute('role', 'tablist');
+            nav.setAttribute('aria-label', 'Chat or library');
+            nav.innerHTML = panelTabsHtml(session.planPanelTab || 'chat');
+            header.append(nav);
+        }
         if (!Array.isArray(session.conversation.chats)) return;
         header.querySelectorAll('button:disabled').forEach((button) => { button.dataset.staticDisabled = 'true'; });
         const menu = header.querySelector('#plan-chat-menu');
