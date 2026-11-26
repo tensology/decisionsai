@@ -115,8 +115,11 @@ _ATTR_VALUE = re.compile(
     r"""\b(label|name|placeholder|type|aria-label)\s*=\s*(?:\{)?["']([^"']{1,80})["']""",
     re.IGNORECASE,
 )
-_HEADING_TEXT = re.compile(r"<h[1-3]\b[^>]*>\s*([^<{][^<]{1,80})", re.IGNORECASE)
-_REGION_BLOCK = re.compile(r"<(header|footer)\b[^>]*>([\s\S]{0,500}?)</\1>", re.IGNORECASE)
+_HEADING_TEXT = re.compile(r"<h[1-6]\b[^>]*>\s*([^<{][^<]{1,80})", re.IGNORECASE)
+_REGION_BLOCK = re.compile(
+    r"<(header|footer|nav|main|aside|section)\b[^>]*>([\s\S]{0,500}?)</\1>",
+    re.IGNORECASE,
+)
 _HERO_MARK = re.compile(
     r"""className\s*=\s*["'][^"']*\bhero\b[^"']*["'][^>]*>\s*([^<]{1,80})""",
     re.IGNORECASE,
@@ -129,6 +132,8 @@ _LOCAL_LINK = re.compile(
     r"""<(?:a|DefaultLink|Link)\b([^>]*)>([^<{][^<]{0,60})</(?:a|DefaultLink|Link)>""",
     re.IGNORECASE,
 )
+_TABLE_MARK = re.compile(r"<table\b[^>]*>([\s\S]{0,4000}?)</table>", re.IGNORECASE)
+_TABLE_HEAD = re.compile(r"<th\b[^>]*>\s*([^<{][^<]{0,60})", re.IGNORECASE)
 _NAVIGATE_BINDING = re.compile(r"\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*useNavigate\s*\(\s*\)")
 _NAMED_CLICK = re.compile(r"\bonClick\s*=\s*\{\s*([A-Za-z_$][\w$]*)\s*\}")
 _SIMPLE_HANDLER = re.compile(
@@ -400,9 +405,36 @@ def scan_react_pages(project_root: Path, *, cues: bool = True) -> list[dict[str,
             "source": path.relative_to(root).as_posix(),
         }
         if cues:
-            row["cue"] = _extract_screen_cues(source)
+            cue = _extract_screen_cues(source)
+            # A page is often a composition - Home is Hero + TechStack + FAQ - and
+            # holds no markup of its own. Follow its imports before giving up, the
+            # same way the JS route path does.
+            if not _cue_has_content(cue):
+                _merge_imported_cues(cue, path, source, root)
+            row["cue"] = cue
         out.append(row)
     return out
+
+
+MAX_IMPORT_FOLLOW = 6
+
+
+def _merge_imported_cues(cue: dict[str, Any], page: Path, source: str, root: Path) -> None:
+    """Merge the cues of a page's own components, bounded and depth-1."""
+    followed = 0
+    for name, spec in _IMPORT_DEFAULT.findall(source):
+        if followed >= MAX_IMPORT_FOLLOW:
+            break
+        if _SKIP_COMPONENT.search(name or ""):
+            continue
+        child = _component_file(page, spec, root)
+        if child is None or child == page:
+            continue
+        child_text = _read_text_prefix(child, 80_000)
+        child_cue = _extract_screen_cues(child_text)
+        if _cue_has_content(child_cue):
+            _merge_cues(cue, child_cue)
+            followed += 1
 
 
 def _slugify(value: str) -> str:
@@ -607,6 +639,7 @@ def _extract_screen_cues(source: str) -> dict[str, Any]:
     headings: list[str] = []
     links: list[dict[str, str]] = []
     regions: dict[str, str] = {}
+    tables: list[str] = []
 
     for match in _FIELD_OPEN.finditer(source):
         attrs = {key.lower(): value for key, value in _ATTR_VALUE.findall(match.group(2))}
@@ -656,6 +689,12 @@ def _extract_screen_cues(source: str) -> dict[str, Any]:
             continue
         links.append({"label": label, "route": route})
 
+    for table in _TABLE_MARK.finditer(source):
+        for head in _TABLE_HEAD.finditer(table.group(1)):
+            value = _clean_cue_text(head.group(1))
+            if value and _usable_label(value) and value not in tables:
+                tables.append(value)
+
     for kind, body in _REGION_BLOCK.findall(source):
         inner = _clean_cue_text(body)
         label = inner[:48] if inner and _usable_label(inner[:40]) else kind.title()
@@ -672,11 +711,16 @@ def _extract_screen_cues(source: str) -> dict[str, Any]:
         "headings": headings[:8],
         "links": links[:4],
         "regions": regions,
+        # A table's column headers, so a data page reads as a table not a blank box.
+        "columns": tables[:8],
     }
 
 
 def _cue_has_content(cue: dict[str, Any]) -> bool:
-    return bool(cue.get("fields") or cue.get("buttons") or cue.get("headings") or cue.get("links") or cue.get("regions"))
+    return bool(
+        cue.get("fields") or cue.get("buttons") or cue.get("headings")
+        or cue.get("links") or cue.get("regions") or cue.get("columns")
+    )
 
 
 def _merge_cues(base: dict[str, Any], extra: dict[str, Any]) -> None:
@@ -689,6 +733,10 @@ def _merge_cues(base: dict[str, Any], extra: dict[str, Any]) -> None:
     for link in extra.get("links") or []:
         if not any(row["label"] == link["label"] for row in base["links"]):
             base["links"].append(link)
+    for value in extra.get("columns") or []:
+        base.setdefault("columns", [])
+        if value not in base["columns"]:
+            base["columns"].append(value)
     for kind, label in (extra.get("regions") or {}).items():
         base["regions"].setdefault(kind, label)
 
@@ -1247,10 +1295,11 @@ def _screen_lines(
         "  stack",
     ]
     regions = cue.get("regions") or {}
-    if regions.get("header"):
-        screen.append(f'    header "{_quote(str(regions["header"])[:48])}"')
-    if regions.get("hero"):
-        screen.append(f'    hero "{_quote(str(regions["hero"])[:48])}"')
+    # Every landmark the cue found belongs in the stencil, not just header/hero:
+    # a page whose only cue was a <section> or <nav> rendered as an empty box.
+    for landmark in ("header", "nav", "hero", "main", "aside", "section"):
+        if regions.get(landmark):
+            screen.append(f'    {landmark} "{_quote(str(regions[landmark])[:48])}"')
     screen.append(f'    heading "{title}"')
     fields = list(cue.get("fields") or [])[:6]
     buttons = list(cue.get("buttons") or [])[:3]
@@ -1285,10 +1334,17 @@ def _screen_lines(
     else:
         for heading in headings:
             screen.append(f'    section "{_quote(heading)}"')
+        # A table is a component: its column headers are the cue. Without this a
+        # data page had a cue and still rendered as an empty box.
+        columns = [str(c) for c in (cue.get("columns") or [])][:6]
+        if columns:
+            screen.append("    table")
+            for column in columns:
+                screen.append(f'      column "{_quote(column)}"')
         for index, button in enumerate(buttons):
             emit_button(button, index, "    ")
         _emit_links(screen, links)
-        if not headings and not buttons and not links:
+        if not headings and not buttons and not links and not columns and not regions:
             screen.append('    text "No fields or sections were found in this route\'s own template."')
     if regions.get("footer"):
         screen.append(f'    footer "{_quote(str(regions["footer"])[:48])}"')

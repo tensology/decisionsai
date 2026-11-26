@@ -197,14 +197,43 @@ capped, cycle safe, a missing parent is not an error), composes outermost-first 
 the page wins on a shared key, and merges into the page's cue. The shell - header,
 nav, footer - is now part of the stencil.
 
-### P1b - Widen the cue extractor (NEXT, and it is the cheapest remaining win)
+### P1b - Widen the cue extractor (DONE, with a correction)
 
-Found while writing P2's tests: the extractor recognises `<input label=...>` and
-component-style `<Button>`, but **not** plain `<h1>`, `<button>`, `<section>` or
-`<table>`. So a plain-HTML project yields almost nothing, and **19 of the 57 React
-pages that yielded no cue are likely this rather than a genuine absence.**
+**I was wrong the first time.** I reported that the extractor missed `<h1>`,
+`<button>` and `<a>`. It does not - it misses them only when the content is a
+single character, because of a minimum-length guard. Measured properly, it already
+handled `<h1>`, `<button>`, `<a>`, `<input>`, `<textarea>` and `<select>`.
 
-That is the next piece: teach it the ordinary HTML elements, and re-measure.
+The genuine gaps were `<h4>`-`<h6>`, `<section>`, `<table>` and `<nav>`. Those are
+now read, table column headers become a `table` node, and every landmark
+(header/nav/main/aside/section/footer) is rendered rather than only header/hero.
+
+Also added: **a page that composes imports borrows their cues.** `Home` is
+`Hero + Partners + ...` and holds no markup of its own; without this it rendered
+blank.
+
+**Coverage: 1% -> 71%** (41 screens, 29 with real content).
+
+### P1c - The remaining blanks are i18n, and need the rendered DOM (NEXT)
+
+The 12 blank screens are real pages whose text is not in the component:
+
+```jsx
+<h2>{copy.moreTitle}</h2>
+<h3>{offer.title}</h3>
+```
+
+A fully translated app has **no literal text in its components** - the strings
+live in translation objects and are resolved at runtime. Static extraction cannot
+see them, and widening the extractor will not help.
+
+Two ways out, and both are already scoped:
+
+1. **The translation files.** The strings ARE on disk (`i18n/publicTranslations`);
+   they can seed a page's content when the component has none.
+2. **The rendered DOM (P2).** Render the page with Playwright and read the real
+   headings and labels. This is what P2 was for, and this is the case that
+   justifies it.
 
 ### P5 - The base template governs the render
 Every stencil renders through the base template: tokens, form standard, table

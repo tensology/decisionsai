@@ -206,3 +206,43 @@ def test_a_project_with_no_pages_dir_falls_back_to_src(tmp_path):
     (src / "Thing.tsx").write_text("<h1>Thing</h1>")
     rows = ps.scan_react_pages(tmp_path)
     assert [r["title"] for r in rows] == ["Thing"]
+
+
+# ------------------------------------------------------------------ cue breadth
+
+def test_the_extractor_reads_ordinary_html_elements():
+    """h4-h6, section, table and nav, not just h1-h3 and component tags."""
+    from distr.core.planning import project_scan as ps
+
+    cue = ps._extract_screen_cues(
+        "<h4>Pricing</h4>"
+        "<section>Our services</section>"
+        "<table><tr><th>Name</th><th>Status</th></tr></table>"
+        "<nav><a href='/about'>About us</a></nav>"
+    )
+    assert "Pricing" in cue["headings"]
+    assert cue["columns"] == ["Name", "Status"]
+    assert "section" in cue["regions"]
+    assert "nav" in cue["regions"]
+
+
+def test_table_columns_count_as_content():
+    from distr.core.planning import project_scan as ps
+
+    cue = ps._extract_screen_cues("<table><tr><th>Name</th></tr></table>")
+    assert ps._cue_has_content(cue) is True
+
+
+def test_a_page_that_composes_imports_borrows_their_cues(tmp_path):
+    """Home is Hero + Partners; the page itself holds no markup."""
+    from distr.core.planning import project_scan as ps
+
+    src = tmp_path / "src"
+    (src / "pages").mkdir(parents=True)
+    (src / "components").mkdir(parents=True)
+    (src / "pages" / "Home.tsx").write_text("import Hero from '../components/Hero';\nexport default () => <Hero/>\n")
+    (src / "components" / "Hero.tsx").write_text("<h1>Build something real</h1><button>Get started</button>\n")
+
+    home = next(r for r in ps.scan_react_pages(tmp_path) if r["title"] == "Home")
+    assert "Build something real" in home["cue"]["headings"]
+    assert "Get started" in home["cue"]["buttons"]
