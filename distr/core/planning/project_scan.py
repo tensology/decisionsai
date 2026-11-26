@@ -1943,6 +1943,16 @@ def _coverage(nodes: list[dict[str, Any]], template_count: int) -> tuple[str, st
     return ("verified", "")
 
 
+def _stack_summary(root: Path) -> dict[str, Any]:
+    try:
+        from distr.core.planning import stack_detect
+
+        return stack_detect.summary(stack_detect.detect_stacks(root))
+    except Exception:
+        logger.debug("scan: stack detection failed", exc_info=True)
+        return {"stacks": [], "verdict": ""}
+
+
 def build_html_sitemap(project_root: Path | str, *, _python_routes: dict | None = None) -> dict[str, Any]:
     """Build source-backed HTML pages, keeping JSON endpoints out of the sitemap."""
     root = Path(project_root).expanduser().resolve()
@@ -2249,6 +2259,10 @@ def build_html_sitemap(project_root: Path | str, *, _python_routes: dict | None 
         # Routes that answer with data rather than markup. Reported so the UI can
         # say "62 pages, 19 endpoints" instead of drawing blank page boxes.
         "endpoints": endpoints,
+        # Which stack actually holds the pages. Tensology's Django side is an API;
+        # its pages are React. Reported so a thin plan can explain itself instead
+        # of rendering 81 blank boxes.
+        "stacks": _stack_summary(root),
         'python_route_stats': _python_routes['stats'],
         'limitations': _python_routes['limitations'],
         'omitted_node_count': omitted_node_count,
