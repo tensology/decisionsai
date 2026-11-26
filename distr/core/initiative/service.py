@@ -401,11 +401,51 @@ def build_initiative_boundaries(settings: dict) -> dict:
     }
 
 
+def _deliver_suggestion(item: dict, settings: dict, *, interrupt: bool) -> str:
+    """Show a suggestion in the assistant panel; speak it only when interrupting.
+
+    Reuses the existing nudge store/panel so there is one place suggestions live,
+    and the existing same-channel rule: if the interrupt channel cannot take it,
+    it is kept in the app rather than pushed somewhere else.
+    """
+    from datetime import datetime
+
+    from distr.core.initiative import channel_select
+
+    now = datetime.now()
+    ts = now.timestamp()
+    kind = str(item.get("kind") or "idea")
+    nudge = {
+        "id": f"ambient-{int(ts)}-{abs(hash(kind)) % 100000}",
+        "fp": f"ambient:{kind}",
+        "area": "ambient",
+        "project": "",
+        "pinned": False,
+        "kind": kind,
+        "text": str(item.get("text") or "")[:300],
+        "why": "noticed while you were working",
+        "created": now.astimezone().isoformat(timespec="minutes"),
+        "created_ts": ts,
+    }
+    if interrupt:
+        choice = channel_select.Choice("spoken", float(item.get("confidence") or 0), False, None,
+                                       ["above the interrupt threshold"])
+    else:
+        choice = channel_select.Choice("in_app", float(item.get("confidence") or 0), False, None,
+                                       ["quiet by default"])
+    try:
+        return channel_select.place([nudge], choice, settings, now=now, level="suggest")
+    except Exception:
+        logger.warning("Initiative: could not place ambient suggestion", exc_info=True)
+        return ""
+
+
 def _maybe_suggest_from_desktop_awareness(settings: dict) -> None:
     """Ambient suggestions: observe -> assess -> speak. Fail-closed all the way."""
     if not bool(settings.get("initiative_recommendations")):
         return
 
+    from distr.core.initiative import suggestion_store as store
     from distr.core.initiative.situation_log import summarise as situation_summary
 
     digest = situation_summary()
@@ -421,17 +461,30 @@ def _maybe_suggest_from_desktop_awareness(settings: dict) -> None:
     except (TypeError, ValueError):
         threshold = 0.85
 
-    # Build a "seen" predicate backed by the existing notice-dedup store.
+    # Muted kinds go into the prompt AND are checked again below: the model is told
+    # to avoid them, but a near-synonym kind must not sneak past on wording alone.
+    muted = store.muted_kinds()
+
+    from distr.core.initiative.assessor import assess
+
+    assessment = assess(
+        digest,
+        settings=settings,
+        recent_suggestions=store.recent_texts(limit=10),
+        avoid_kinds=muted,
+    )
+    if assessment is None:
+        return
+    if store.is_muted(assessment.get("kind")):
+        logger.info("Initiative: suggestion kind %r is muted; dropped", assessment.get("kind"))
+        return
+
+    # Dedup against the same store the rest of Initiative uses, so a suggestion is
+    # not repeated inside the window even if the assessor words it differently.
     from distr.core.initiative.notice_dedup import should_post
 
     def known(key: str) -> bool:
         return not should_post(key, fingerprint=key, window_sec=24 * 60 * 60)
-
-    from distr.core.initiative.assessor import assess
-
-    assessment = assess(digest, settings=settings)
-    if assessment is None:
-        return
 
     from distr.core.initiative.suggestion_gate import gate
 
@@ -441,26 +494,30 @@ def _maybe_suggest_from_desktop_awareness(settings: dict) -> None:
         budget_remaining=budget,
         seen=known,
     )
-
     if not inbox:
         return
 
-    # Log the inbox entry so Phase 2 can surface it. Interrupts will be wired
-    # to chat/voice when Phase 2 lands.
-    for item in inbox:
-        logger.info(
-            "Initiative suggestion (kind=%s confidence=%.2f): %s",
-            item.get("kind"),
-            float(item.get("confidence", 0)),
-            str(item.get("text", ""))[:120],
-        )
-    if interrupts:
-        logger.info(
-            "Initiative suggestion ABOVE INTERRUPT THRESHOLD (kind=%s confidence=%.2f): %s",
-            interrupts[0].get("kind"),
-            float(interrupts[0].get("confidence", 0)),
-            str(interrupts[0].get("text", ""))[:200],
-        )
+    item = inbox[0]
+    store.add(
+        kind=item.get("kind"),
+        text=item.get("text"),
+        confidence=item.get("confidence"),
+        rubric=item.get("rubric"),
+        provider=str(item.get("provider") or ""),
+        model=str(item.get("model") or ""),
+    )
+    store.prune()
+
+    interrupting = bool(interrupts)
+    channel = _deliver_suggestion(item, settings, interrupt=interrupting)
+    logger.info(
+        "Initiative suggestion (%s, kind=%s, confidence=%.2f, channel=%s): %s",
+        "INTERRUPT" if interrupting else "inbox",
+        item.get("kind"),
+        float(item.get("confidence") or 0),
+        channel or "none",
+        str(item.get("text") or "")[:160],
+    )
 
 
 class _InitiativeQtBridge(QObject):

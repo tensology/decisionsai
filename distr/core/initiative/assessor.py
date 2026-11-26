@@ -116,12 +116,22 @@ def parse_assessment(raw: str) -> dict[str, Any] | None:
     return assessment
 
 
-def _user_prompt(situation_digest: str, recent_suggestions: Iterable[str] = ()) -> str:
+def _user_prompt(
+    situation_digest: str,
+    recent_suggestions: Iterable[str] = (),
+    avoid_kinds: Iterable[str] = (),
+) -> str:
     parts = ["WHAT THEY HAVE BEEN DOING (most recent last):", situation_digest.strip() or "(nothing observed)"]
     recent = [str(item).strip() for item in recent_suggestions if str(item or "").strip()]
     if recent:
         parts.append("\nALREADY SUGGESTED (do not repeat or rephrase these):")
         parts.extend(f"- {item[:200]}" for item in recent[:10])
+    avoid = [str(item).strip() for item in avoid_kinds if str(item or "").strip()]
+    if avoid:
+        parts.append(
+            "\nKINDS THEY HAVE MUTED (never produce these, and do not invent a near-synonym kind): "
+            + ", ".join(avoid[:12])
+        )
     parts.append("\nDecide whether there is something worth saying right now. JSON only.")
     return "\n".join(parts)
 
@@ -131,6 +141,7 @@ def assess(
     *,
     settings: dict[str, Any] | None = None,
     recent_suggestions: Iterable[str] = (),
+    avoid_kinds: Iterable[str] = (),
     timeout_s: float = ASSESS_TIMEOUT_S,
 ) -> dict[str, Any] | None:
     """Ask the model whether the situation contains a suggestion worth making.
@@ -163,7 +174,7 @@ def assess(
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": _user_prompt(situation_digest, recent_suggestions)},
+        {"role": "user", "content": _user_prompt(situation_digest, recent_suggestions, avoid_kinds)},
     ]
 
     from distr.core.initiative.planners import _completion_options, _litellm_model

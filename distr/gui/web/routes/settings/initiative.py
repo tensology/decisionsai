@@ -83,6 +83,10 @@ class _AssistantChannelAnswer(BaseModel):
     channel: str
 
 
+class _SuggestionKindRequest(BaseModel):
+    kind: str
+
+
 def register_routes(router, templates):
 
     @router.get("/initiative")
@@ -256,6 +260,57 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error(f"Failed to save where suggestions go: {e}", exc_info=True)
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    @router.get("/initiative/suggestions")
+    async def list_ambient_suggestions(limit: int = 20, include_dismissed: bool = False):
+        """Ambient suggestions from desktop awareness (newest first)."""
+        from distr.gui.web.pagination import clamp_limit
+
+        from distr.core.initiative import suggestion_store
+
+        try:
+            return JSONResponse({
+                "suggestions": suggestion_store.recent(
+                    limit=clamp_limit(limit, default=20),
+                    include_dismissed=bool(include_dismissed),
+                ),
+                "muted_kinds": suggestion_store.muted_kinds(),
+            })
+        except Exception as e:
+            logger.error(f"Failed to load ambient suggestions: {e}", exc_info=True)
+            return JSONResponse({"suggestions": [], "muted_kinds": []})
+
+    @router.post("/initiative/suggestions/{suggestion_id}/dismiss")
+    async def dismiss_ambient_suggestion(suggestion_id: int):
+        """Let one suggestion go."""
+        from distr.core.initiative import suggestion_store
+
+        if suggestion_store.dismiss(suggestion_id):
+            return JSONResponse({"success": True})
+        return JSONResponse({"success": False, "error": "Suggestion not found"}, status_code=404)
+
+    @router.post("/initiative/suggestions/mute")
+    async def mute_ambient_suggestion(payload: _SuggestionKindRequest):
+        """Stop this kind of suggestion being made again."""
+        from distr.core.initiative import suggestion_store
+
+        kind = (payload.kind or "").strip()
+        if not kind:
+            return JSONResponse({"success": False, "error": "kind is required"}, status_code=400)
+        ok = suggestion_store.mute_kind(kind)
+        return JSONResponse({"success": ok, "muted_kinds": suggestion_store.muted_kinds()},
+                            status_code=200 if ok else 500)
+
+    @router.post("/initiative/suggestions/unmute")
+    async def unmute_ambient_suggestion(payload: _SuggestionKindRequest):
+        """Allow this kind of suggestion again."""
+        from distr.core.initiative import suggestion_store
+
+        kind = (payload.kind or "").strip()
+        if not kind:
+            return JSONResponse({"success": False, "error": "kind is required"}, status_code=400)
+        suggestion_store.unmute_kind(kind)
+        return JSONResponse({"success": True, "muted_kinds": suggestion_store.muted_kinds()})
 
     @router.get("/initiative/status")
     async def get_initiative_status():
