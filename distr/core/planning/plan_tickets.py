@@ -22,6 +22,8 @@ from typing import Any, Iterable
 
 logger = logging.getLogger(__name__)
 
+from distr.core.planning.page import Block  # noqa: E402  (kept after the logger for readability)
+
 ACTION_ADD = "add"
 ACTION_UPDATE = "update"
 ACTION_REMOVE = "remove"
@@ -214,6 +216,50 @@ def tickets_for_sitemap(
             break
 
     return [t.as_dict() for t in tickets[:MAX_TICKETS]]
+
+
+def tickets_for_pages(
+    pages: list[dict[str, Any]],
+    *,
+    library_module: Any = None,
+    current: dict[str, list[str]] | None = None,
+    changed: Iterable[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Component-level tickets for a plan given as pages.
+
+    ``pages`` is the plan as the canvas holds it (name, title, route, components).
+    This is the shape the library actually persists, so tickets come from the real
+    plan rather than a parallel model.
+    """
+    class _Node:
+        __slots__ = ("page", "children")
+
+        def __init__(self, page: Any) -> None:
+            self.page = page
+            self.children: list[Any] = []
+
+    class _Page:
+        __slots__ = ("name", "title", "route", "blocks", "base", "overrides")
+
+        def __init__(self, row: dict[str, Any]) -> None:
+            self.name = str(row.get("name") or "").strip().lower()
+            self.title = str(row.get("title") or self.name)
+            self.route = str(row.get("route") or "")
+            self.base = row.get("base")
+            self.overrides = row.get("overrides") or {}
+            refs = row.get("components")
+            if refs is None:
+                refs = [b for b in (row.get("blocks") or [])]
+            self.blocks = tuple(Block(ref=str(r)) for r in refs if str(r or "").strip())
+
+    class _Sitemap:
+        def __init__(self, rows: list[dict[str, Any]]) -> None:
+            self._nodes = [_Node(_Page(r)) for r in rows if isinstance(r, dict)]
+
+        def all_nodes(self) -> list[Any]:
+            return self._nodes
+
+    return tickets_for_sitemap(_Sitemap(pages or []), library_module=library_module, current=current, changed=changed)
 
 
 def _safe_get(library_module: Any, ref: str) -> Any:

@@ -758,36 +758,29 @@ def register_routes(router, templates):
 
     @router.get("/workflows/studio/plan-workspaces/{workspace_id}/plan")
     async def get_workspace_plan(workspace_id: int):
-        """The plan as it lives in the project's planning folder."""
+        """The plan as the canvas holds it: the workspace's flows wire, page by page."""
         from distr.core.planning import plan_store
 
         def _load() -> dict:
             root = _workspace_plan_root(workspace_id)
-            if not root:
-                return {"sitemap": None, "root": "", "error": "no planning folder for this workspace"}
-            sm = plan_store.load_sitemap(root)
-            wire, missing = sm.to_wire()
-            # The base template's CSS travels with the plan so a preview is
-            # governed by the real tokens, contracts and grid - not a lookalike.
+            pages = plan_store.list_pages(workspace_id)
+            item = plan_store._flows_item(workspace_id) or {}
             try:
                 from distr.core.planning import base_template
 
-                first = sm.all_nodes()[0].page if sm.count() else None
-                base = base_template.for_page(getattr(first, "base", None), getattr(first, "overrides", None))
-                base_css = base_template.to_css(base)
-                base_name = base.name
+                base = base_template.load()
+                base_css, base_name = base_template.to_css(base), base.name
             except Exception:
                 base_css, base_name = "", ""
             return {
                 "root": root,
-                "sitemap": sm.as_dict(),
-                "wire": wire,
-                "missing": missing,
-                "pages": sm.count(),
-                "routes": sm.routes(),
-                "tickets": plan_store.load_tickets_index(root),
+                "pages": pages,
+                "count": len(pages),
+                "routes": [p.get("route") for p in pages if p.get("route")],
+                "wire": str(item.get("content") or ""),
                 "baseCss": base_css,
                 "baseName": base_name,
+                "tickets": plan_store.load_tickets_index(root) if root else "",
             }
 
         return JSONResponse(await asyncio.to_thread(_load))
@@ -796,73 +789,32 @@ def register_routes(router, templates):
     async def place_plan_entry(workspace_id: int, data: PlanPlaceRequest):
         """Drop a library entry into the plan, then persist it.
 
-        A page template at sitemap level creates a page; anything else is added as
-        a block on the named page. The plan is written straight back to the
-        project's planning folder, so the file stays the source of truth.
+        A page template creates a page in the plan's flows wire; anything else is
+        added into the named page's screen. The plan IS the workspace's plan items,
+        so the canvas sees the change without a second model to reconcile.
         """
         from distr.core.planning import library, plan_store
-        from distr.core.planning.page import Block
 
         def _place() -> dict:
-            root = _workspace_plan_root(workspace_id)
-            if not root:
-                return {"placed": False, "error": "no planning folder for this workspace"}
-
             entry = library.get(data.entry)
             if entry is None:
                 return {"placed": False, "error": f"{data.entry!r} is not in the library"}
-
-            sm = plan_store.load_sitemap(root)
-            page_name = (data.page or "").strip().lower()
-
-            if entry.kind == "page-template" and not page_name:
-                node = sm.drop_template(
-                    entry,
-                    title=(data.title or "").strip() or entry.title,
-                    route=(data.route or "").strip(),
-                    parent=(data.parent or "").strip().lower() or None,
-                )
-                if node is None:
-                    return {"placed": False, "error": "could not add the page"}
-                created = node.name
+            if entry.kind == "page-template" and not (data.page or "").strip():
+                result = plan_store.place_page(workspace_id, entry, title=data.title)
             else:
-                node = sm.find(page_name)
-                if node is None:
-                    return {"placed": False, "error": f"page {page_name!r} is not in the plan"}
-                existing = [b.ref for b in node.page.blocks]
-                if entry.name in existing:
-                    return {"placed": False, "error": f"{entry.name!r} is already on {page_name!r}"}
-                node.page = type(node.page)(
-                    name=node.page.name,
-                    title=node.page.title,
-                    route=node.page.route,
-                    base=node.page.base,
-                    blocks=tuple(node.page.blocks) + (Block(ref=entry.name, span=data.span),),
-                    overrides=dict(node.page.overrides),
-                )
-                created = ""
-
-            wire, missing = sm.to_wire()
-            saved = plan_store.save_sitemap(root, sm, wire=wire)
+                result = plan_store.place_widget(workspace_id, data.page or data.title, entry)
+            if not result.get("placed"):
+                return result
             try:
                 from distr.core.planning import base_template
 
-                first = sm.all_nodes()[0].page if sm.count() else None
-                base = base_template.for_page(getattr(first, "base", None), getattr(first, "overrides", None))
-                base_css = base_template.to_css(base)
+                base = base_template.load()
+                result["baseCss"] = base_template.to_css(base)
             except Exception:
-                base_css = ""
-            return {
-                "placed": bool(saved.get("saved")),
-                "error": "" if saved.get("saved") else str(saved.get("error") or "write failed"),
-                "created_page": created,
-                "page": page_name or created,
-                "entry": entry.as_dict(),
-                "pages": sm.count(),
-                "wire": wire,
-                "baseCss": base_css,
-                "missing": missing,
-            }
+                result["baseCss"] = ""
+            result["entry"] = entry.as_dict()
+            result["pages"] = plan_store.list_pages(workspace_id)
+            return result
 
         return JSONResponse(await asyncio.to_thread(_place))
 
@@ -878,8 +830,8 @@ def register_routes(router, templates):
             root = _workspace_plan_root(workspace_id)
             if not root:
                 return {"built": False, "error": "no planning folder for this workspace"}
-            sm = plan_store.load_sitemap(root)
-            tickets = plan_tickets.tickets_for_sitemap(sm, current=data.current, changed=data.changed or [])
+            pages = plan_store.list_pages(workspace_id)
+            tickets = plan_tickets.tickets_for_pages(pages, current=data.current, changed=data.changed or [])
             saved = plan_store.save_tickets(root, tickets, heading=data.heading or "Plan tickets")
             return {
                 "built": bool(saved.get("saved")),

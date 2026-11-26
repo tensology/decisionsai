@@ -101,7 +101,20 @@ everything else from its base template.
 ## Section D - Sitemap and flows
 
 Page templates are dropped at this level to create pages; pages are arranged and
-linked. Reuses the existing sitemap/flow structures.
+linked. **Reuses the existing sitemap/flow structures - it does not add one.**
+
+The plan IS the workspace's plan items. In practice that means the `flows` item:
+one wire document holding one `screen` per page (the project scan writes 80-odd
+of them). So:
+
+- listing pages parses the flows wire;
+- dropping a page template **appends a screen** to it;
+- dropping a widget **inserts into the named page's screen**.
+
+An earlier revision kept a parallel `sitemap.json`. That was wrong: the canvas
+rendered the flows wire while the library wrote its own file, so a drop had
+nowhere to land, the stencils stayed blank, and the preview said "nothing in the
+plan" while the canvas was full of pages. There is exactly one plan.
 
 ## Section E - Side panel
 

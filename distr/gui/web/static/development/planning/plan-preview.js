@@ -10,34 +10,34 @@
  * Pure helpers are exported for tests; the DOM wiring is a thin layer.
  */
 
-/** A page row for the sitemap list. */
-export function pageRows(sitemap) {
+/**
+ * The plan's pages, as the canvas holds them.
+ *
+ * The plan IS the workspace's flows wire, so the pages come straight from there -
+ * there is no second model to reconcile.
+ */
+export function pageRows(plan) {
     const rows = [];
-    const walk = (nodes, depth) => {
-        for (const node of nodes || []) {
-            const page = node.page || node;
-            if (page && page.name) {
-                rows.push({
-                    name: String(page.name),
-                    title: String(page.title || page.name),
-                    route: String(page.route || ''),
-                    depth,
-                    blocks: Array.isArray(page.blocks) ? page.blocks.length : 0,
-                });
-            }
-            walk(node.children, depth + 1);
-        }
-    };
-    walk(sitemap && sitemap.roots, 0);
+    const list = (plan && plan.pages) || [];
+    for (const page of list) {
+        if (!page || !page.name) continue;
+        rows.push({
+            name: String(page.name),
+            title: String(page.title || page.name),
+            route: String(page.route || ''),
+            depth: 0,
+            components: Array.isArray(page.components) ? page.components.length : 0,
+        });
+    }
     return rows;
 }
 
 export function planSummary(plan) {
-    const rows = pageRows(plan && plan.sitemap);
+    const rows = pageRows(plan);
     return {
         pages: rows.length,
         routes: rows.filter((r) => r.route).length,
-        components: rows.reduce((total, row) => total + row.blocks, 0),
+        components: rows.reduce((total, row) => total + row.components, 0),
         missing: Array.isArray(plan && plan.missing) ? plan.missing.length : 0,
     };
 }
@@ -87,11 +87,11 @@ export function mountPlanPreview(container, { renderWireframe, onOpenPage = () =
 
     function paint(plan) {
         const stats = planSummary(plan);
-        const rows = pageRows(plan && plan.sitemap);
+        const rows = pageRows(plan);
 
         summary.textContent = stats.pages
-            ? `${stats.pages} page${stats.pages === 1 ? '' : 's'} · ${stats.components} component${stats.components === 1 ? '' : 's'}` +
-              (stats.missing ? ` · ${stats.missing} missing from the library` : '')
+            ? `${stats.pages} page${stats.pages === 1 ? '' : 's'} in this plan`
+              + (stats.missing ? ` · ${stats.missing} missing from the library` : '')
             : '';
 
         list.innerHTML = '';
@@ -99,7 +99,7 @@ export function mountPlanPreview(container, { renderWireframe, onOpenPage = () =
             const item = document.createElement('li');
             item.className = 'plan-preview-page';
             item.dataset.page = row.name;
-            item.style.paddingInlineStart = `${8 + row.depth * 14}px`;
+            item.style.paddingInlineStart = '8px';
             const route = row.route ? ` <code>${row.route}</code>` : '';
             item.innerHTML = `<strong>${row.title}</strong>${route}`;
             item.addEventListener('click', () => onOpenPage(row));
