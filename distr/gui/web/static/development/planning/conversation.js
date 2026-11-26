@@ -2,6 +2,8 @@ import { parseWireframe, renderWireframe, explainWireframeDiagnostics } from './
 import { artboardWidthControls, bindArtboardWidth, mountPageDesigner, standalonePageHTML } from './page-designer.js?v=20261125-artboard-continuity';
 import { endpointExample, HTTP_METHODS, openEndpointEditor, saveEndpointExample } from './endpoint-editor.js?v=20261125-canvas-workspace';
 import { createPlanPolling } from './polling.js';
+import { mountLibraryPanel } from './library-panel.js?v=20261126-library';
+import { mountPlanPanelTabs, panelTabsHtml } from './panel-tabs.js?v=20261126-library';
 import { buildResultsHtml } from './build-results.js';
 import { layoutConnectedSitemap, pageAccessGroup, sitemapRouteKey, SITEMAP_ACCESS_GROUPS } from './sitemap.js?v=20261119-preview-routes';
 import { pageCaptureFor } from './page-captures.js?v=20261003-sitemap-groups';
@@ -517,7 +519,8 @@ export function createPlanConversation(host, root) {
             <div class="plan-detail-body">
                 <section class="plan-artifacts" id="plan-artifacts" aria-label="Artifacts"></section>
                 <section class="plan-conversation" id="plan-conversation" aria-label="Plan conversation">
-                    <header class="plan-chat-header" id="plan-chat-header" aria-label="Conversation"><button type="button" class="plan-chat-toggle" id="plan-chat-toggle" aria-controls="plan-conversation" aria-expanded="true" title="Hide conversation" aria-label="Hide conversation">${CHAT_ICON_COLLAPSE}<span class="plan-chat-toggle-label">Conversation</span></button></header>
+                    <header class="plan-chat-header" id="plan-chat-header" aria-label="Conversation"><button type="button" class="plan-chat-toggle" id="plan-chat-toggle" aria-controls="plan-conversation" aria-expanded="true" title="Hide conversation" aria-label="Hide conversation">${CHAT_ICON_COLLAPSE}<span class="plan-chat-toggle-label">Conversation</span></button><nav class="plan-panel-tabs" id="plan-panel-tabs" role="tablist" aria-label="Chat or library">${panelTabsHtml('chat')}</nav></header>
+                    <div class="plan-chat-body" id="plan-chat-body">
                     <div class="composer-drop-overlay plan-drop-overlay" id="plan-drop-overlay" hidden><strong>Drop images to attach</strong><span>PNG, JPEG or WebP, up to 10 MB each</span></div>
                     <div class="plan-messages" id="plan-messages" role="log" aria-label="Messages" aria-live="polite"></div>
                     <div id="plan-operation-status" role="status" aria-live="polite"></div>
@@ -536,6 +539,8 @@ export function createPlanConversation(host, root) {
                             </div>
                         </form>
                     </div>
+                    </div>
+                    <section class="plan-library" id="plan-library" role="tabpanel" aria-label="Library" hidden></section>
                 </section>
             </div>
         </div>`;
@@ -544,6 +549,33 @@ export function createPlanConversation(host, root) {
             if (!session.chatCollapsed) root.querySelector('#plan-language-input')?.focus({ preventScroll: true });
         });
         setChatCollapsed(session, storedChatCollapse() ?? session.chatCollapsed ?? false);
+
+        // Chat / Library tabs. The library's contents follow the screen: page
+        // templates at sitemap level, widgets once a page is open. Mounted once
+        // per render; the panel is not rebuilt on a tab switch, only hidden, so a
+        // half-typed message survives.
+        try {
+            const libraryHost = root.querySelector('#plan-library');
+            const libraryPanel = libraryHost
+                ? mountLibraryPanel(libraryHost, {
+                    workspaceId: session.workspace && session.workspace.id,
+                    baseUrl: '/api',
+                    screen: 'page',
+                    onPick: (entry) => {
+                        session.pendingLibraryEntry = entry;
+                        root.dispatchEvent(new CustomEvent('plan-library-pick', { detail: entry, bubbles: true }));
+                    },
+                })
+                : null;
+            if (libraryPanel) {
+                session.planPanelTabs = mountPlanPanelTabs(root.querySelector('#plan-panel-tabs') || root, {
+                    session,
+                    onLibrary: (screen) => { libraryPanel.setScreen(screen); },
+                });
+            }
+        } catch (err) {
+            console.warn('[plan] library panel unavailable', err);
+        }
         const input = root.querySelector('#plan-language-input');
         input.value = session.draft;
         input.addEventListener('input', () => { session.draft = input.value; session.draftVersion++; controls(session); });

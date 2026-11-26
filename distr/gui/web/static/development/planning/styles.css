@@ -1590,3 +1590,32 @@ button.plan-doc-add:hover { color: var(--studio-text); }
     .iface-canvas .iface-dock .iface-map-status,
     .iface-canvas .iface-dock [data-iface="count-divider"] { display: none; }
 }
+
+/* Chat / Library tabs (planning side panel). Chat is first, Library second. */
+.plan-panel-tabs { display: flex; align-items: center; gap: 2px; margin-inline-start: auto; }
+.plan-panel-tab {
+    appearance: none; border: 0; background: transparent; cursor: pointer;
+    padding: 4px 10px; border-radius: 7px; font: inherit; font-size: 12px;
+    color: var(--studio-muted); line-height: 1.6;
+}
+.plan-panel-tab:hover { color: var(--studio-text); }
+.plan-panel-tab.active { background: #2b323f; color: var(--studio-text); }
+.plan-panel-tab:focus-visible { outline: 2px solid var(--studio-accent, #3b6ef5); outline-offset: 1px; }
+
+/* The library panel: screen-aware list of page templates or widgets. */
+.plan-library { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px; }
+.plan-library-status { margin: 0 0 8px; font-size: 11px; color: var(--studio-muted); }
+.plan-library-list { list-style: none; margin: 0; padding: 0; }
+.plan-library-kind {
+    font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--studio-muted); margin: 10px 0 4px;
+}
+.plan-library-entry {
+    padding: 6px 9px; border-radius: 7px; cursor: grab;
+    font-size: 12px; color: var(--studio-text);
+    border: 1px solid transparent;
+}
+.plan-library-entry:hover { background: #2b323f; border-color: #3a4351; }
+.plan-library-entry:active { cursor: grabbing; }
+.plan-library-entry[data-kind="page-template"] { border-inline-start: 3px solid var(--studio-accent, #3b6ef5); }
+.plan-chat-body[hidden], .plan-library[hidden] { display: none; }
