@@ -408,6 +408,9 @@ class Settings(Base):
     # Debug mode: the agent watches its own friction and files platform notes in
     # downloads/DecisionsAI/Tickets/. Off unless switched on.
     orchestrator_debug_enabled = Column(Boolean, default=False)
+    # Where the project's app is served, so the scan can read a rendered page for
+    # what its source cannot describe (i18n, client-rendered). Empty = skip.
+    planning_dev_server_url = Column(String, default='')
     
     # Chat voice/speaker toggle
     chat_voice_enabled = Column(Boolean, default=True)
@@ -898,6 +901,7 @@ try:
                 ("initiative_visual_capture_seconds", "INTEGER DEFAULT 900"),
                 ("incoming_proposals_auto_accept_projects", "VARCHAR DEFAULT '[]'"),
                 ("orchestrator_debug_enabled", "BOOLEAN DEFAULT 0"),
+                ("planning_dev_server_url", "VARCHAR DEFAULT ''"),
                 # Google Gemini provider
                 ("gemini_enabled", "BOOLEAN DEFAULT 0"),
                 ("gemini_key", "VARCHAR DEFAULT ''"),

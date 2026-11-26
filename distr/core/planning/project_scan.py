@@ -1597,6 +1597,16 @@ def build_plan(
         "depth": 0,
     }
     context["widen"] = widen_routes_with_sitemap(root, context["routes"], context)
+    # If the operator has said where the app is served, read the pages whose
+    # source describes them poorly (i18n, client-rendered). Off unless configured.
+    try:
+        from distr.core.settings import load_settings_from_db
+
+        base_url = str((load_settings_from_db() or {}).get("planning_dev_server_url") or "").strip()
+        if base_url:
+            context["dom_enriched"] = enrich_cues_from_dom(context, base_url)
+    except Exception:
+        logger.debug("scan: DOM enrichment skipped", exc_info=True)
     context["routes"] = [row for row in context["routes"]
                          if not _is_junk_page(row.get("url"), row.get("title") or row.get("name"))]
     # Collect every supported source before judging depth. An HTML form is not

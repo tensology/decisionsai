@@ -1824,6 +1824,7 @@ def run_migrations():
         ("initiative_visual_capture_seconds", "INTEGER DEFAULT 900"),
         ("incoming_proposals_auto_accept_projects", "VARCHAR DEFAULT '[]'"),
         ("orchestrator_debug_enabled", "BOOLEAN DEFAULT 0"),
+        ("planning_dev_server_url", "VARCHAR DEFAULT ''"),
     ]
     for col_name, col_type in initiative_columns:
         try:
