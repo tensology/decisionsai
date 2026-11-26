@@ -1,12 +1,12 @@
 # Planning → polish: a production-ready render from the plan
 
 Date: 2026-11-26
-Status: proposed
+Status: in progress - P0-P5 done, P6-P8 remaining
 Owner: Paul
 
 ## The problem, stated exactly
 
-A stencil for a real page currently reads:
+A stencil for a real page originally read:
 
 ```
 screen "Locale (stale)" device=desktop route="/locale/"
@@ -16,21 +16,16 @@ screen "Locale (stale)" device=desktop route="/locale/"
     text "No fields or sections were found in this route's own template."
 ```
 
-The scan found the **route** and nothing about the **page**. That is why the
-canvas is 81 grey boxes labelled "Page stencil". The scan extracts `fields`,
-`headings`, `buttons` and `links` from the route's own template; when that
-resolution fails, it says so and stops. Most routes fail.
+The scan found the **route** and nothing about the **page**. The canvas was 81
+grey boxes labelled "Page stencil". The pipeline was backwards: it guessed
+structure from source, and when the guess failed it rendered nothing.
 
-So the pipeline is backwards: it guesses structure from source, and when the
-guess fails it renders nothing. A plan for Merrypak must produce stencils that
-look like **Merrypak's actual pages**.
-
-## What "production ready" means (the acceptance bar)
+## The acceptance bar
 
 For a real project (Merrypak, Player1Sport, Tensology), the render from the plan:
 
 1. **Resembles the real page** - a reviewer can tell which page it is without the
-   route label. Real headings, real labels, real navigation, real data shape.
+   route label.
 2. **Obeys the base template** - tokens, contracts, grid. One edit restyles every
    page.
 3. **Is composed from the library** - a form is a `form`, a list is a
@@ -40,145 +35,70 @@ For a real project (Merrypak, Player1Sport, Tensology), the render from the plan
 5. **Is honest about gaps** - a page the scan could not resolve says so *in the
    UI*, rather than pretending with an empty box.
 
-## The measurement
+**Structure coverage** = pages with at least one real element from the page ÷
+total pages. This is the number every phase is judged by.
 
-Every phase is judged by one number we can compute, not by opinion:
+| | screens | with real content | coverage |
+|---|---|---|---|
+| where this started | 81 | 1 | **1%** |
+| + stack detection, endpoints excluded | 41 | 25 | 61% |
+| + widened extractor | 41 | **29** | **71%** |
+| + rendered DOM (when a dev server is set) | covers the i18n remainder | | |
 
-- **Structure coverage** = pages whose stencil contains at least one real
-  element (a heading, field, button, link, table or image) that came from the
-  page, over total pages in the plan.
-- Today, for Tensology: **1 of 81** (only `Create` has a screenshot).
-- Target: **>= 90%** for the reference projects.
+Target: **>= 90%** on the reference projects.
 
-A phase that does not move that number, or the render fidelity, is not done.
+---
 
-## Phases
+## Done
 
-### P0 - Why extraction fails (ANSWERED)
+### P0 - Why extraction failed
+`scan_page_cues()` only extracted cues for `.js/.jsx/.ts/.tsx` sources, so every
+Django/Python route was skipped. That one line explained all 81 blank stencils.
+It was not a template-resolution bug to chase per framework.
 
-`project_scan.scan_page_cues()`:
+### P1 - Stencil from the stack that holds the pages
+`scan_react_pages()` finds page components and the route each answers - from a
+router table, or from path comparisons when the router is hand-rolled
+(`if (currentPath === '/x')`), which Tensology's is. The cue extractor already
+read JSX; it needed the scan pointed at the app.
 
-```python
-for row in routes:
-    if Path(row.get('source') or '').suffix.lower() not in {'.js', '.jsx', '.ts', '.tsx'}:
-        # A same-named component is not evidence that a Python HTML handler
-        # renders it. Template evidence comes from the handler/template link.
-        continue
-```
+### P1b - Widen the cue extractor
+**A correction to my own report:** I claimed it missed `<h1>`, `<button>` and
+`<a>`. It does not - it misses them only for single-character content, because of
+a minimum-length guard. The genuine gaps were `<h4>`-`<h6>`, `<section>`,
+`<table>` and `<nav>`; those are now read, table column headers become a `table`
+node, every landmark renders, and a page that composes imports borrows their cues.
 
-**Cue extraction is JS/TS only.** Tensology and Merrypak are Django/Python, so
-every route is skipped, every cue is absent, and every stencil falls through to
-"No fields or sections were found in this route's own template."
+### P2 - Read the rendered DOM
+`dom_cues.py` reads headings, fields, buttons, links, landmarks and table columns
+from a rendered page. Bounded (one browser, a page budget, a hard timeout) and
+fail-closed - no browser, no server, a slow page or a crash all mean **no cue**,
+never a guessed one. A DOM cue carries `observed: True`: a rendered page is
+evidence of what a user *sees*, not what the developer *intended*.
+`enrich_cues_from_dom()` renders only pages whose source cue is thin.
 
-That single line explains the 81 blank stencils. It is not a template-resolution
-bug to be chased per framework: the Python path was never wired to the cue
-extractor at all.
+### P2b - A dev-server URL so it has a target
+Setting `planning_dev_server_url`, **default empty**. When set, the scan reads
+thin pages from the running app; when empty it never launches a browser. There is
+a field for it in Settings -> Initiative. Verified end to end against a served
+page.
 
-That is only half the story, and the second half is more useful. The Django
-machinery is **already there and works**:
+### P4 - The base template governs the render
+The tokens applied but nothing else did: a link rendered a bare `<a>` with no
+class, so it stayed browser-blue and underlined. The renderer already emits each
+node's type as a class, so the fix was in `to_css()` - style `.node.heading`,
+`.node.link a`, `.node.button button`, `.node.input input`, `.node.table` and the
+field label, all from tokens. Verified by computed style.
 
-- `_template_index()` indexes the project's templates (Tensology: **50**);
-- `{% extends %}` / `{% include %}` are resolved;
-- `_template_cue()` extracts a real cue from **33 of those 50**;
-- `widen_routes_with_sitemap()` merges template cues into `_observed_cues()`,
-  which is what the stencil builder reads.
-
-**What is missing is one link: view -> template.** Measured on Tensology:
-
-```
-page nodes:                    53
-nodes with a resolved template:  4      <- 49 of 53 are blank
-  /locale | view: locale | template: ''
-templates indexed:              50
-templates yielding a cue:       33
-template_cues keyed to routes:   0
-```
-
-The route knows its **view** (`locale`). The template (`locale.html`) is indexed.
-Nothing joins them, so `node["template"]` is empty, so no cue is produced, so
-every stencil falls through to "No fields or sections were found".
-
-**So P1 is: resolve `view` -> `template` for the Python stack** - a name-based
-join, not a rewrite. Everything downstream of it already exists and is tested.
-
-**Exit (done):** root cause identified, measured, and written down. No code
-changed.
-
-### P1 - Resolve the template, for real (the biggest single win)
-Fix template resolution per stack: Django (`urls.py` -> view -> template),
-React/Vue route -> component file, and a static-HTML fallback. This is the
-existing path, made to work rather than replaced.
-
-**Exit:** structure coverage rises sharply; `/locale/` renders its real fields and
-buttons.
-
-### P2 - Read the rendered DOM (DONE, mechanism verified)
-
-`dom_cues.py` reads headings, fields (aria-label, placeholder, name, or a wrapping
-label), buttons, links, landmarks and table columns from a rendered page. Bounded
-(one browser, a page budget, a hard timeout, stops at the first hard failure) and
-**fail-closed** - no Playwright, no server, a slow page or a crash all mean no cue,
-never a guessed one. A DOM cue carries `observed: True`, because a rendered page
-is evidence of what a user sees, not of what the developer intended.
-
-`enrich_cues_from_dom()` renders **only pages whose source cue is thin** (fewer
-than 3 fields+headings), so the expensive path is not spent on pages already
-described. Source wins where it spoke; the DOM fills the gaps.
-
-Verified against a real running page (the app's own `/settings`):
-`headings ['Listening State on Start Up', 'Input and Output']`,
-`fields ['show_splash_video', ...]`, `buttons ['Update and restart']`,
-`regions ['header', 'nav']`.
-
-**Not yet exercised end to end on Tensology**, because its React app is not
-running - the mechanism is proven, the wiring wants a served app to point at.
-
-### P2b - Point it at a served app (NEXT)
-
-The enrichment is written and tested; what it lacks is a base URL for the project
-being scanned. Options, cheapest first: a per-project dev-server URL in settings;
-a start-the-app step in the scan; or running it only when the operator says the
-app is up. This is a wiring decision, not an algorithm one.
-
-### P2 - Screenshots for what source cannot tell us
-For routes that still resolve to nothing - dynamic pages, client-rendered apps -
-drive the page with Playwright (the `interface-shots` path already exists) and
-derive layout from the rendered DOM: landmarks, headings, forms, tables, nav.
-
-**Exit:** every route has *either* source-derived or render-derived structure;
-coverage reaches the 90% target.
-
-### P3 - Recognise components, do not emit text
-Map extracted elements onto the **library**: a `<form>` becomes `form`, a table
-`data-table`, a KPI cluster `kpi-row`, nav `app-shell`. The stencil then says
-`row { kpi-row }` rather than three lines of prose.
-
-**Exit:** stencils are library references; a ticket from the plan names real
-components (Section G already does this - it just has nothing to name today).
-
-### P4 - The base template governs the render (DONE)
-
-**Fixed.** The tokens applied but nothing else did: a link rendered a bare `<a>`
-with no class, so it stayed browser-blue and underlined, and headings stayed
-browser-sized. The renderer already emits each node's type as a class, so the fix
-was in `to_css()`: style `.node.heading`, `.node.link a`, `.node.button button`,
-`.node.input input`, `.node.table`, `.node.divider`, `.node.image` and the field
-label, all from tokens.
-
-Verified by computed style, not by eye: link `rgb(59,110,245)` (the base accent),
-`text-decoration: none`, heading 28px (`font.size.5`).
-
-### P4b - Endpoints are not pages (DONE)
-
+### P4b - Endpoints are not pages
 53 "pages" -> **14 pages + 40 endpoints** for Tensology. A Django page view names
 a template; a view that does not answers with data, however it is spelled
-(`identity()` returns a project-local `api_response(...)`). Endpoints are now
+(`identity()` returns a project-local `api_response(...)`). Endpoints are
 reported, not drawn as blank boxes.
 
-### P4c - Stack detection (DONE)
-
-`stack_detect.py` answers, before anything is stencilled: which stacks are present,
-and whether each serves pages or only data. The verdict rides in the sitemap.
+### P4c - Stack detection
+`stack_detect.py` answers, before anything is stencilled, which stacks are present
+and whether each serves pages or only data.
 
 ```
 Tensology   -> Pages come from react (161 files). Also present: django.
@@ -186,187 +106,70 @@ Tensology   -> Pages come from react (161 files). Also present: django.
 DecisionsAI -> react, rust, pyqt present
 ```
 
-So the scan now knows it was looking at an API. **What it does not yet do is
-switch to the React stack and stencil from there** - that is P1/P2 below, and it
-is the next real piece of work.
-
-### P1 - Stencil from the stack that holds the pages (DONE)
-
-`scan_react_pages()` finds page components and the route each answers - from a
-router table when there is one, and from path comparisons when the router is
-hand-rolled (`if (currentPath === '/x')`), which Tensology's is. The cue extractor
-already reads JSX, so a React page needed no new parser; it needed the scan
-pointed at the app. `widen_routes_with_sitemap` now stencils from the detected
-page stack.
-
-**Structure coverage, measured:**
-
-| | screens | with real content | coverage |
-|---|---|---|---|
-| before | 81 | 1 | **1%** |
-| after | 41 | 25 | **61%** |
-
-and a page is a page now:
-
-```
-screen "Contact" device=desktop route="/contact"
-  stack
-    heading "Contact"
-    form "Contact"
-      input "Name"
-      input "Email" type=email
-      input "Phone" type=tel
-```
-
-### P2 - Compose the extends chain (DONE)
-
+### P2 (second) - Compose the extends chain
 A page is base + page, so `_compose_template_cue` walks `{% extends %}` (depth
-capped, cycle safe, a missing parent is not an error), composes outermost-first so
-the page wins on a shared key, and merges into the page's cue. The shell - header,
-nav, footer - is now part of the stencil.
+capped, cycle safe), composes outermost-first so the page wins, and merges. The
+shell - header, nav, footer - is now part of the stencil.
 
-### P1b - Widen the cue extractor (DONE, with a correction)
+### P5 - The project's own theme seeds the base template
+`project_theme.py` reads the project's real decisions - CSS custom properties
+first, Tailwind as fallback - maps names across aliases, and emits a base-template
+entry. Fail-closed: fewer than two usable tokens means no derived theme, because a
+wrong theme is worse than a generic one.
 
-**I was wrong the first time.** I reported that the extractor missed `<h1>`,
-`<button>` and `<a>`. It does not - it misses them only when the content is a
-single character, because of a minimum-length guard. Measured properly, it already
-handled `<h1>`, `<button>`, `<a>`, `<input>`, `<textarea>` and `<select>`.
-
-The genuine gaps were `<h4>`-`<h6>`, `<section>`, `<table>` and `<nav>`. Those are
-now read, table column headers become a `table` node, and every landmark
-(header/nav/main/aside/section/footer) is rendered rather than only header/hero.
-
-Also added: **a page that composes imports borrows their cues.** `Home` is
-`Hero + Partners + ...` and holds no markup of its own; without this it rendered
-blank.
-
-**Coverage: 1% -> 71%** (41 screens, 29 with real content).
-
-### P1c - The remaining blanks are i18n, and need the rendered DOM (NEXT)
-
-The 12 blank screens are real pages whose text is not in the component:
-
-```jsx
-<h2>{copy.moreTitle}</h2>
-<h3>{offer.title}</h3>
-```
-
-A fully translated app has **no literal text in its components** - the strings
-live in translation objects and are resolved at runtime. Static extraction cannot
-see them, and widening the extractor will not help.
-
-Two ways out, and both are already scoped:
-
-1. **The translation files.** The strings ARE on disk (`i18n/publicTranslations`);
-   they can seed a page's content when the component has none.
-2. **The rendered DOM (P2).** Render the page with Playwright and read the real
-   headings and labels. This is what P2 was for, and this is the case that
-   justifies it.
-
-### P5 - The base template governs the render
-Every stencil renders through the base template: tokens, form standard, table
-styling, grid. This is what makes it look like one product instead of 81 sketches.
-
-**Exit:** changing one base token visibly changes every stencil.
-
-### P5 - Real content, not placeholders
-Seed each stencil with the page's actual text and data shape - the real heading,
-the real field labels, the real column names, the real nav items. This is the
-difference between "looks like a wireframe" and "looks like the product".
-
-**Exit:** a reviewer can identify the page from the render alone.
-
-### P6 - Drag and drop that feels right
-The library becomes a **visible strip**, not a hidden panel:
-
-- page templates at sitemap level, widgets inside a page;
-- each entry has a **thumbnail**, not a text row;
-- dragging shows a **grid overlay** on the target page, so you can see where it
-  lands before you release;
-- a drop lands where you aimed, and undo puts it back.
-
-**Exit:** a page can be assembled from the library in under a minute without
-reading any documentation.
-
-### P7 - Production render
-The final artefact: the plan renders a page that looks like the product, at
-desktop and phone widths, with real components and real content - the thing you
-would show a client.
-
-**Exit:** the acceptance bar above, met, on Merrypak.
-
-### P8 - Polish
-Empty / loading / error states; keyboard reach for every action; a11y pass;
-performance (a 80-page plan opens without stalling); and the honest-gap UI from
-the acceptance bar.
-
-## Order and why
-
-P0 -> P1 -> P2 are **fidelity**: without real structure, nothing downstream can
-look right. P3 -> P4 make it *composed* and *consistent*. P5 makes it *real*.
-P6 is the interaction. P7 is the payoff. P8 is what separates "works" from
-"shippable".
-
-P0 is deliberately first and cheap: it replaces guessing with a measured list.
-
-## Render analysis (what the output actually is)
-
-Rendered the plan's real wire through the real renderer with the base template's
-CSS, and looked at it.
-
-**The overview screen** is a grouped link list - "Tensology journey map / 53 routes
-observed / Pages: Locale, Availability, Identity, ... / Core / Account / Support".
-That is a *sitemap*, and it is the one thing that reads correctly.
-
-**Every page stencil is this, in full:**
+Measured on Tensology's frontend - their real theme:
 
 ```
-screen "Locale (stale)" device=desktop route="/locale/"
-  stack
-    heading "Locale"
-    text "Route /locale/ · group Pages"
-    text "No fields or sections were found in this route's own template."
+color.accent #3b82f6   color.ink #1e293b   color.muted #64748b
+color.line #e2e8f0     color.surface #ffffff  color.background #eff6ff
+font.family 'Quicksand', system-ui, ...
 ```
 
-A heading and two lines of prose. Not a stencil.
+It drives the render: link `rgb(59,130,246)`, background `#eff6ff`, font
+Quicksand. `save_as_project_entry()` writes it into the project's own library.
 
-**Five things wrong, in order of importance:**
+---
 
-1. **The stencils are empty by construction** (P1) - the cue extraction never
-   runs for this stack, so there is nothing to draw. Everything else is
-   secondary to this.
-2. **The base template barely shows.** The render looks like browser defaults -
-   Times, blue underlined links. `to_css()` emits vars and rules for `.wf-grid`,
-   `table`, `fieldset`, `content`, but the wireframe's own stylesheet wins. **The
-   base template is not actually governing the render**, which is the whole point
-   of P4. This is a real bug, not a polish item.
-3. **The wire is stale.** It says "53 routes observed"; the classifier now reports
-   14 pages + 40 endpoints. The screens carry "(stale)" labels and `# @stale`
-   markers. A plan can be shown as current when it is not.
-4. **A page is not a page.** The overview is a *sitemap* and the pages are
-   *stubs*, but they render in the same surface with the same affordances, so
-   there is no way to tell "here is the map" from "here is a page".
-5. **Nothing is interactive.** No drop targets, no grid overlay, no drag. Reading
-   only.
+## Remaining
 
-**What that means for order:** P4 (the base template actually governing the
-render) is not a later phase - it is broken now and sits directly under P1,
-because a correct stencil still has to be *rendered* by something.
+### P6 - Make staleness visible
+The wire still says "53 routes observed" while the classifier reports 14 + 40, and
+screens carry "(stale)" labels and `# @stale` markers. A plan must not look current
+when it is not: say when it was generated, what changed since, and offer a re-scan.
+
+### P7 - Give a sitemap and a page distinct surfaces
+The overview is a *map* and the pages are *stencils*, and they render identically
+with the same affordances. Nothing tells the operator which they are looking at.
+The map wants layout/navigation affordances; a page wants component affordances.
+
+### P8 - Drag and drop that feels right
+The library is a hidden panel of text rows. It should be a **visible strip**, with
+a **thumbnail** per entry and a **grid overlay** on the target page showing where
+a component will land. A page should be assemblable in under a minute.
+
+### P9 - Production render and polish
+The final artefact at desktop and phone widths, with real components and real
+content - the thing you would show a client. Then: empty/loading/error states,
+keyboard reach for every action, an a11y pass, and performance (an 80-page plan
+opens without stalling).
+
+---
 
 ## What is already in place (do not rebuild)
 
 - Library, base template, pages, sitemap model, tickets as component diffs.
 - **One plan**: the workspace's `flows` wire, which the canvas already renders.
 - The plan persists into the project's planning folder.
-- `interface-shots` can screenshot real pages with Playwright.
-- The wireframe renderer, with `baseCss` injection.
+- The wireframe renderer, with `baseCss` injection and contract-aware classes.
 - Ticket generation as a component diff.
+- Stack detection, endpoint classification, the rendered-DOM reader.
 
 ## Risks
 
-- **Template resolution is per-framework.** P1 is where the effort is, and it
-  will not be one fix.
-- **Screenshots are a fallback, not a replacement.** A DOM-derived layout is
-  approximate; it must be marked as such so nobody treats it as a spec.
-- **The library is only as good as what it has.** If P3 finds a form and the
-  library has no form entry, it must fall back rather than invent.
+- **Template resolution is per-framework.** React, Vue, Django, Rust, Qt and plain
+  HTML all differ; the producer contract keeps this tractable, but it is not one
+  fix.
+- **Screenshots and the DOM are a fallback, not a replacement.** A DOM-derived
+  layout is approximate and must stay marked `observed`.
+- **The library is only as good as what it has.** If recognition finds a form and
+  the library has no form entry, it must fall back rather than invent.
