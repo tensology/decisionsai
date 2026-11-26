@@ -43,6 +43,7 @@ class LibraryEntry:
     tags: tuple[str, ...] = ()
     description: str = ""
     slots: tuple[str, ...] = ()
+    config: dict[str, Any] = field(default_factory=dict)
     version: int = 1
     source: str = "builtin"  # builtin | user
     folder: str = ""
@@ -65,6 +66,7 @@ class LibraryEntry:
             "tags": list(self.tags),
             "description": self.description,
             "slots": list(self.slots),
+            "config": dict(self.config),
             "version": self.version,
             "source": self.source,
         }
@@ -140,6 +142,9 @@ def parse_manifest(raw: Any, *, source: str = "builtin", folder: str = "") -> Li
     except (TypeError, ValueError):
         version = 1
 
+    config_raw = raw.get("config")
+    config = dict(config_raw) if isinstance(config_raw, dict) else {}
+
     return LibraryEntry(
         name=name,
         kind=kind,
@@ -149,6 +154,7 @@ def parse_manifest(raw: Any, *, source: str = "builtin", folder: str = "") -> Li
         tags=tags,
         description=_text(raw.get("description"), 400),
         slots=slots,
+        config=config,
         version=max(1, version),
         source=source,
         folder=folder,

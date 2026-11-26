@@ -8,5 +8,27 @@
     "tokens"
   ],
   "description": "Type scale, colour, spacing, form standard, table styling and grid that every page inherits.",
-  "wire": "screen \"Base\"\n  heading \"Base template\"\n  text \"Tokens + component contracts + grid. Pages inherit; override by exception.\""
+  "wire": "screen \"Base\"\n  heading \"Base template\"\n  text \"Tokens + component contracts + grid. Pages inherit; override by exception.\"",
+  "config": {
+    "tokens": {
+      "color.accent": "#3b6ef5",
+      "color.ink": "#1f2430",
+      "font.size.3": "16px",
+      "radius.2": "8px",
+      "space.3": "16px"
+    },
+    "contracts": {
+      "form.field": "legend",
+      "table.density": "comfortable",
+      "table.striped": true,
+      "content.markdown": true,
+      "button.primary_style": "filled",
+      "nav.style": "top"
+    },
+    "grid": {
+      "columns": 12,
+      "gap": "16px",
+      "max_width": "1200px"
+    }
+  }
 }
