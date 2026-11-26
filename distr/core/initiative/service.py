@@ -452,6 +452,18 @@ def _maybe_suggest_from_desktop_awareness(settings: dict) -> None:
     if not digest:
         return
 
+    # Visual tier: opt-in (initiative_awareness_depth == "visual") and rate-limited.
+    # It only appends to the digest; a failure simply means no visual context.
+    try:
+        from distr.core.initiative import visual_context
+
+        if visual_context.is_enabled(settings) and visual_context.due(settings):
+            line = visual_context.visual_digest_line(settings)
+            if line:
+                digest = f"{digest}\n{line}"
+    except Exception:
+        logger.debug("Initiative: visual context skipped", exc_info=True)
+
     try:
         budget = max(0, int(settings.get("initiative_suggestion_budget_per_day", 6)))
     except (TypeError, ValueError):
