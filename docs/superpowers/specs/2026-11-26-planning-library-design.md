@@ -145,10 +145,25 @@ itself** (its own frustrations and mechanics) when running in **debug mode**.
 Planning tickets never go there, and platform notes never go in the planning
 folder.
 
-## Section H - Frustration scoring (designed separately)
+## Section H - Frustration scoring (implemented)
 
-The agent noticing its own and the operator's friction and scoring it. A
-different kind of system from A-G; deliberately not designed here.
+The platform watching its own friction. A different system from A-G, and a
+different **destination**:
+
+- **Setting:** `orchestrator_debug_enabled`, default **off**, switchable in
+  Settings -> Initiative -> Debug.
+- **Signals:** errors, repeated warnings, and failed tool calls (logged at INFO by
+  `distr.agent.activity`, so the level filter must not run first).
+- **Scoring:** severity x frequency, so the worst come first; a repeated warning
+  ranks above a one-off.
+- **Output:** one markdown file per finding in **`downloads/DecisionsAI/Tickets/`**
+  - the platform's own notes, never a project's planning folder.
+- **Restraint:** a stable key plus a seen file means the same finding is not
+  re-filed inside a week; there is a per-pass cap; a pass that finds nothing
+  writes nothing.
+
+Implemented in `distr/core/initiative/friction.py` (`friction-` commit
+`270047be`). Tests: `tests/core/initiative/test_friction.py`.
 
 ## Error handling
 
