@@ -717,3 +717,34 @@ def register_routes(router, templates):
             return JSONResponse({"detail": str(exc)}, status_code=404)
         except (ValueError, OSError) as exc:
             return JSONResponse({"detail": str(exc)}, status_code=409)
+
+    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/library")
+    async def plan_workspace_library(workspace_id: int, screen: str = "", kind: str = "", tag: str = ""):
+        """The side panel's library, for the screen the operator is on.
+
+        sitemap / flow -> page templates; inside a page -> widgets. Contents are
+        screen-aware, and an entry scoped to another product is not offered here.
+        """
+        from distr.core.planning import library
+
+        def _load() -> dict:
+            product = ""
+            try:
+                from distr.core.planning.service import get_workspace
+
+                ws = get_workspace(workspace_id) or {}
+                product = str(ws.get("board_key") or ws.get("board_name") or "").strip().lower()
+            except Exception:
+                logger.debug("plan library: could not resolve the workspace product", exc_info=True)
+
+            if kind:
+                items = library.entries(kind=kind, product=product or None, tag=tag or None)
+            else:
+                items = library.panel_entries(screen or "page", product=product or None, tag=tag or None)
+            return {
+                "screen": (screen or "page").strip().lower(),
+                "product": product,
+                "entries": [entry.as_dict() for entry in items],
+            }
+
+        return JSONResponse(await asyncio.to_thread(_load))
