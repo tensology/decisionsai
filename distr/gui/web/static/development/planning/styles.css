@@ -1619,3 +1619,20 @@ button.plan-doc-add:hover { color: var(--studio-text); }
 .plan-library-entry:active { cursor: grabbing; }
 .plan-library-entry[data-kind="page-template"] { border-inline-start: 3px solid var(--studio-accent, #3b6ef5); }
 .plan-chat-body[hidden], .plan-library[hidden] { display: none; }
+
+/* Plan preview inside the library panel: the plan as it will look, governed by
+   the base template's tokens, contracts and grid. */
+.plan-library-preview { margin: 0 0 10px; }
+.plan-preview-summary { margin: 0 0 6px; font-size: 11px; color: var(--studio-muted); }
+.plan-preview-empty { margin: 0 0 8px; font-size: 12px; color: var(--studio-muted); }
+.plan-preview-pages { list-style: none; margin: 0 0 8px; padding: 0; }
+.plan-preview-page {
+    padding: 5px 8px; border-radius: 6px; font-size: 12px; cursor: pointer;
+    color: var(--studio-text); display: flex; gap: 6px; align-items: baseline;
+}
+.plan-preview-page:hover { background: #2b323f; }
+.plan-preview-page code { font-size: 10px; color: var(--studio-muted); }
+.plan-preview-frame {
+    width: 100%; min-height: 240px; border: 1px solid #3a4351;
+    border-radius: 8px; background: #fff;
+}

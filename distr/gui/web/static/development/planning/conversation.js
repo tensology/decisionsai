@@ -590,12 +590,19 @@ export function createPlanConversation(host, root) {
                             return;
                         }
                         session.planDirty = true;
+                        // The place response carries the plan, its rendered wire and
+                        // the base template's CSS, so the preview updates at once.
+                        libraryPanel.setPlan(result);
                         root.dispatchEvent(new CustomEvent('plan-changed', { detail: result, bubbles: true }));
                         controls(session);
                     } catch (err) {
                         console.warn('[plan] place failed', err);
                     }
                 });
+                // Show the plan as it already exists in the planning folder.
+                api(path(session, '/plan')).then((plan) => {
+                    if (plan && !plan.error) libraryPanel.setPlan(plan);
+                }).catch((err) => console.warn('[plan] could not load the plan', err));
             }
         } catch (err) {
             console.warn('[plan] library panel unavailable', err);

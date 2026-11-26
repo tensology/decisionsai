@@ -544,7 +544,7 @@ const PREVIEW_ROUTE_BRIDGE = `document.addEventListener('click', event => {
 });`;
 const PREVIEW_ROUTE_HASH = 'sha256-Rw4JOvKRX8OTjSnFYUTAK7NOPRcP3lf/c3nafkfNne8=';
 
-export function renderWireframe(source, title = 'Wireframe', pageId, assets = [], { interactive = false, standalone = false } = {}) {
+export function renderWireframe(source, title = 'Wireframe', pageId, assets = [], { interactive = false, standalone = false, baseCss = '' } = {}) {
     // Only the host supplies this manifest. DSL source can name an ID, never a URL.
     // Restrict even host-provided URLs to the exact project attachment endpoint.
     const assetURLs = Object.create(null);
@@ -591,6 +591,6 @@ export function renderWireframe(source, title = 'Wireframe', pageId, assets = []
     const basePolicy = standalone ? "'none'" : 'about:';
     const base = standalone ? '' : '<base href="about:srcdoc">';
     const htmlBody = box ? renderHTML(box, assetURLs, standalone) : `<div class="wf-invalid" role="alert"><strong>${esc(invalid.title)}</strong><p>${esc(invalid.tip)}</p><p class="wf-next">Next: fix the first error in the outline, or open Sitemap / All pages to browse the rest.</p></div>`;
-    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src ${scriptPolicy}; img-src ${imagePolicy}; connect-src 'none'; form-action 'none'; base-uri ${basePolicy}">${base}<meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(safeTitle)}</title><style>${css}${flowCSS}.wf-invalid{padding:20px;max-width:36rem;color:${palette.ink}}.wf-invalid strong{display:block;font-size:16px;margin-bottom:8px}.wf-invalid p{margin:0 0 8px;color:${palette.muted}}.wf-next{font-weight:500;color:${palette.accent}!important}</style></head><body><div class="sheet" style="padding:24px;--page-width:${width}px"><div class="canvas" style="width:${box?.width || 552}px;height:${box?.height || 64}px">${htmlBody}</div></div>${bridge}</body></html>`;
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src ${scriptPolicy}; img-src ${imagePolicy}; connect-src 'none'; form-action 'none'; base-uri ${basePolicy}">${base}<meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(safeTitle)}</title><style>${css}${flowCSS}${baseCss}.wf-invalid{padding:20px;max-width:36rem;color:${palette.ink}}.wf-invalid strong{display:block;font-size:16px;margin-bottom:8px}.wf-invalid p{margin:0 0 8px;color:${palette.muted}}.wf-next{font-weight:500;color:${palette.accent}!important}</style></head><body><div class="sheet" style="padding:24px;--page-width:${width}px"><div class="canvas" style="width:${box?.width || 552}px;height:${box?.height || 64}px">${htmlBody}</div></div>${bridge}</body></html>`;
     return { svg, html, diagnostics, explanation: explainWireframeDiagnostics(diagnostics) };
 }

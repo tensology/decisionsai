@@ -7,6 +7,9 @@
  * and the canvas stay independent.
  */
 
+import { renderWireframe } from './wireframe.js';
+import { mountPlanPreview } from './plan-preview.js';
+
 export const MODES = ['chat', 'library'];
 
 /** Which library kind a screen should show. Unknown screens behave like a page. */
@@ -133,11 +136,24 @@ export function mountLibraryPanel(container, options = {}) {
     status.className = 'plan-library-status';
     status.setAttribute('role', 'status');
 
+    const preview = document.createElement('div');
+    preview.className = 'plan-library-preview';
+
     const list = document.createElement('ul');
     list.className = 'plan-library-list';
     list.setAttribute('aria-label', 'Library');
 
-    root.append(tabs, status, list);
+    root.append(tabs, status, preview, list);
+
+    // The plan itself, rendered through the same renderer the canvas uses and
+    // with the base template's CSS, so what you see is governed by the real
+    // tokens, contracts and grid.
+    let planPreview = null;
+    try {
+        planPreview = mountPlanPreview(preview, { renderWireframe });
+    } catch (err) {
+        console.warn('[plan] preview unavailable', err);
+    }
 
     function paintTabs() {
         for (const tab of [chatTab, libraryTab]) {
@@ -218,6 +234,7 @@ export function mountLibraryPanel(container, options = {}) {
         setMode,
         setScreen,
         reload,
+        setPlan: (plan) => { try { planPreview?.setPlan(plan); } catch (err) { console.warn('[plan] preview failed', err); } },
         getMode: () => currentMode,
         getScreen: () => currentScreen,
         getEntries: () => last.entries,

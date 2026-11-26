@@ -767,6 +767,17 @@ def register_routes(router, templates):
                 return {"sitemap": None, "root": "", "error": "no planning folder for this workspace"}
             sm = plan_store.load_sitemap(root)
             wire, missing = sm.to_wire()
+            # The base template's CSS travels with the plan so a preview is
+            # governed by the real tokens, contracts and grid - not a lookalike.
+            try:
+                from distr.core.planning import base_template
+
+                first = sm.all_nodes()[0].page if sm.count() else None
+                base = base_template.for_page(getattr(first, "base", None), getattr(first, "overrides", None))
+                base_css = base_template.to_css(base)
+                base_name = base.name
+            except Exception:
+                base_css, base_name = "", ""
             return {
                 "root": root,
                 "sitemap": sm.as_dict(),
@@ -775,6 +786,8 @@ def register_routes(router, templates):
                 "pages": sm.count(),
                 "routes": sm.routes(),
                 "tickets": plan_store.load_tickets_index(root),
+                "baseCss": base_css,
+                "baseName": base_name,
             }
 
         return JSONResponse(await asyncio.to_thread(_load))
@@ -831,6 +844,14 @@ def register_routes(router, templates):
 
             wire, missing = sm.to_wire()
             saved = plan_store.save_sitemap(root, sm, wire=wire)
+            try:
+                from distr.core.planning import base_template
+
+                first = sm.all_nodes()[0].page if sm.count() else None
+                base = base_template.for_page(getattr(first, "base", None), getattr(first, "overrides", None))
+                base_css = base_template.to_css(base)
+            except Exception:
+                base_css = ""
             return {
                 "placed": bool(saved.get("saved")),
                 "error": "" if saved.get("saved") else str(saved.get("error") or "write failed"),
@@ -839,6 +860,7 @@ def register_routes(router, templates):
                 "entry": entry.as_dict(),
                 "pages": sm.count(),
                 "wire": wire,
+                "baseCss": base_css,
                 "missing": missing,
             }
 
