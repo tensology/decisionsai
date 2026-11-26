@@ -854,6 +854,14 @@ class InitiativeService:
             _maybe_suggest_from_desktop_awareness(settings)
         except Exception:
             logger.debug("ambient suggestion cycle skipped", exc_info=True)
+        # Debug mode (default off): the platform watching its own friction and
+        # filing notes about ITSELF. Not the project's planning folder.
+        try:
+            from distr.core.initiative.friction import run as run_friction_pass
+
+            run_friction_pass(settings=settings)
+        except Exception:
+            logger.debug("orchestrator debug pass skipped", exc_info=True)
         level = self._get_level(settings)
         if level not in ("operate", "own"):
             return

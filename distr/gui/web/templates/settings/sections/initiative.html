@@ -72,6 +72,10 @@
         <label class="settings-toggle items-start"><input type="checkbox" id="initiative_telegram_notify_suggestions" class="settings-toggle__input"><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Send triage updates to Telegram<span class="block text-xs leading-snug text-gray-400">A short note in Telegram when new work has been sorted.</span></span></label>
         <label class="settings-toggle items-start"><input type="checkbox" id="initiative_recommendations" class="settings-toggle__input"><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Be my assistant<span class="block text-xs leading-snug text-gray-400">Helpful suggestions during the day, without interrupting. Follows your projects, incoming messages and calendar, and offers what's useful when it fits. Standard and Own outcomes only.</span></span></label>
     </div>
+    <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 mt-6">Debug</div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-300">
+        <label class="settings-toggle items-start"><input type="checkbox" id="orchestrator_debug_enabled" class="settings-toggle__input"><span class="settings-toggle__switch shrink-0" aria-hidden="true"></span><span class="settings-toggle__label">Watch my own friction<span class="block text-xs leading-snug text-gray-400">Off by default. When on, the agent watches its own errors, repeated warnings and failed tool calls, scores what is worst, and writes a fix suggestion per finding into downloads/DecisionsAI/Tickets/. This is about the Decisions platform itself, not your projects.</span></span></label>
+    </div>
     <div id="initiative-assistant-nudges" class="mt-3 hidden rounded-lg border border-white/10 bg-black/10 p-3" aria-live="polite">
         <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">From your assistant</div>
         <ul id="initiative-assistant-nudges-list" class="space-y-2 text-sm text-gray-300"></ul>

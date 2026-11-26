@@ -405,6 +405,9 @@ class Settings(Base):
     # Was read from settings but never had a column, so it could only ever be the
     # hardcoded default and could not be changed.
     incoming_proposals_auto_accept_projects = Column(String, default='[]')
+    # Debug mode: the agent watches its own friction and files platform notes in
+    # downloads/DecisionsAI/Tickets/. Off unless switched on.
+    orchestrator_debug_enabled = Column(Boolean, default=False)
     
     # Chat voice/speaker toggle
     chat_voice_enabled = Column(Boolean, default=True)
@@ -894,6 +897,7 @@ try:
                 ("initiative_interrupt_threshold", "FLOAT DEFAULT 0.85"),
                 ("initiative_visual_capture_seconds", "INTEGER DEFAULT 900"),
                 ("incoming_proposals_auto_accept_projects", "VARCHAR DEFAULT '[]'"),
+                ("orchestrator_debug_enabled", "BOOLEAN DEFAULT 0"),
                 # Google Gemini provider
                 ("gemini_enabled", "BOOLEAN DEFAULT 0"),
                 ("gemini_key", "VARCHAR DEFAULT ''"),

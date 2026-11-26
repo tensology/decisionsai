@@ -23,6 +23,7 @@
         recommendations: 'initiative_recommendations',
         ownChannel: 'initiative_own_channel',
         ownerWhatsapp: 'initiative_owner_whatsapp',
+        debugEnabled: 'orchestrator_debug_enabled',
     };
     var OWN_CHANNELS = ['telegram', 'whatsapp', 'voice', 'log'];
 
@@ -240,6 +241,7 @@
             syncRecommendationsAvailability(normalizeLevel(data.initiative_level || 'operate'));
             var owner = document.getElementById(FIELDS.ownerWhatsapp);
             if (owner) owner.value = data.initiative_owner_whatsapp || '';
+            setChecked(FIELDS.debugEnabled, !!data.orchestrator_debug_enabled);
             setOwnChannel(data.initiative_own_channel || '');
         }).catch(function() {});
         loadAssistantNudges();
@@ -268,6 +270,7 @@
             initiative_recommendations: !!(document.getElementById(FIELDS.recommendations) || {}).checked,
             initiative_own_channel: getOwnChannel(),
             initiative_owner_whatsapp: ((document.getElementById(FIELDS.ownerWhatsapp) || {}).value || '').trim(),
+            orchestrator_debug_enabled: !!(document.getElementById(FIELDS.debugEnabled) || {}).checked,
         };
         fetch('/api/initiative', {
             method: 'POST',

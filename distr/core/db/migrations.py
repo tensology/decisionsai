@@ -1823,6 +1823,7 @@ def run_migrations():
         ("initiative_interrupt_threshold", "FLOAT DEFAULT 0.85"),
         ("initiative_visual_capture_seconds", "INTEGER DEFAULT 900"),
         ("incoming_proposals_auto_accept_projects", "VARCHAR DEFAULT '[]'"),
+        ("orchestrator_debug_enabled", "BOOLEAN DEFAULT 0"),
     ]
     for col_name, col_type in initiative_columns:
         try:

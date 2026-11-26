@@ -53,6 +53,8 @@ DEFAULTS = {
     "initiative_recommendations": False,
     "initiative_own_channel": "",
     "initiative_owner_whatsapp": "",
+    # Debug mode: the platform watching its own friction. Off by default.
+    "orchestrator_debug_enabled": False,
 }
 
 
@@ -76,6 +78,7 @@ class _InitiativePayload(BaseModel):
     initiative_recommendations: bool = False
     initiative_own_channel: str = ""
     initiative_owner_whatsapp: str = ""
+    orchestrator_debug_enabled: bool = False
 
 
 class _AssistantChannelAnswer(BaseModel):
