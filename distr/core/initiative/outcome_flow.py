@@ -731,7 +731,8 @@ _PROPOSALS_RE = re.compile(
     r"^\s*/proposals\b|"
     r"\b(update|list|show|summary|overview|rundown)\b.{0,40}\b(proposals?|incoming)\b|"
     r"\b(proposals?)\b.{0,30}\b(come in|came in|incoming|pending|waiting)\b|"
-    r"\bwhat(?:'s| is| has)?\b.{0,20}\b(in incoming|come in)\b",
+    r"\bwhat(?:'s| is| has)?\b.{0,20}\b(in incoming|come in)\b|"
+    r"^\s*(?:are\s+there\s+)?any\s+(?:new\s+)?proposals?\b",
     re.I,
 )
 _RECOMMEND_RE = re.compile(
@@ -774,14 +775,116 @@ def _pending_proposals(limit: int = 10) -> list[dict[str, Any]]:
     return rows[:limit]
 
 
-def proposals_overview() -> dict[str, Any]:
+_WHATSAPP_RE = re.compile(r"\bwhats\s?app\b", re.I)
+_CHECK_RE = re.compile(
+    r"\b(check|look|see|overview|update|review|summar\w*|anything|what|which|new|status|linked|proposals?)\b|"
+    r"\b(came|come) in\b|\bgoing on\b",
+    re.I,
+)
+_OUTBOUND_RE = re.compile(
+    r"\b(send|reply|respond|draft|write|forward|notify)\b|\b(?:tell|ask)\s+(?!me\b|us\b)\w|"
+    r"\b(?:and|then)\s+message\b|\blet\s+(?!me\b|us\b)\w.{0,40}\bknow\b",
+    re.I,
+)
+
+
+def is_whatsapp_check_request(text: str) -> bool:
+    """Asked to check or look at WhatsApp (not to send or reply there)."""
+    raw = str(text or "")
+    if not _WHATSAPP_RE.search(raw) or _OUTBOUND_RE.search(raw):
+        return False
+    return bool(_CHECK_RE.search(raw))
+
+
+def _clock(ts: int) -> str:
+    when = datetime.fromtimestamp(int(ts))
+    return when.strftime("%H:%M") if when.date() == datetime.now().date() else when.strftime("%d %b %H:%M")
+
+
+def whatsapp_activity_text(hours: int = 24, limit: int = 8) -> str:
+    """Plain summary of recent WhatsApp messages and the project each chat is linked to."""
+    from distr.core.db import WhatsAppMessage, WhatsAppPhoneLink, get_session
+    from distr.core.db.kanban import KanbanBoard
+    from distr.core.incoming.project_links import project_links
+
+    remote = {str(row.get("source_thread_id")): row for row in project_links() or []
+              if isinstance(row, dict) and row.get("source") == "whatsapp"}
+    ignored = ignored_project_names()
+    since = int(time.time()) - hours * 3600
+    chats: dict[str, dict[str, Any]] = {}
+    with get_session() as db:
+        boards: dict[str, list[str]] = {}
+        for jid, name in db.query(WhatsAppPhoneLink.phone_jid, KanbanBoard.name).join(
+                KanbanBoard, KanbanBoard.id == WhatsAppPhoneLink.board_id):
+            boards.setdefault(str(jid), []).append(str(name))
+        rows = db.query(WhatsAppMessage.jid, WhatsAppMessage.from_me, WhatsAppMessage.text,
+                        WhatsAppMessage.caption, WhatsAppMessage.media_type,
+                        WhatsAppMessage.whatsapp_timestamp).filter(
+            WhatsAppMessage.whatsapp_timestamp >= since).order_by(WhatsAppMessage.whatsapp_timestamp).all()
+    for jid, from_me, text, caption, media_type, ts in rows:
+        chat = chats.setdefault(str(jid), {"count": 0, "last": None, "last_ts": 0})
+        chat["count"] += 1
+        if not from_me:
+            chat["last"] = text or caption or (f"[{media_type}]" if media_type else "")
+            chat["last_ts"] = int(ts or 0)
+    linked, unlinked = [], 0
+    for jid, chat in sorted(chats.items(), key=lambda item: -item[1]["last_ts"]):
+        link = remote.get(jid) or {}
+        if link.get("is_archived"):
+            continue
+        projects = [str(p.get("name") or "") for p in link.get("projects") or [] if isinstance(p, dict)]
+        projects = [name for name in projects if name and name.lower() not in ignored]
+        board_names = sorted(set(boards.get(jid, [])))
+        if not projects and not board_names:
+            unlinked += 1
+            continue
+        label = str(link.get("label") or "a linked chat")
+        where = ", ".join(projects) if projects else f"{', '.join(board_names)} board only, not linked to a project"
+        line = f"- {label} ({where}): {chat['count']} message{'s' if chat['count'] != 1 else ''}"
+        if chat["last"] is not None:
+            line += f", latest from them at {_clock(chat['last_ts'])}: \u201c{_preview(chat['last'], 120)}\u201d"
+        else:
+            line += ", none from them"
+        linked.append(line)
+    if not linked:
+        lines = [f"No messages in the last {hours} hours from WhatsApp chats linked to a project."]
+    else:
+        lines = [f"WhatsApp, last {hours} hours:", *linked[:limit]]
+    if unlinked:
+        lines.append(f"{unlinked} other chat{'s' if unlinked != 1 else ''} had messages but "
+                     f"{'aren' if unlinked != 1 else 'isn'}'t linked to a project.")
+    return "\n".join(lines)
+
+
+def _whatsapp_evidence() -> str:
+    try:
+        return whatsapp_activity_text()
+    except Exception:
+        logger.warning("outcome_flow: WhatsApp activity read failed", exc_info=True)
+        return "I couldn't read the WhatsApp messages just now."
+
+
+def whatsapp_overview() -> dict[str, Any]:
+    """Asked to check WhatsApp: recent linked messages, their projects, and waiting proposals."""
+    proposals = proposals_overview(evidence=False)
+    out = {"ack": "Okay, checking WhatsApp now.",
+           "text": humanize(_whatsapp_evidence() + "\n\n" + proposals["text"], max_len=3500)}
+    if proposals.get("reply_markup"):
+        out["reply_markup"] = proposals["reply_markup"]
+    return out
+
+
+def proposals_overview(*, evidence: bool = True) -> dict[str, Any]:
     try:
         rows = _pending_proposals()
     except Exception:
         logger.warning("outcome_flow: proposal list failed", exc_info=True)
         return {"text": "I couldn't reach Incoming just now. Give it a moment and ask me again."}
     if not rows:
-        return {"text": "All clear, nothing new has come in that needs your call right now."}
+        text = "No proposals are waiting for your decision in Incoming right now."
+        if evidence:
+            text += "\n\n" + _whatsapp_evidence()
+        return {"text": humanize(text, max_len=3500)}
     lines = [f"Here's what's come in ({len(rows)}):", ""]
     buttons: list[list[tuple[str, str]]] = []
     for i, proposal in enumerate(rows, 1):
@@ -1772,13 +1875,18 @@ def handle_telegram_text(text: str, *, chat_id: Any = None) -> dict[str, Any] | 
             if result:
                 return humanize_intake_result(result)
             return None
+    if is_whatsapp_check_request(raw):
+        return whatsapp_overview()
     if is_proposals_request(raw):
-        return proposals_overview()
+        out = proposals_overview()
+        if not raw.startswith("/"):
+            out["ack"] = "Okay, checking Incoming now."
+        return out
     if _RECOMMEND_RE.search(raw):
         return {"text": project_report()}
     if _NOT_DONE_RE.search(raw):
         open_flow = latest_open_flow()
-        if open_flow:
+        if open_flow and not _names_other_work(raw, open_flow[1]):
             key, flow = open_flow
             try:
                 _thread_steer(flow.get("chat_id"), f"The user says this isn't done yet: {raw}\nPlease keep going until it is.")
@@ -1790,6 +1898,31 @@ def handle_telegram_text(text: str, *, chat_id: Any = None) -> dict[str, Any] | 
             return {"text": "Thanks for flagging that. I've passed it back and it's being worked on again. "
                             "I'll let you know when it's sorted."}
     return None
+
+
+def _chat_project_id(chat_id: Any) -> int | None:
+    from distr.core.db import Chat, get_session
+
+    with get_session() as db:
+        row = db.get(Chat, int(chat_id)) if str(chat_id or "").isdigit() else None
+        return int(row.project_id) if row is not None and row.project_id is not None else None
+
+
+def _names_other_work(text: str, flow: dict[str, Any]) -> bool:
+    """'X is still broken' about another ticket or project must not steer the latest flow."""
+    tickets = {int(n) for n in re.findall(r"\b(?:ticket|task)\s*#?\s*(\d+)\b", text, re.I)}
+    if tickets and tickets != {int(flow.get("ticket_id") or 0)}:
+        return True
+    from distr.core.work_intake.service import projects_named_in
+
+    named = {pid for pid, _name in projects_named_in(text)}
+    if not named:
+        return False
+    try:
+        return _chat_project_id(flow.get("chat_id")) not in named
+    except Exception:
+        logger.warning("outcome_flow: flow project lookup failed", exc_info=True)
+        return True
 
 
 def _handle_flow_action(key: str, action: str) -> dict[str, Any]:

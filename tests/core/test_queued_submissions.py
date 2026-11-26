@@ -229,6 +229,40 @@ def test_completed_turn_recovers_only_the_saved_queue_item(development_db, monke
         )
 
 
+def test_queue_advances_when_the_next_followup_prompt_was_recorded_while_work_ran(development_db, monkeypatch):
+    """Thread 1509, 26 Nov: proposal 121 finished and proposal 122 never started.
+
+    Incoming recorded 122's prompt into the transcript as soon as it was queued, so
+    the completed turn no longer looked like the latest one and the hand-off stopped.
+    """
+    from distr.core.db import Chat
+
+    session, chat_id = development_db["session"], development_db["chat_id"]
+    finalized = _finish_simulated_direct_worker(development_db, monkeypatch)
+    first = submission(development_db)
+    with session() as db:
+        root = db.get(Chat, chat_id)
+        original = Chat(parent_id=chat_id, project_id=root.project_id, input="Proposal 121")
+        db.add(original)
+        db.flush()
+        turn_id = original.id
+        params = json.loads(root.params)
+        params["active_turn_chat_row_id"] = turn_id
+        params["development"]["execution"] = {"status": "running", "job_id": "original", "turn_id": turn_id}
+        root.params = json.dumps(params)
+        db.commit()
+    queue.record_submission_message(chat_id, first["id"], "Proposal 122")
+    state = harness._update_execution(chat_id, job_id="original", status="completed",
+                                      turn_response="Proposal 121 done.", queue_after_completion=True)
+    assert state["followup_completion_pending"]["command_id"] == first["id"]
+    dispatch = Mock(wraps=harness.dispatch_development_prompt)
+    monkeypatch.setattr(harness, "dispatch_development_prompt", dispatch)
+    queue.recover_completed_followups()
+    assert finalized.wait(5)
+    assert dispatch.call_count == 1
+    assert control.list_commands_for_id(first["id"])["status"] == "delivered"
+
+
 def test_steer_stops_existing_turn_and_delivers_files_once_failure_keeps_item(development_db, monkeypatch):
     finalized = _finish_simulated_direct_worker(development_db, monkeypatch)
     command = submission(development_db)

@@ -289,6 +289,45 @@ def _scope_tokens(value: str) -> set[str]:
     }
 
 
+_NUMBER_WORDS = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+                 "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10"}
+
+
+def _name_words(value: str) -> list[str]:
+    return [_NUMBER_WORDS.get(word, word) for word in re.findall(r"[a-z0-9]+", str(value or "").lower())]
+
+
+def _named_projects(text: str, projects: list) -> list:
+    """Projects the text names, best match only. More than one result means ambiguous.
+
+    Spoken names are matched too: "Player One" names Player1Sport, "mail shot" names
+    MailShot, and "old spoortrack" prefers "Spoortrack (Old)" over "Spoortrack".
+    """
+    words = _name_words(text)
+    grams = {"".join(words[i:i + n]) for n in range(1, 5) for i in range(len(words) - n + 1)}
+    full, partial = [], []
+    for row in projects:
+        name = _name_words(getattr(row, "name", ""))
+        if not name:
+            continue
+        joined = "".join(name)
+        if joined in grams or set(name) <= set(words):
+            full.append((len(name), row))
+        elif len(joined) > 6 and any(len(g) >= 6 and joined.startswith(g) for g in grams):
+            partial.append(row)
+    if full:
+        best = max(size for size, _row in full)
+        return [row for size, row in full if size == best]
+    return partial
+
+
+def projects_named_in(text: str) -> list[tuple[int, str]]:
+    """(id, name) of the project(s) a message names, for routing guards outside intake."""
+    with get_session() as session:
+        projects = session.query(Project).filter(Project.deleted_at.is_(None)).all()
+        return [(int(row.id), str(row.name)) for row in _named_projects(text, projects)]
+
+
 def _explicit_batch_ticket_items(value: str) -> list[str]:
     """Extract a short, explicitly requested ticket list without guessing."""
     text = str(value or "")
@@ -500,7 +539,10 @@ class OrchestratorIntakeService:
             elif decision.action == WorkIntakeAction.RUN_WORKFLOW:
                 self._create_ticket(intake, decision)
                 if decision.status != "duplicate":
-                    self._start_workflow(intake, decision)
+                    if decision.workflow_id:
+                        self._start_workflow(intake, decision)
+                    else:
+                        self._start_development_thread(intake, decision)
             elif decision.action == WorkIntakeAction.UPDATE_TICKET:
                 self._update_ticket(intake, decision)
             elif decision.action == WorkIntakeAction.STEER_RUN:
@@ -544,6 +586,34 @@ class OrchestratorIntakeService:
             decision.diagnostics["error"] = str(exc)
         self._log_decision(intake, decision)
         return decision
+
+    def _start_development_thread(self, intake: WorkIntake, decision: WorkIntakeDecision) -> None:
+        """No workflow is linked: run the ticket in its own Development thread, as proposals do."""
+        from distr.core.workflow.development_harness import dispatch_development_prompt
+        from distr.core.workflow.development_threads import ensure_development_thread
+
+        with get_session() as session:
+            ticket = session.get(KanbanTicket, int(decision.ticket_id))
+            lane = session.get(KanbanLane, int(ticket.lane_id))
+            title, lane_name = str(ticket.title or ""), str(lane.name if lane else "")
+        prompt = intake.text.strip()
+        chat_id = ensure_development_thread(
+            title=title[:120] or "Telegram request", starting_question=prompt,
+            project_id=decision.project_id, ticket_id=int(decision.ticket_id),
+            source_type=intake.source.value, source_ref=intake.intake_uid,
+            board_key=f"decisions:{decision.board_id}", board_provider="local",
+            board_ticket_key=str(decision.ticket_id), board_ticket_title=title, board_ticket_lane=lane_name,
+        )
+        execution = dispatch_development_prompt(
+            int(chat_id), prompt, routing_assessment={"source": intake.source.value}, dispatch_async=True,
+        )
+        if execution.get("started") is False or execution.get("status") in {"failed", "cancelled", "blocked"}:
+            raise ValueError(execution.get("error") or execution.get("message") or "The work could not be started.")
+        decision.diagnostics["development_chat_id"] = int(chat_id)
+        decision.response_text = decision.response_text.replace(
+            "I'll get started on it and tell you how it goes.",
+            f"Started in Development thread #{int(chat_id)}. I'll tell you how it goes.",
+        )
 
     def _start_lightweight_execution(
         self,
@@ -763,9 +833,19 @@ class OrchestratorIntakeService:
                 project = session.query(Project).filter(Project.deleted_at.is_(None), Project.id == int(project_hint)).first()
             elif project_hint:
                 project = session.query(Project).filter(Project.deleted_at.is_(None), Project.name.ilike(f"%{project_hint}%")).first()
+            channel = intake.source.value == "telegram"
             if project is None and request_text:
+                named = _named_projects(request_text, projects)
                 exact_projects = [row for row in projects if row.name and row.name.lower() in request_text]
-                if len(exact_projects) == 1:
+                if len(named) > 1:
+                    # Never pick one of several named projects silently.
+                    raise ScopeNeedsInfo(
+                        "That could be more than one project, so I didn't guess. Which one: "
+                        + " or ".join(row.name for row in named) + "?"
+                    )
+                if named:
+                    project = named[0]
+                elif len(exact_projects) == 1:
                     project = exact_projects[0]
                 else:
                     request_tokens = _scope_tokens(request_text)
@@ -777,7 +857,9 @@ class OrchestratorIntakeService:
                     scored.sort(key=lambda item: item[0], reverse=True)
                     if scored and (len(scored) == 1 or scored[0][0] > scored[1][0]):
                         project = scored[0][1]
-            if project is None:
+            if project is None and not channel:
+                # The desktop's active project is context the user can see. A
+                # Telegram message has no such context, so it must name the project.
                 active_projects = [row for row in projects if bool(row.in_use)]
                 if len(active_projects) == 1:
                     project = active_projects[0]
@@ -848,11 +930,16 @@ class OrchestratorIntakeService:
                     # require it: a missing default is supplied by weight-class
                     # routing below instead of blocking the ticket.
                     candidates = [row for row in candidates if row.default_workflow_id] or candidates
-                active = [row for row in candidates if bool(row.in_use)]
+                active = [row for row in candidates if bool(row.in_use)] if not channel else []
                 if len(active) == 1:
                     board = active[0]
                 elif len(candidates) == 1:
                     board = candidates[0]
+                elif candidates and channel:
+                    raise ScopeNeedsInfo(
+                        "Which project is this for? I didn't want to guess. "
+                        "Say it again with the project name, for example Merrypak or Player1Sport."
+                    )
                 elif candidates:
                     # Never silently drop work on the first board by position.
                     # That is how work for one project landed on another.
@@ -908,7 +995,9 @@ class OrchestratorIntakeService:
                         .filter(AutoWorkflow.id == int(routed_id))
                         .first()
                     )
-            if require_workflow and workflow is None:
+            if require_workflow and workflow is None and not channel:
+                # Telegram work without a linked workflow runs directly in the
+                # project's Development thread instead (see _start_development_thread).
                 alternatives = (
                     session.query(KanbanBoard)
                     .filter(

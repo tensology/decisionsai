@@ -2175,11 +2175,17 @@ def _completed_followup_matches(db, root, execution, completion) -> bool:
             or completion.get("scope") != list(development_scope_identity(
                 root.project_id, development_thread_metadata(root), chat_id=root.id))):
         return False
-    latest = db.query(Chat.id).filter(
-        Chat.parent_id == root.id, Chat.input.isnot(None), Chat.input != "",
-    ).order_by(Chat.id.desc()).first()
+    later = db.query(Chat.id, Chat.params, Chat.response).filter(
+        Chat.parent_id == root.id, Chat.input.isnot(None), Chat.input != "", Chat.id >= completion["turn_id"],
+    ).order_by(Chat.id).all()
+    if not later or later[0].id != completion["turn_id"]:
+        return False
+    # The queued follow-up's own prompt may already be in the transcript (an Incoming
+    # follow-up recorded it while this turn ran). It is the queue head, not newer work.
+    placeholders = {row.id for row in later[1:] if not row.response and (
+        _chat_params(row.params).get("development_turn") or {}).get("queued_command_id") == completion.get("command_id")}
     active = _chat_params(root.params).get("active_turn_chat_row_id")
-    return bool(latest and latest.id == completion["turn_id"] and active in (None, completion["turn_id"]))
+    return len(placeholders) == len(later) - 1 and active in (None, completion["turn_id"], *placeholders)
 
 
 def _settle_followup_start(db, root, execution, *, started):

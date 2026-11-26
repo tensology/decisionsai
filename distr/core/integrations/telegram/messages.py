@@ -421,6 +421,8 @@ class TelegramMessagesMixin:
 
                 flow_reply = _initiative_flow_reply(text, chat_id=chat_id if is_private_message else None)
                 if flow_reply:
+                    if flow_reply.get("ack"):
+                        self.send_to_telegram(flow_reply["ack"])
                     if flow_reply.get("reply_markup"):
                         self.send_to_telegram(flow_reply.get("text") or "Done.", reply_markup=flow_reply["reply_markup"])
                     else:

@@ -1213,11 +1213,41 @@ def handle_telegram_workflow_reply(
     item = pending[0]
     allowed = json.loads(item["allowed_actions"] or "[]")
     action, response = classify_reply(clean, allowed)
+    if action == "feedback" and not run_mentions and not explicit_decision and _names_other_project(clean, item):
+        # "Fix X on Merrypak" while a Snuza run waits is new work, not guidance for Snuza.
+        return None
     if not action:
         if explicit_decision:
             return {"error": "This checkpoint does not accept that reply. Review its available actions.", "status_code": 400}
         return None
     return resolve_interaction(token=item["token"], action=action, response_text=response, source=source, resolver_id=resolver_id, chat_id=chat_id, background=background)
+
+
+def _run_project_id(run_id: Any) -> int | None:
+    from distr.core.db import Chat, get_session
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.db.workflow import AutoWorkflowRun
+
+    with get_session() as db:
+        run = db.get(AutoWorkflowRun, int(run_id)) if run_id is not None else None
+        if run is None:
+            return None
+        chat = db.get(Chat, int(run.chat_id)) if run.chat_id else None
+        if chat is not None and chat.project_id is not None:
+            return int(chat.project_id)
+        ticket = db.get(KanbanTicket, int(run.ticket_id)) if run.ticket_id else None
+        return int(ticket.linked_project_id) if ticket is not None and ticket.linked_project_id else None
+
+
+def _names_other_project(text: str, item: dict[str, Any]) -> bool:
+    try:
+        from distr.core.work_intake.service import projects_named_in
+
+        named = {pid for pid, _name in projects_named_in(text)}
+        return bool(named) and _run_project_id(item.get("run_id")) not in named
+    except Exception:
+        logger.warning("Could not check which project a checkpoint reply names", exc_info=True)
+        return False
 
 
 def workflow_reply_message(result: dict[str, Any], *, voice: bool = False) -> str:

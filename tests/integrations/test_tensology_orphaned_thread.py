@@ -67,3 +67,29 @@ def test_relinked_ticket_resumes_sync_and_clears_orphan(state_sync, orphan):
     assert sync.call_args_list == [call(client, orphan, 42), call(client, relinked, 43)]
     with tc._TENSOLOGY_TICKETS_LOCK:
         assert orphan["id"] not in tc._ORPHANED_TENSOLOGY_THREADS
+
+
+def test_ticket_claimed_on_a_reply_turn_resolves_to_its_thread(monkeypatch):
+    """A ticket pointing at a reply turn (child chat) must route follow-ups to the root thread."""
+    from types import SimpleNamespace
+    import distr.core.db as db_module
+    import distr.core.kanban.proposal_tickets as pt
+
+    chats = {1509: SimpleNamespace(parent_id=None), 1561: SimpleNamespace(parent_id=1509)}
+
+    class Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get(self, _model, key):
+            return chats.get(key)
+
+    monkeypatch.setattr(db_module, "get_session", lambda: Session())
+    monkeypatch.setattr(pt, "find_thread_for_tensology_ticket", lambda ticket: None)
+    assert tc._existing_tensology_thread({"id": 1179, "decisions_thread_id": "1561"}) == 1509
+    assert tc._existing_tensology_thread({"id": 1179, "decisions_thread_id": "1509"}) == 1509
+    monkeypatch.setattr(pt, "find_thread_for_tensology_ticket", lambda ticket: 1561)
+    assert tc._existing_tensology_thread({"id": 1179}) == 1509

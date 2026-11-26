@@ -85,7 +85,7 @@ def append_followup(chat_id, proposal, *, start_work):
     from distr.core.chat import _chat_params
     from distr.core.db import Chat, get_session
     from distr.core.workflow import development_control as control
-    from distr.core.workflow.queued_submissions import record_submission_message, start_next_followup
+    from distr.core.workflow.queued_submissions import start_next_followup
     from distr.core.workflow.development_harness import development_execution_active
     from .proposals import _proposal_handoff_key, _proposal_prompt
 
@@ -102,7 +102,8 @@ def append_followup(chat_id, proposal, *, start_work):
     command = control.enqueue_command(chat_id, content, source='incoming_followup',
         source_ref='proposal:' + sha256(_proposal_handoff_key(proposal).encode()).hexdigest(), command_type='followup', idempotent=True,
         expected_project_id=proposal['project_id'])
-    record_submission_message(chat_id, command['id'], content)
+    # The prompt joins the transcript when the turn starts. Recording it here as well
+    # duplicated it and, while other work ran, made the queue stall after that work.
     if start_work and command.get('status') == 'queued' and not development_execution_active(chat_id):
         start_next_followup(chat_id, command['id'], command['modified_at'])
     return command

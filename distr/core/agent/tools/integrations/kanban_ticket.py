@@ -4951,47 +4951,11 @@ class KanbanTicketTool(BaseTool):
                 "Please provide text for whatsapp_send_message.",
             )
 
-        from distr.core.integrations.whatsapp.relay_client import send_message_via_relay
-        from distr.gui.oracle.menu import is_whatsapp_enabled_in_settings
-
-        if not is_whatsapp_enabled_in_settings():
-            return voice_then_reference(
-                "WhatsApp is not connected in Settings.",
-                "Link WhatsApp under Settings > Advanced before sending messages.",
-            )
-        try:
-            wm = self._get_whatsapp_manager()
-            if wm:
-                import requests
-                payload = {"jid": target_jid, "text": message_text, "caption": "", "audio": None}
-                payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-                headers = wm._relay_auth_headers(payload_str)
-                resp = requests.post(f"{wm.api_base}/send", json=payload, headers=headers, timeout=10)
-                data = {}
-                try:
-                    data = resp.json()
-                except Exception:
-                    data = {"raw": resp.text[:300]}
-                if resp.status_code == 200 and data.get("success", True):
-                    return voice_then_reference("WhatsApp message sent.", f"Sent WhatsApp message to {target_jid}.")
-                return voice_then_reference(
-                    "WhatsApp did not accept that send.",
-                    f"Failed to send WhatsApp message to {target_jid}: {data.get('error') or data}",
-                )
-
-            result = send_message_via_relay(jid=target_jid, text=message_text)
-            if result.get("success"):
-                return voice_then_reference("WhatsApp message sent.", f"Sent WhatsApp message to {target_jid}.")
-            return voice_then_reference(
-                "WhatsApp did not accept that send.",
-                f"Failed to send WhatsApp message to {target_jid}: {result.get('error')}",
-            )
-        except Exception as e:
-            logger.error("WhatsApp send via tool failed: %s", e, exc_info=True)
-            return voice_then_reference(
-                "WhatsApp send failed.",
-                f"Failed to send WhatsApp message: {e}",
-            )
+        # Nothing reaches a client without the user's approval. This tool action used to
+        # post straight to the relay (bypassing dry-run too); it now leaves a draft, and
+        # the approved send lives in whatsapp_toolkit (draft token + explicit approval).
+        drafted = self._action_whatsapp_set_draft(jid=jid, jid_phone=jid_phone, text=message_text)
+        return f"Not sent. {drafted}"
 
     def _action_whatsapp_snapshot_to_ticket(
         self,

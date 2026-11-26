@@ -109,9 +109,8 @@ def test_append_is_durable_and_idempotent_and_reopens_completed_thread(work, mon
     with get_session() as db:
         assert db.get(Chat, chat_id).is_archived is False
         assert db.query(DevelopmentCommand).filter_by(chat_id=chat_id).count() == 1
-        children = db.query(Chat).filter_by(parent_id=chat_id).all()
-        assert len(children) == 1
-        assert 'Any idea how this happened?' in children[0].input
+        # The prompt joins the transcript when the turn starts (the launcher is mocked).
+        assert db.query(Chat).filter_by(parent_id=chat_id).count() == 0
 
 
 def test_active_work_queues_followup_without_starting_second_worker(work, monkeypatch):

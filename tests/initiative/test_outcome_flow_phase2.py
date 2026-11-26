@@ -417,7 +417,54 @@ def test_proposals_empty_inbox(env, monkeypatch):
 
     monkeypatch.setattr(ip, "list_incoming_proposals", lambda limit=50: {"proposals": []})
     monkeypatch.setattr(of, "ignored_project_names", lambda: set())
-    assert "All clear" in of.handle_telegram_text("/proposals")["text"]
+    monkeypatch.setattr(of, "whatsapp_activity_text", lambda: "WhatsApp, last 24 hours:\n- MP_WebDev (Shop): 2 messages")
+    out = of.handle_telegram_text("/proposals")
+    # Never a bare "all clear": the reply shows what was checked.
+    assert "All clear" not in out["text"] and "No proposals are waiting" in out["text"]
+    assert "MP_WebDev (Shop)" in out["text"] and "ack" not in out
+
+
+@pytest.mark.parametrize("text", ["Can you take a look at what's come in on WhatsApp?",
+                                  "check whatsapp", "which project is the WhatsApp group linked to",
+                                  "anything new on WhatsApp"])
+def test_whatsapp_check_phrases_match(text):
+    assert of.is_whatsapp_check_request(text)
+
+
+@pytest.mark.parametrize("text", ["send a WhatsApp to Greg saying hi", "reply on WhatsApp: thanks",
+                                  "draft a whatsapp message", "what's the time", "WhatsApp"])
+def test_whatsapp_check_phrases_do_not_collide(text):
+    assert not of.is_whatsapp_check_request(text)
+
+
+def test_whatsapp_check_acks_then_reports_activity_and_proposals(env, proposals, monkeypatch):
+    monkeypatch.setattr(of, "whatsapp_activity_text",
+                        lambda: "WhatsApp, last 24 hours:\n- MP_WebDev (Shop): 2 messages, latest from them at 15:04")
+    out = of.handle_telegram_text("Take a look at what came in on WhatsApp", chat_id=12345)
+    assert out["ack"] == "Okay, checking WhatsApp now."
+    assert "MP_WebDev (Shop)" in out["text"] and "Fix checkout" in out["text"]
+    assert [b["text"] for b in out["reply_markup"]["inline_keyboard"][0]] == ["Accept 1", "Decline 1"]
+    assert proposals.created == [] and proposals.dismissed == []
+
+
+def test_whatsapp_activity_read_failure_is_reported_not_hidden(env, monkeypatch):
+    import distr.core.incoming.proposals as ip
+
+    monkeypatch.setattr(ip, "list_incoming_proposals", lambda limit=50: {"proposals": []})
+    monkeypatch.setattr(of, "ignored_project_names", lambda: set())
+
+    def boom():
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(of, "whatsapp_activity_text", boom)
+    text = of.handle_telegram_text("check whatsapp")["text"]
+    assert "couldn't read the WhatsApp messages" in text and "db locked" not in text
+
+
+def test_telegram_sends_ack_before_flow_reply():
+    src = (REPO / "distr/core/integrations/telegram/messages.py").read_text()
+    block = src[src.index("flow_reply = _initiative_flow_reply"):]
+    assert block.index('flow_reply["ack"]') < block.index('flow_reply.get("text") or "Done."')
 
 
 def test_telegram_ip_callback_routes_before_no_longer_available_fallback():

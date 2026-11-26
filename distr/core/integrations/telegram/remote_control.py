@@ -4,6 +4,7 @@ import difflib
 import logging
 import os
 import re
+import threading
 import time
 from typing import Optional
 
@@ -23,6 +24,8 @@ from distr.core.integrations.telegram.utils import hash_channel_id, relay_intern
 from distr.core.integrations.whatsapp import RELAY_MEDIA_CHUNK_BYTES
 
 logger = logging.getLogger(__name__)
+
+_WEBRTC_SERVER_LOCK = threading.Lock()
 
 REMOTE_STT_DIRECT_EXTS = {".wav", ".flac"}
 _CACHED_WHATSAPP_MEDIA_PATH = re.compile(r"/api/tickets/whatsapp/relay-media/[1-9]\d*\?cached_only=true")
@@ -340,11 +343,73 @@ class TelegramRemoteControlMixin:
                 "data": {"screen_number": screen_number},
             })
 
+    def _webrtc_screen_server(self):
+        """Lazily create the one live-screen WebRTC server for this desktop."""
+        with _WEBRTC_SERVER_LOCK:
+            server = getattr(self, "_webrtc_server", None)
+            if server is None:
+                from distr.core.integrations.telegram.webrtc_screen import WebRTCScreenServer
+                from distr.core.paths import IMAGES_DIR
+
+                server = WebRTCScreenServer(
+                    self._apply_webrtc_input,
+                    cursor_path=os.path.join(IMAGES_DIR, "cursor.png"),
+                )
+                self._webrtc_server = server
+            return server
+
+    def _apply_webrtc_input(self, msg: dict) -> None:
+        """Pointer input from the WebRTC data channel (already validated)."""
+        if not pyautogui:
+            return
+        with self._remote_control_lock:
+            if "x" in msg and "y" in msg:
+                self._move_mouse_to(msg["x"], msg["y"], msg.get("screen_number", 1), instant=True)
+            if msg["command"] == "mouse_down":
+                pyautogui.mouseDown(button=msg.get("button") or "left")
+            elif msg["command"] == "mouse_up":
+                pyautogui.mouseUp(button=msg.get("button") or "left")
+
+    def _dispatch_webrtc(self, data: dict) -> None:
+        """Answer a live-screen WebRTC offer, or close the session, off the input lock."""
+        command = data.get("command")
+        request_id = data.get("request_id")
+        command_data = data.get("data", {}) or {}
+        session_id = str(command_data.get("session_id") or "")
+        response = {"type": "remote_control_response", "command": command, "request_id": request_id}
+        try:
+            server = self._webrtc_screen_server()
+            if command == "webrtc_close":
+                response["data"] = {"success": True, "closed": server.close(session_id or None)}
+            else:
+                try:
+                    screen_number = int(command_data.get("screen_number") or 1)
+                except (TypeError, ValueError):
+                    screen_number = 1
+                screen = next(
+                    (s for s in self._get_screens_list() if s.get("screen_number") == screen_number),
+                    None,
+                )
+                if not screen or not (screen.get("geometry") or {}).get("width"):
+                    raise RuntimeError(f"Screen {screen_number} not found")
+                response["data"] = server.answer(
+                    command_data.get("sdp"),
+                    command_data.get("type"),
+                    screen["geometry"],
+                    session_id,
+                )
+        except Exception as exc:
+            reason = str(exc) or "Live screen setup timed out"
+            logger.warning("WebRTC %s failed: %s", command, reason)
+            response["error"] = reason
+            response["data"] = {}
+        self._send_websocket_message(response)
+
     def _handle_remote_control_command(self, data: dict):
         """
         Handle remote control commands from the server via WebSocket.
         Supported commands: list_screens, screenshot, set_mouse_position, left_click, right_click, double_click, type_text, paste_text,
-        key_up, key_down, key_enter, key_space, key_page_up, key_page_down, key_break,
+        key_up, key_down, key_enter, key_space, key_tab, key_page_up, key_page_down, key_break,
         key_select_all, key_copy, key_paste, instruction
         """
         # Emit signal for app visibility
@@ -369,6 +434,9 @@ class TelegramRemoteControlMixin:
             return
         if command == "screenshot_stream":
             self._dispatch_screenshot_stream(data)
+            return
+        if command in ("webrtc_offer", "webrtc_close"):
+            self._dispatch_webrtc(data)
             return
         if command == "remote_presence":
             try:
@@ -636,7 +704,9 @@ class TelegramRemoteControlMixin:
                     button = command_data.get("button", "left")
                     try:
                         if x is not None and y is not None and screen_number is not None:
-                            self._move_mouse_to(x, y, screen_number)
+                            self._move_mouse_to(
+                                x, y, screen_number, instant=bool(command_data.get("instant"))
+                            )
                         if pyautogui:
                             pyautogui.mouseDown(button=button)
                         self._send_websocket_message({
@@ -672,7 +742,9 @@ class TelegramRemoteControlMixin:
                     screen_number = command_data.get("screen_number")
                     if x is not None and y is not None and screen_number is not None:
                         try:
-                            self._move_mouse_to(x, y, screen_number)
+                            self._move_mouse_to(
+                                x, y, screen_number, instant=bool(command_data.get("instant"))
+                            )
                             self._send_websocket_message({
                                 "type": "remote_control_response", "command": "mouse_move",
                                 "request_id": request_id, "data": {"success": True},
@@ -1007,6 +1079,17 @@ class TelegramRemoteControlMixin:
                         {
                             "type": "remote_control_response",
                             "command": "key_space",
+                            "request_id": request_id,
+                            "data": {"success": success},
+                        }
+                    )
+
+                elif command == "key_tab":
+                    success = self._press_key("tab", take_screenshot=take_screenshot)
+                    self._send_websocket_message(
+                        {
+                            "type": "remote_control_response",
+                            "command": "key_tab",
                             "request_id": request_id,
                             "data": {"success": success},
                         }
@@ -1985,8 +2068,10 @@ class TelegramRemoteControlMixin:
             logger.error(f"Error capturing screenshot: {e}", exc_info=True)
             return {"error": str(e), "screen_number": screen_number}
 
-    def _move_mouse_to(self, x: int, y: int, screen_number: int):
-        """Move mouse to absolute coordinates with smooth animation. Used for drag operations."""
+    def _move_mouse_to(self, x: int, y: int, screen_number: int, instant: bool = False):
+        """Move mouse to absolute coordinates with smooth animation. Used for drag operations.
+
+        ``instant`` skips the animation, for live pointer tracking (WebRTC view)."""
         if not pyautogui:
             return
         # Minimal validation — clamp to screen bounds
@@ -2001,7 +2086,7 @@ class TelegramRemoteControlMixin:
         cx, cy = pyautogui.position()
         dist = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
         # ~0.3s for short drags, up to ~0.8s for long cross-screen drags
-        duration = min(0.8, max(0.2, dist / 2000))
+        duration = 0 if instant else min(0.8, max(0.2, dist / 2000))
         pyautogui.moveTo(x, y, duration=duration, _pause=False)
 
     def _set_mouse_position(

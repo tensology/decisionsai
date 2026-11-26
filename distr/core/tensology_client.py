@@ -577,6 +577,22 @@ def _tensology_thread_identity(ticket: dict[str, Any]) -> str:
     )
 
 
+def _root_thread_id(chat_id: int) -> int:
+    """A ticket can point at a reply turn inside a thread; follow-ups belong to the thread itself."""
+    from distr.core.db import Chat, get_session
+
+    seen: set[int] = set()
+    current = int(chat_id)
+    with get_session() as db:
+        while current not in seen:
+            seen.add(current)
+            row = db.get(Chat, current)
+            if row is None or row.parent_id is None:
+                return current
+            current = int(row.parent_id)
+    return current
+
+
 def _existing_tensology_thread(ticket: dict[str, Any]) -> int | None:
     """Dedupe by Tensology ticket: a thread already claimed for this ticket is never recreated."""
     from distr.core.db import get_session
@@ -585,10 +601,10 @@ def _existing_tensology_thread(ticket: dict[str, Any]) -> int | None:
 
     reused = find_thread_for_tensology_ticket(ticket)
     if reused is not None:
-        return int(reused)
+        return _root_thread_id(int(reused))
     claimed = str(ticket.get("decisions_thread_id") or "").strip()
     if claimed.isdigit():
-        return int(claimed)
+        return _root_thread_id(int(claimed))
     identity = _tensology_thread_identity(ticket)
     if not identity:
         return None
