@@ -2534,9 +2534,43 @@ def widen_routes_with_sitemap(root: Path, routes: list[dict[str, str]], context:
         if row is None:
             continue
         key = _resolve_template_key(str(node.get("template") or ""), templates) if node.get("template") else None
-        cue = _template_cue(templates[key]["text"]) if key else None
+        cue = _compose_template_cue(key, templates) if key else None
         if cue and row["url"] not in context["template_cues"]:
             cue["path"] = templates[key]["path"]
             context["template_cues"][row["url"]] = cue
             stats["template_cues"] += 1
     return stats
+
+
+MAX_EXTENDS_DEPTH = 5
+
+
+def _compose_template_cue(key: str, templates: dict[str, dict[str, str]]) -> dict[str, Any] | None:
+    """A page's cue from its whole inheritance chain: base shell, then the page.
+
+    A page is a composition - `{% extends "base.html" %}` plus its blocks - so the
+    shell (header, nav, footer) and the page's own fields both belong in the
+    stencil. Reading only the page's own template is why stencils render without a
+    nav or a footer.
+    """
+    chain: list[str] = []
+    seen: set[str] = set()
+    current = key
+    while current and current not in seen and len(chain) < MAX_EXTENDS_DEPTH:
+        seen.add(current)
+        chain.append(current)
+        parent = templates.get(current, {}).get("extends") or ""
+        current = _resolve_template_key(parent, templates) if parent else None
+
+    composed: dict[str, Any] | None = None
+    # Outermost base first, so the page's own content wins on merge.
+    for item_key in reversed(chain):
+        text = templates.get(item_key, {}).get("text") or ""
+        cue = _template_cue(text)
+        if not cue:
+            continue
+        if composed is None:
+            composed = cue
+        else:
+            _merge_cues(composed, cue)
+    return composed
