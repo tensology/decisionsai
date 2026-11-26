@@ -55,6 +55,8 @@ DEFAULTS = {
     "initiative_owner_whatsapp": "",
     # Debug mode: the platform watching its own friction. Off by default.
     "orchestrator_debug_enabled": False,
+    # Where the project's app is served, for reading a rendered page. Empty = skip.
+    "planning_dev_server_url": "",
 }
 
 
@@ -79,6 +81,7 @@ class _InitiativePayload(BaseModel):
     initiative_own_channel: str = ""
     initiative_owner_whatsapp: str = ""
     orchestrator_debug_enabled: bool = False
+    planning_dev_server_url: str = ""
 
 
 class _AssistantChannelAnswer(BaseModel):
