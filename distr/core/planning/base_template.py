@@ -273,6 +273,27 @@ def to_css(base: BaseTemplate) -> str:
         lines.append(".wf-button--primary { background: transparent; border: 1px solid var(--wf-color-accent); color: var(--wf-color-accent); }")
     else:
         lines.append(".wf-button--primary { background: var(--wf-color-accent); color: var(--wf-color-surface); border: 0; }")
+
+    # The renderer already emits each node's type as a class (class="node ..."),
+    # so the base template can style the real components. Without this the base
+    # governed only <body>: links stayed browser-blue and headings browser-sized,
+    # which is why a stencil looked like a default page rather than the product.
+    lines.append("")
+    lines.append(".node.heading > .label { font-size: var(--wf-font-size-5); font-weight: var(--wf-font-weight-strong); }")
+    lines.append(".node.text, .node.content { color: var(--wf-color-ink); font-size: var(--wf-font-size-3); }")
+    lines.append(".node.link a { color: var(--wf-color-accent); text-decoration: none; }")
+    lines.append(".node.link a:hover { text-decoration: underline; }")
+    lines.append(".node.button button, .node.button .button-link {")
+    lines.append("  background: var(--wf-color-accent); color: var(--wf-color-surface); border: 0;")
+    lines.append("  border-radius: var(--wf-radius-1); padding: 6px 14px; font: inherit; cursor: pointer; }")
+    lines.append(".node.input input, .node.select select, .node.textarea textarea, .node.password input {")
+    lines.append("  border: 1px solid var(--wf-color-line); border-radius: var(--wf-radius-1);")
+    lines.append("  padding: 6px 8px; font: inherit; color: var(--wf-color-ink); background: var(--wf-color-surface); }")
+    lines.append(".node .label { color: var(--wf-color-muted); font-size: var(--wf-font-size-1); }")
+    lines.append(".node.table table, .node.grid table { border-collapse: collapse; width: 100%; }")
+    lines.append(".node.table th, .node.table td { border-bottom: 1px solid var(--wf-color-line); padding: 6px 8px; }")
+    lines.append(".node.divider { border-top: 1px solid var(--wf-color-line); }")
+    lines.append(".node.image, .node.avatar { border-radius: var(--wf-radius-2); overflow: hidden; }")
     return "\n".join(lines) + "\n"
 
 

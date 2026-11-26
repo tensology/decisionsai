@@ -101,10 +101,13 @@ def test_css_exposes_tokens_as_custom_properties():
 
 
 def test_the_form_standard_changes_the_css():
+    """The form contract switches the FIELD rule, not just any 'label' string."""
     legend = bt.to_css(bt.parse_base({"contracts": {"form.field": "legend"}}))
     label = bt.to_css(bt.parse_base({"contracts": {"form.field": "label"}}))
-    assert "legend {" in legend and "label {" not in legend
-    assert "label {" in label and "legend {" not in label
+    assert "legend {" in legend
+    assert "\nlabel {" not in legend
+    assert "\nlabel {" in label
+    assert "legend {" not in label
 
 
 def test_table_density_changes_the_css():
@@ -133,3 +136,24 @@ def test_for_page_loads_and_overrides_in_one_call():
     page = bt.for_page(None, {"tokens": {"color.accent": "#000000"}})
     assert page.tokens["color.accent"] == "#000000"
     assert page.tokens["color.ink"] == bt.DEFAULT_TOKENS["color.ink"]
+
+
+def test_the_base_template_reaches_the_renderers_own_classes():
+    """The renderer emits each node's type as a class, so the base can style it.
+
+    Without this the base governed only <body>: links stayed browser-blue and
+    headings browser-sized, which is why a stencil looked like a default page.
+    """
+    css = bt.to_css(bt.default_base())
+    for selector in (".node.heading", ".node.link a", ".node.button button", ".node.input input", ".node.table"):
+        assert selector in css, selector
+    # and they use the tokens, not literals
+    assert "var(--wf-color-accent)" in css
+    assert "var(--wf-font-size-5)" in css
+
+
+def test_the_form_standard_reaches_the_rendered_fields():
+    legend = bt.to_css(bt.parse_base({"contracts": {"form.field": "legend"}}))
+    label = bt.to_css(bt.parse_base({"contracts": {"form.field": "label"}}))
+    assert "fieldset { border" in legend
+    assert "fieldset { border: 0" in label
