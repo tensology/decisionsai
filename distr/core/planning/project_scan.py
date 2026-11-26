@@ -10,6 +10,7 @@ in wireframes, ERD, and requirements.
 from __future__ import annotations
 
 import ast
+import logging
 import hashlib
 from html import unescape
 import json
@@ -32,6 +33,8 @@ _BUTTON_TEXT = re.compile(
     r"""|["'](?:submit|label|children)["']\s*:\s*["']([^"']{2,40})["']""",
     re.IGNORECASE,
 )
+logger = logging.getLogger(__name__)
+
 _SKIP_DIR = {
     ".git",
     "node_modules",
@@ -2538,6 +2541,60 @@ def _template_cue(text: str) -> dict[str, Any] | None:
     cue["headings"] = cue["headings"][:6]
     cue["links"] = cue["links"][:4]
     return cue
+
+
+def enrich_cues_from_dom(
+    context: dict[str, Any],
+    base_url: str,
+    *,
+    limit: int = 40,
+    timeout_ms: int = 8000,
+) -> int:
+    """Fill cues from the rendered DOM, for pages source cannot describe.
+
+    The i18n case: `Home.tsx` says `<h2>{copy.moreTitle}</h2>`, so a static
+    extractor sees nothing and the strings only exist after the app resolves them.
+    Only pages whose cue is thin are rendered - this is the expensive path.
+
+    Never raises: no browser, no server, a slow page all mean no enrichment.
+    """
+    if not base_url:
+        return 0
+    try:
+        from distr.core.planning import dom_cues
+
+        if not dom_cues.available():
+            return 0
+        thin: list[str] = []
+        for url, cue in (context.get("template_cues") or {}).items():
+            if cue.get("observed"):
+                continue
+            if len(cue.get("fields") or []) + len(cue.get("headings") or []) >= 3:
+                continue
+            thin.append(url)
+        thin.extend(
+            str(row.get("url") or "")
+            for row in (context.get("_routes") or [])
+            if str(row.get("url") or "") and str(row.get("url")) not in (context.get("template_cues") or {})
+        )
+        wanted = [url for url in dict.fromkeys(thin) if url][:limit]
+        if not wanted:
+            return 0
+        observed = dom_cues.read_routes(base_url, wanted, limit=limit, timeout_ms=timeout_ms)
+        changed = 0
+        for url, cue in observed.items():
+            existing = (context.get("template_cues") or {}).get(url)
+            if existing:
+                context["template_cues"][url] = dom_cues.merge_into(existing, cue)
+            else:
+                context["template_cues"][url] = cue
+            changed += 1
+        if changed:
+            logger.info("scan: enriched %d cue(s) from the rendered DOM", changed)
+        return changed
+    except Exception:
+        logger.debug("scan: DOM enrichment skipped", exc_info=True)
+        return 0
 
 
 def widen_routes_with_sitemap(root: Path, routes: list[dict[str, str]], context: dict[str, Any]) -> dict[str, int]:
