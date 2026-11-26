@@ -140,3 +140,69 @@ def test_a_broken_project_does_not_raise(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_p.Path, "rglob", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     assert sd.detect_stacks(tmp_path) == []
+
+
+# ------------------------------------------------------------------ react pages
+
+def _react_app(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({"dependencies": {"react": "^19"}}))
+    src = tmp_path / "src"
+    pages = src / "pages"
+    pages.mkdir(parents=True, exist_ok=True)
+    (src / "App.tsx").write_text(
+        "const [path] = useState(window.location.pathname);\n"
+        "if (path === '/contact') { return <Contact/> }\n"
+        "if (path === '/about-us') { return <About/> }\n"
+    )
+    (pages / "Contact.tsx").write_text(
+        "<form>\n  <input name='name' label='Name' />\n  <input type='email' name='email' label='Email' />\n"
+        "  <button>Send</button>\n</form>\n<h1>Contact us</h1>\n"
+    )
+    (pages / "About.tsx").write_text("<h1>About us</h1><p>Who we are</p>\n")
+    return tmp_path
+
+
+def test_react_pages_are_found_with_their_routes(tmp_path):
+    from distr.core.planning import project_scan as ps
+
+    _react_app(tmp_path)
+    rows = ps.scan_react_pages(tmp_path)
+    by_title = {r["title"]: r for r in rows}
+    assert "Contact" in by_title and "About" in by_title
+    # the hand-rolled router's paths are claimed
+    assert by_title["Contact"]["url"] == "/contact"
+
+
+def test_a_react_page_carries_a_real_cue(tmp_path):
+    """The cue extractor already reads JSX - it just has to be pointed at the app."""
+    from distr.core.planning import project_scan as ps
+
+    _react_app(tmp_path)
+    contact = next(r for r in ps.scan_react_pages(tmp_path) if r["title"] == "Contact")
+    cue = contact["cue"]
+    assert "Name" in cue["fields"] and "Email" in cue["fields"]
+    assert cue["types"].get("Email") == "email"
+    assert "Send" in cue["buttons"]
+
+
+def test_the_widening_stencils_from_the_react_stack(tmp_path):
+    """When the pages live in another stack, the scan stencils from there."""
+    from distr.core.planning import project_scan as ps
+
+    _react_app(tmp_path)
+    routes: list = []
+    context: dict = {}
+    stats = ps.widen_routes_with_sitemap(tmp_path, routes, context)
+    assert stats["template_cues"] >= 1
+    cues = ps._observed_cues(context)
+    assert any(ps._cue_has_content(c) for c in cues.values())
+
+
+def test_a_project_with_no_pages_dir_falls_back_to_src(tmp_path):
+    from distr.core.planning import project_scan as ps
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "Thing.tsx").write_text("<h1>Thing</h1>")
+    rows = ps.scan_react_pages(tmp_path)
+    assert [r["title"] for r in rows] == ["Thing"]

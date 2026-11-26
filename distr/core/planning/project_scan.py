@@ -343,6 +343,73 @@ def _django_declarations(node: ast.ClassDef) -> dict[str, ast.AST | None]:
     return declarations
 
 
+_PAGE_DIRS = ("pages", "views", "screens", "routes")
+_PATH_COMPARE = re.compile(r"""(?:currentPath|path|pathname|location\.pathname)\s*(?:===|==|startsWith\()\s*['"]([^'"]+)['"]""")
+MAX_REACT_PAGES = 120
+
+
+def scan_react_pages(project_root: Path, *, cues: bool = True) -> list[dict[str, Any]]:
+    """Page components in a JS/TS app, with the route each one answers.
+
+    The cue extractor already reads JSX, so a React page needs no new parser -
+    it needs the scan to look at the app instead of the API beside it.
+
+    Routes come from the router when it is a table, and from path comparisons
+    when it is hand-rolled (`if (currentPath === '/x')`), which is common enough
+    to matter. A page with no discoverable route still gets a row, because the
+    component is the page.
+    """
+    root = Path(project_root)
+    out: list[dict[str, Any]] = []
+    try:
+        candidates = [
+            p for p in root.rglob("*")
+            if p.is_file() and p.suffix.lower() in (".tsx", ".jsx", ".vue", ".svelte")
+            and not any(part in _SKIP_DIR or part.startswith(".") for part in p.relative_to(root).parts)
+        ]
+    except Exception:
+        return out
+
+    # Routes declared anywhere in the app, so a page can claim one.
+    declared: dict[str, str] = {}
+    for path in candidates:
+        if path.name in ("App.tsx", "App.jsx", "routes.tsx", "routes.jsx", "main.tsx"):
+            for found in _PATH_COMPARE.findall(_read_text_prefix(path, 120_000)):
+                route = "/" + found.strip("/")
+                if route != "/" and route not in declared:
+                    declared[route] = route
+
+    pages = [p for p in candidates if any(part in _PAGE_DIRS for part in p.relative_to(root).parts)]
+    if not pages:
+        # No conventional pages dir: fall back to components under src/.
+        pages = [p for p in candidates if "src" in p.relative_to(root).parts]
+
+    for path in sorted(pages)[:MAX_REACT_PAGES]:
+        source = _read_text_prefix(path, 80_000)
+        title = _title(re.sub(r"[._-]+", " ", path.stem))
+        if title.lower() in {"index", "app", "main", "routes"}:
+            continue
+        slug = _slugify(path.stem)
+        route = next((r for r in declared if r.rstrip("/").endswith("/" + slug) or r.rstrip("/") == "/" + slug), "")
+        row: dict[str, Any] = {
+            "url": route or f"/{slug}",
+            "name": slug,
+            "view": path.stem,
+            "title": title,
+            "group": _group_for_route(route or f"/{slug}", slug),
+            "source": path.relative_to(root).as_posix(),
+        }
+        if cues:
+            row["cue"] = _extract_screen_cues(source)
+        out.append(row)
+    return out
+
+
+def _slugify(value: str) -> str:
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "-", str(value or ""))
+    return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", text.lower())).strip("-") or "page"
+
+
 def scan_django_models(project_root: Path, *, with_fields: bool = False) -> list[dict[str, Any]]:
     """Parse Django model classes and relations without importing Django."""
     entities: dict[str, dict[str, Any]] = {}
@@ -2429,6 +2496,28 @@ def widen_routes_with_sitemap(root: Path, routes: list[dict[str, str]], context:
     except Exception:  # noqa: BLE001 - widening is best effort; the plain route scan still works
         return stats
     by_norm = {_normalize_route(row["url"]): row for row in routes}
+    # If the project's pages live in another stack, stencil from there. Tensology's
+    # Django side is an API; its pages are 57 React components.
+    try:
+        from distr.core.planning import stack_detect
+
+        page_stack = stack_detect.page_stack(root)
+        if page_stack and page_stack.name in ("react", "vue", "svelte"):
+            app_root = Path(page_stack.root)
+            existing = {_normalize_route(row["url"]) for row in routes}
+            for row in scan_react_pages(app_root):
+                norm = _normalize_route(row["url"])
+                cue = row.pop("cue", None)
+                if norm not in existing and len(routes) < _MAX_WIDEN_ROUTES:
+                    routes.append(row)
+                    existing.add(norm)
+                    stats["routes_added"] += 1
+                if cue and _cue_has_content(cue) and norm not in context["template_cues"]:
+                    context["template_cues"][norm] = cue
+                    stats["template_cues"] += 1
+    except Exception:
+        logger.debug("scan: react page widening skipped", exc_info=True)
+
     for node in sitemap.get("nodes") or []:
         if node.get("kind") != "page" or not node.get("route"):
             continue
