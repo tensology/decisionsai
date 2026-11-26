@@ -1,0 +1,12 @@
+{
+  "name": "login-form",
+  "kind": "widget",
+  "title": "Login form",
+  "scope": "global",
+  "tags": [
+    "auth",
+    "form"
+  ],
+  "description": "Email + password with a submit action.",
+  "wire": "form\n  text \"Email\"\n  password \"Password\"\n  checkbox \"Remember me\"\nbutton \"Sign in\" variant=primary"
+}

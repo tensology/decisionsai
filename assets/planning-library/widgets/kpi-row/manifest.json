@@ -1,0 +1,12 @@
+{
+  "name": "kpi-row",
+  "kind": "widget",
+  "title": "KPI row",
+  "scope": "global",
+  "tags": [
+    "dashboard",
+    "metrics"
+  ],
+  "description": "A row of headline metrics.",
+  "wire": "row\n  content \"Total\"\n  content \"Active\"\n  content \"Overdue\"\n  content \"This week\""
+}

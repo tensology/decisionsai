@@ -1,0 +1,13 @@
+{
+  "name": "settings-page",
+  "kind": "page-template",
+  "title": "Settings page",
+  "scope": "global",
+  "tags": [
+    "settings",
+    "page",
+    "form"
+  ],
+  "description": "App shell + a form page. Inherits the base template's form standard.",
+  "wire": "screen \"Settings\" id=settings route=/settings\n  heading \"Settings\"\n  form\n    text \"Display name\"\n    text \"Email\"\n  button \"Save\" variant=primary"
+}

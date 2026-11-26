@@ -1,0 +1,12 @@
+{
+  "name": "dashboard-page",
+  "kind": "page-template",
+  "title": "Dashboard page",
+  "scope": "global",
+  "tags": [
+    "dashboard",
+    "page"
+  ],
+  "description": "App shell + KPI row + data table. Inherits the base template.",
+  "wire": "screen \"Dashboard\" id=dashboard route=/dashboard\n  heading \"Dashboard\"\n  row\n    content \"Total\"\n    content \"Active\"\n    content \"Overdue\"\n  table\n    text \"Name\"\n    text \"Status\""
+}

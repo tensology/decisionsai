@@ -1,0 +1,12 @@
+{
+  "name": "data-table",
+  "kind": "widget",
+  "title": "Data table",
+  "scope": "global",
+  "tags": [
+    "table",
+    "list"
+  ],
+  "description": "Tabular list with a header row and paging controls.",
+  "wire": "table\n  text \"Name\"\n  text \"Status\"\n  text \"Owner\"\nrow\n  button \"Previous\"\n  button \"Next\""
+}

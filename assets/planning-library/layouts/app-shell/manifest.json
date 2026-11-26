@@ -1,0 +1,17 @@
+{
+  "name": "app-shell",
+  "kind": "layout",
+  "title": "App shell",
+  "scope": "global",
+  "tags": [
+    "layout",
+    "nav"
+  ],
+  "slots": [
+    "header",
+    "body",
+    "footer"
+  ],
+  "description": "Head + footer shell with a nav region and a content region.",
+  "wire": "heading \"App\"\nrow\n  link \"Home\" route=/\n  link \"Projects\" route=/projects\n  link \"Settings\" route=/settings\ndivider\ncontent \"Page content\""
+}

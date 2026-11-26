@@ -1,0 +1,12 @@
+{
+  "name": "default-base",
+  "kind": "base-template",
+  "title": "Default base template",
+  "scope": "global",
+  "tags": [
+    "base",
+    "tokens"
+  ],
+  "description": "Type scale, colour, spacing, form standard, table styling and grid that every page inherits.",
+  "wire": "screen \"Base\"\n  heading \"Base template\"\n  text \"Tokens + component contracts + grid. Pages inherit; override by exception.\""
+}

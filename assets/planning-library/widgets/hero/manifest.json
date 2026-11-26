@@ -1,0 +1,12 @@
+{
+  "name": "hero",
+  "kind": "widget",
+  "title": "Hero",
+  "scope": "global",
+  "tags": [
+    "marketing",
+    "hero"
+  ],
+  "description": "Headline, supporting copy and a primary call to action.",
+  "wire": "heading \"Headline\"\ntext \"Supporting copy that explains the value in one line.\"\nbutton \"Get started\" variant=primary"
+}

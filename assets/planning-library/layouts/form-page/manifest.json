@@ -1,0 +1,16 @@
+{
+  "name": "form-page",
+  "kind": "layout",
+  "title": "Form page",
+  "scope": "global",
+  "tags": [
+    "layout",
+    "form"
+  ],
+  "slots": [
+    "fields",
+    "actions"
+  ],
+  "description": "Single-column form governed by the base template's form standard.",
+  "wire": "heading \"Form\"\nform\n  text \"Name\"\n  text \"Email\"\n  textarea \"Notes\"\nrow\n  button \"Cancel\"\n  button \"Save\" variant=primary"
+}
