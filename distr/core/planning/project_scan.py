@@ -1575,6 +1575,13 @@ _RENDER_TEMPLATE = re.compile(
     r"""(?:render|TemplateResponse)\(\s*[^,\n]+,\s*['\"]([^'\"]+\.html)['\"]"""
 )
 _TEMPLATE_ATTR = re.compile(r"""template_name\s*=\s*['\"]([^'\"]+\.html)['\"]""")
+# A view that answers with data is an endpoint, not a page. Stencilling those is
+# what fills the canvas with blank boxes.
+_JSON_RESPONSE = re.compile(r"\bJsonResponse\b|\bJSONResponse\b|rest_framework\.responses\.Response")
+# A Django page view names a template (or renders markup). A view that does
+# neither answers with data, however it is spelled - a project-local
+# api_response() helper is just as much an endpoint as JsonResponse.
+_MARKUP_HINT = re.compile(r"\.html\b|<html|<body|<div|<form|<table|<section")
 _REDIRECT_TARGET = re.compile(
     r"""(?:redirect|HttpResponseRedirect|HttpResponsePermanentRedirect)\(\s*(?:reverse\(\s*)?['\"]([^'\"]+)['\"]"""
 )
@@ -1793,6 +1800,13 @@ def _parse_views(files: list[Path], root: Path) -> dict[str, dict[str, Any]]:
                 "kind": kind,
                 "template": template,
                 "explicit_template": explicit,
+                # A page view names a template. A view that does not, and that
+                # renders no markup, is an endpoint - whether it uses
+                # JsonResponse or a project-local api_response() helper.
+                "endpoint": bool(
+                    not template
+                    and (_JSON_RESPONSE.search(body) or not _MARKUP_HINT.search(body))
+                ),
                 "auth": auth,
                 "success": _REDIRECT_TARGET.findall(success),
                 "failure": _REDIRECT_TARGET.findall(failure),
@@ -1997,11 +2011,22 @@ def build_html_sitemap(project_root: Path | str, *, _python_routes: dict | None 
     scaffold_templates = {item["template"] for item in scaffolding}
 
     pages: list[dict[str, Any]] = []
+    endpoints: list[dict[str, Any]] = []
     for row in urls:
         view = views.get(row["view"])
         template_name = view["template"] if view else ""
         explicit = bool(view and view.get("explicit_template") and template_name)
         inferred = False
+        if view and view.get("endpoint"):
+            # An endpoint is not a page. Stencilling it produced a blank box with
+            # "No fields or sections were found", which is noise, not a gap.
+            endpoints.append({
+                "route": row["route"], "url_name": row["url_name"], "view": row["view"],
+                "source": row["source"], "line": row.get("line"),
+                "declared_route": row.get("declared_route", row["route"]),
+                "methods": row.get("methods"),
+            })
+            continue
         if view and not template_name:
             guessed = _resolve_template_key(f"{row['view']}.html", templates)
             if guessed:
@@ -2221,6 +2246,9 @@ def build_html_sitemap(project_root: Path | str, *, _python_routes: dict | None 
         "nodes": nodes,
         "edges": edges,
         "scaffolding": scaffolding,
+        # Routes that answer with data rather than markup. Reported so the UI can
+        # say "62 pages, 19 endpoints" instead of drawing blank page boxes.
+        "endpoints": endpoints,
         'python_route_stats': _python_routes['stats'],
         'limitations': _python_routes['limitations'],
         'omitted_node_count': omitted_node_count,
