@@ -112,6 +112,34 @@ existing path, made to work rather than replaced.
 **Exit:** structure coverage rises sharply; `/locale/` renders its real fields and
 buttons.
 
+### P2 - Read the rendered DOM (DONE, mechanism verified)
+
+`dom_cues.py` reads headings, fields (aria-label, placeholder, name, or a wrapping
+label), buttons, links, landmarks and table columns from a rendered page. Bounded
+(one browser, a page budget, a hard timeout, stops at the first hard failure) and
+**fail-closed** - no Playwright, no server, a slow page or a crash all mean no cue,
+never a guessed one. A DOM cue carries `observed: True`, because a rendered page
+is evidence of what a user sees, not of what the developer intended.
+
+`enrich_cues_from_dom()` renders **only pages whose source cue is thin** (fewer
+than 3 fields+headings), so the expensive path is not spent on pages already
+described. Source wins where it spoke; the DOM fills the gaps.
+
+Verified against a real running page (the app's own `/settings`):
+`headings ['Listening State on Start Up', 'Input and Output']`,
+`fields ['show_splash_video', ...]`, `buttons ['Update and restart']`,
+`regions ['header', 'nav']`.
+
+**Not yet exercised end to end on Tensology**, because its React app is not
+running - the mechanism is proven, the wiring wants a served app to point at.
+
+### P2b - Point it at a served app (NEXT)
+
+The enrichment is written and tested; what it lacks is a base URL for the project
+being scanned. Options, cheapest first: a per-project dev-server URL in settings;
+a start-the-app step in the scan; or running it only when the operator says the
+app is up. This is a wiring decision, not an algorithm one.
+
 ### P2 - Screenshots for what source cannot tell us
 For routes that still resolve to nothing - dynamic pages, client-rendered apps -
 drive the page with Playwright (the `interface-shots` path already exists) and
