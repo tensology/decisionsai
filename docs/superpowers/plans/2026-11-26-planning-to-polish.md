@@ -174,6 +174,50 @@ P6 is the interaction. P7 is the payoff. P8 is what separates "works" from
 
 P0 is deliberately first and cheap: it replaces guessing with a measured list.
 
+## Render analysis (what the output actually is)
+
+Rendered the plan's real wire through the real renderer with the base template's
+CSS, and looked at it.
+
+**The overview screen** is a grouped link list - "Tensology journey map / 53 routes
+observed / Pages: Locale, Availability, Identity, ... / Core / Account / Support".
+That is a *sitemap*, and it is the one thing that reads correctly.
+
+**Every page stencil is this, in full:**
+
+```
+screen "Locale (stale)" device=desktop route="/locale/"
+  stack
+    heading "Locale"
+    text "Route /locale/ · group Pages"
+    text "No fields or sections were found in this route's own template."
+```
+
+A heading and two lines of prose. Not a stencil.
+
+**Five things wrong, in order of importance:**
+
+1. **The stencils are empty by construction** (P1) - the cue extraction never
+   runs for this stack, so there is nothing to draw. Everything else is
+   secondary to this.
+2. **The base template barely shows.** The render looks like browser defaults -
+   Times, blue underlined links. `to_css()` emits vars and rules for `.wf-grid`,
+   `table`, `fieldset`, `content`, but the wireframe's own stylesheet wins. **The
+   base template is not actually governing the render**, which is the whole point
+   of P4. This is a real bug, not a polish item.
+3. **The wire is stale.** It says "53 routes observed"; the classifier now reports
+   14 pages + 40 endpoints. The screens carry "(stale)" labels and `# @stale`
+   markers. A plan can be shown as current when it is not.
+4. **A page is not a page.** The overview is a *sitemap* and the pages are
+   *stubs*, but they render in the same surface with the same affordances, so
+   there is no way to tell "here is the map" from "here is a page".
+5. **Nothing is interactive.** No drop targets, no grid overlay, no drag. Reading
+   only.
+
+**What that means for order:** P4 (the base template actually governing the
+render) is not a later phase - it is broken now and sits directly under P1,
+because a correct stencil still has to be *rendered* by something.
+
 ## What is already in place (do not rebuild)
 
 - Library, base template, pages, sitemap model, tickets as component diffs.
