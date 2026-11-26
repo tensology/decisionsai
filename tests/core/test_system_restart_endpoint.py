@@ -14,15 +14,19 @@ def client():
     return TestClient(app)
 
 
-def test_restart_returns_before_restarting(client, monkeypatch):
-    """The response must be produced first, or the app quits mid-request."""
+def test_restart_emits_the_signal_directly(client, monkeypatch):
+    """The signal must be emitted synchronously.
+
+    A QTimer.singleShot on the asyncio thread never fires (there is no Qt event
+    loop there), which made the endpoint answer 200 and restart nothing.
+    """
     import distr.core.signals as signals
 
     fired = []
-    monkeypatch.setattr(signals.signal_manager, "restart_app", type("S", (), {"emit": lambda self: fired.append(1)})())
-    # QTimer.singleShot is stubbed to run immediately so the signal is observable.
-    import PyQt6.QtCore as qtcore
-    monkeypatch.setattr(qtcore.QTimer, "singleShot", staticmethod(lambda ms, fn: fn()))
+    monkeypatch.setattr(
+        signals.signal_manager, "restart_app",
+        type("S", (), {"emit": lambda self: fired.append(1)})(),
+    )
 
     body = client.post("/api/system/restart").json()
     assert body == {"success": True, "restarting": True}
@@ -30,10 +34,8 @@ def test_restart_returns_before_restarting(client, monkeypatch):
 
 
 def test_restart_never_raises_when_the_signal_is_missing(client, monkeypatch):
-    import PyQt6.QtCore as qtcore
     import distr.core.signals as signals
 
-    monkeypatch.setattr(qtcore.QTimer, "singleShot", staticmethod(lambda ms, fn: fn()))
     monkeypatch.delattr(signals.signal_manager, "restart_app", raising=False)
 
     body = client.post("/api/system/restart").json()

@@ -84,20 +84,16 @@ def create_routes() -> APIRouter:
         external kill is not a restart - it is an outage.
         """
         try:
-            from PyQt6.QtCore import QTimer
-
             from distr.core.signals import signal_manager
 
-            def _request_restart() -> None:
-                try:
-                    signal_manager.restart_app.emit()
-                except Exception:
-                    logger.warning("Restart signal could not be emitted", exc_info=True)
-
-            # Reply first, then restart on the Qt thread so the response is not
-            # cut off mid-flight by the app quitting.
-            QTimer.singleShot(300, _request_restart)
             logger.info("Restart requested via /api/system/restart")
+            # Emit directly rather than through QTimer: this runs on the asyncio
+            # thread, which has no Qt event loop, so a QTimer.singleShot here never
+            # fires (observed - the endpoint answered and nothing restarted). Qt
+            # delivers the signal to the Qt thread as a queued connection, and
+            # restart_app() itself waits 1500ms before quitting, so this response
+            # still reaches the caller.
+            signal_manager.restart_app.emit()
             return {"success": True, "restarting": True}
         except Exception as exc:
             logger.error("Restart request failed: %s", exc, exc_info=True)
