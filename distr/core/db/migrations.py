@@ -1822,6 +1822,7 @@ def run_migrations():
         ("initiative_suggestion_budget_per_day", "INTEGER DEFAULT 6"),
         ("initiative_interrupt_threshold", "FLOAT DEFAULT 0.85"),
         ("initiative_visual_capture_seconds", "INTEGER DEFAULT 900"),
+        ("incoming_proposals_auto_accept_projects", "VARCHAR DEFAULT '[]'"),
     ]
     for col_name, col_type in initiative_columns:
         try:

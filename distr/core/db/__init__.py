@@ -401,6 +401,10 @@ class Settings(Base):
     initiative_suggestion_budget_per_day = Column(Integer, default=6)
     initiative_interrupt_threshold = Column(Float, default=0.85)
     initiative_visual_capture_seconds = Column(Integer, default=900)
+    # JSON list of project names whose incoming proposals are auto-accepted.
+    # Was read from settings but never had a column, so it could only ever be the
+    # hardcoded default and could not be changed.
+    incoming_proposals_auto_accept_projects = Column(String, default='[]')
     
     # Chat voice/speaker toggle
     chat_voice_enabled = Column(Boolean, default=True)
@@ -889,6 +893,7 @@ try:
                 ("initiative_suggestion_budget_per_day", "INTEGER DEFAULT 6"),
                 ("initiative_interrupt_threshold", "FLOAT DEFAULT 0.85"),
                 ("initiative_visual_capture_seconds", "INTEGER DEFAULT 900"),
+                ("incoming_proposals_auto_accept_projects", "VARCHAR DEFAULT '[]'"),
                 # Google Gemini provider
                 ("gemini_enabled", "BOOLEAN DEFAULT 0"),
                 ("gemini_key", "VARCHAR DEFAULT ''"),

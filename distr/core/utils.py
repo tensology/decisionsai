@@ -227,6 +227,7 @@ def save_settings_to_db(settings_dict: Dict[str, Any]) -> None:
             'monk_sites',
             'monk_schedule',
             'development_hot_corner_pinned_project_ids',
+            'incoming_proposals_auto_accept_projects',
         ):
             if json_list_field in normalized_settings and not isinstance(normalized_settings[json_list_field], str):
                 normalized_settings[json_list_field] = json.dumps(normalized_settings[json_list_field])
@@ -295,6 +296,7 @@ def load_settings_from_db() -> Dict[str, Any]:
                         'monk_sites',
                         'monk_schedule',
                         'development_hot_corner_pinned_project_ids',
+                        'incoming_proposals_auto_accept_projects',
                     ] and value:
                         try:
                             value = json.loads(value)
