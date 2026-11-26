@@ -9,5 +9,9 @@
     "form"
   ],
   "description": "App shell + a form page. Inherits the base template's form standard.",
-  "wire": "screen \"Settings\" id=settings route=/settings\n  heading \"Settings\"\n  form\n    text \"Display name\"\n    text \"Email\"\n  button \"Save\" variant=primary"
+  "wire": "screen \"Settings\" id=settings route=/settings\n  heading \"Settings\"\n  form\n    text \"Display name\"\n    text \"Email\"\n  button \"Save\" variant=primary",
+  "components": [
+    "app-shell",
+    "form-page"
+  ]
 }

@@ -8,5 +8,9 @@
     "list"
   ],
   "description": "A table on the left, the selected record on the right.",
-  "wire": "screen \"Records\" id=records route=/records\n  heading \"Records\"\nrow\n  table\n    text \"Name\"\n    text \"Status\"\n  content \"Selected record details\""
+  "wire": "screen \"Records\" id=records route=/records\n  heading \"Records\"\nrow\n  table\n    text \"Name\"\n    text \"Status\"\n  content \"Selected record details\"",
+  "components": [
+    "app-shell",
+    "data-table"
+  ]
 }

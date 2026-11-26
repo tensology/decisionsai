@@ -8,5 +8,10 @@
     "page"
   ],
   "description": "App shell + KPI row + data table. Inherits the base template.",
-  "wire": "screen \"Dashboard\" id=dashboard route=/dashboard\n  heading \"Dashboard\"\n  row\n    content \"Total\"\n    content \"Active\"\n    content \"Overdue\"\n  table\n    text \"Name\"\n    text \"Status\""
+  "wire": "screen \"Dashboard\" id=dashboard route=/dashboard\n  heading \"Dashboard\"\n  row\n    content \"Total\"\n    content \"Active\"\n    content \"Overdue\"\n  table\n    text \"Name\"\n    text \"Status\"",
+  "components": [
+    "app-shell",
+    "kpi-row",
+    "data-table"
+  ]
 }

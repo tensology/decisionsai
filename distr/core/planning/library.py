@@ -43,6 +43,9 @@ class LibraryEntry:
     tags: tuple[str, ...] = ()
     description: str = ""
     slots: tuple[str, ...] = ()
+    # For a page-template: the library entries it is built from. Lets a plan be
+    # diffed at component level instead of against the template's own name.
+    components: tuple[str, ...] = ()
     config: dict[str, Any] = field(default_factory=dict)
     version: int = 1
     source: str = "builtin"  # builtin | user
@@ -66,6 +69,7 @@ class LibraryEntry:
             "tags": list(self.tags),
             "description": self.description,
             "slots": list(self.slots),
+            "components": list(self.components),
             "config": dict(self.config),
             "version": self.version,
             "source": self.source,
@@ -142,6 +146,11 @@ def parse_manifest(raw: Any, *, source: str = "builtin", folder: str = "") -> Li
     except (TypeError, ValueError):
         version = 1
 
+    components_raw = raw.get("components") or []
+    components = tuple(
+        c for c in (_normalise_name(item) for item in (components_raw if isinstance(components_raw, (list, tuple)) else [])) if c
+    )[:24]
+
     config_raw = raw.get("config")
     config = dict(config_raw) if isinstance(config_raw, dict) else {}
 
@@ -154,6 +163,7 @@ def parse_manifest(raw: Any, *, source: str = "builtin", folder: str = "") -> Li
         tags=tags,
         description=_text(raw.get("description"), 400),
         slots=slots,
+        components=components,
         config=config,
         version=max(1, version),
         source=source,
