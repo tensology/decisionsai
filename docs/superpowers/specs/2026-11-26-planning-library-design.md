@@ -1,7 +1,7 @@
 # Planning: widget & layout library, base template, and tickets from plans
 
 Date: 2026-11-26
-Status: approved for implementation (sections A-G, in order)
+Status: A-G IMPLEMENTED (see commits 7c608388, 885c2bf7, 0750cd62, e4762b22, 56b047a3, e4bdc5ec, b91d887d). H designed separately, not yet started.
 Owner: Paul
 
 ## Goal
@@ -153,4 +153,17 @@ different kind of system from A-G; deliberately not designed here.
 
 ## Phases
 
-A -> B -> C -> D -> E, then F and G. H separately.
+- **A** library folders - done (`7c608388`)
+- **B** base template - done (`885c2bf7`)
+- **C** pages - done (`0750cd62`)
+- **D** sitemap - done (`e4762b22`)
+- **E** side panel (library API + panel) - done (`56b047a3`)
+- **F** derivation, library-first - done (`e4bdc5ec`)
+- **G** tickets as component diffs - done (`b91d887d`)
+- **H** frustration scoring - **not started**; needs its own design pass
+
+Tests: `tests/core/planning/` (139) + `tests/gui/test_plan_library_panel_js.py` (8).
+
+Still to wire (follow-on, not part of A-G): the panel is mounted by hand today -
+the Development planning surface does not yet mount it, and nothing yet persists
+a sitemap/page built from the library to a workspace.
