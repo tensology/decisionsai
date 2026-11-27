@@ -33,15 +33,47 @@
     var maxReconnectMs = 30000;
     var es = null;
 
+    function retryLater() {
+        setTimeout(connect, reconnectMs);
+        reconnectMs = Math.min(maxReconnectMs, reconnectMs * 2);
+    }
+
     function connect() {
         if (es) {
             try {
                 es.close();
             } catch (e) { /* ignore */ }
+            es = null;
         }
+        // EventSource cannot send headers: swap the token (sent as a header)
+        // for a one-use ticket so the token never appears in the URL.
+        fetch("/api/events/stream-ticket", {
+            method: "POST",
+            headers: { "X-DecisionsAI-Internal-Token": token },
+            credentials: "same-origin"
+        }).then(function (r) {
+            if (r.status === 404) {
+                // Server started before stream tickets existed: legacy query auth until restart.
+                return { legacy: true };
+            }
+            return r.ok ? r.json() : null;
+        }).then(function (body) {
+            if (body && body.legacy) {
+                openStream("internal_token=" + encodeURIComponent(token));
+                return;
+            }
+            if (!body || !body.ticket) {
+                retryLater();
+                return;
+            }
+            openStream("ticket=" + encodeURIComponent(body.ticket));
+        }).catch(retryLater);
+    }
+
+    function openStream(auth) {
         var url =
-            "/api/events/stream?internal_token=" +
-            encodeURIComponent(token) +
+            "/api/events/stream?" +
+            auth +
             "&client_id=" +
             encodeURIComponent(getClientId());
         es = new EventSource(url);
@@ -59,8 +91,7 @@
                 es.close();
             } catch (e2) { /* ignore */ }
             es = null;
-            setTimeout(connect, reconnectMs);
-            reconnectMs = Math.min(maxReconnectMs, reconnectMs * 2);
+            retryLater();
         };
     }
 

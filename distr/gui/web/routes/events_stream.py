@@ -1,8 +1,10 @@
 """
 SSE stream for in-process EventBus (R22).
 
-``GET /api/events/stream`` — requires internal token; optional ``client_id`` query
-(max 5 concurrent streams per ``client_id``).
+``GET /api/events/stream`` — requires the internal token header or a one-use
+``ticket`` from ``POST /api/events/stream-ticket`` (EventSource cannot send
+headers, so the long-lived token never goes in the URL); optional ``client_id``
+query (max 5 concurrent streams per ``client_id``).
 """
 
 from __future__ import annotations
@@ -10,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 import threading
+import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -26,6 +30,35 @@ router = APIRouter(prefix="/api/events", tags=["events"])
 _active_sse_by_client: dict[str, int] = {}
 _sse_lock = threading.Lock()
 _MAX_SSE_PER_CLIENT = 5
+STREAM_TICKET_SECONDS = 60
+_stream_tickets: dict[str, float] = {}
+
+
+def issue_stream_ticket(now: float | None = None) -> str:
+    """One-use, short-lived ticket so the EventSource URL never carries the internal token."""
+    now = time.monotonic() if now is None else now
+    ticket = secrets.token_urlsafe(24)
+    with _sse_lock:
+        for key, expires in list(_stream_tickets.items()):
+            if expires <= now:
+                _stream_tickets.pop(key, None)
+        _stream_tickets[ticket] = now + STREAM_TICKET_SECONDS
+    return ticket
+
+
+def redeem_stream_ticket(ticket: str, now: float | None = None) -> bool:
+    now = time.monotonic() if now is None else now
+    if not ticket:
+        return False
+    with _sse_lock:
+        expires = _stream_tickets.pop(ticket, None)
+    return bool(expires and expires > now)
+
+
+def _require_stream_auth(request: Request) -> None:
+    if redeem_stream_ticket((request.query_params.get("ticket") or "").strip()):
+        return
+    require_internal_token_request(request)
 
 
 def _acquire_sse_slot(client_id: str) -> bool:
@@ -46,10 +79,17 @@ def _release_sse_slot(client_id: str) -> None:
             _active_sse_by_client[client_id] = n - 1
 
 
+@router.post("/stream-ticket")
+async def events_stream_ticket(request: Request) -> dict[str, Any]:
+    """Swap the header token for a one-use stream ticket."""
+    require_internal_token_request(request)
+    return {"ticket": issue_stream_ticket(), "expires_in": STREAM_TICKET_SECONDS}
+
+
 @router.get("/stream")
 async def events_stream(request: Request) -> StreamingResponse:
     """Stream EventBus notifications as Server-Sent Events (SSE)."""
-    require_internal_token_request(request)
+    _require_stream_auth(request)
     raw = (request.query_params.get("client_id") or "default").strip()
     client_id = (raw[:128] or "default") if raw else "default"
 
