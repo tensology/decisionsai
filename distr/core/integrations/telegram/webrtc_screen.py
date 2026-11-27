@@ -19,30 +19,104 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
 from typing import Callable, Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
 FPS = 20
-MAX_WIDTH = 1600
-MAX_HEIGHT = 1000
+# Send up to the display's native (Retina) pixels so text stays sharp when zoomed on a phone.
+MAX_WIDTH = 2560
+MAX_HEIGHT = 1600
+# aiortc's stock encoder limits (H.264 0.5-3 Mbps from 1 Mbps, VP8 0.25-1.5 Mbps) blur desktop
+# text; receiver estimates (REMB) still steer the rate inside these wider bounds.
+ENCODER_BITRATES = {
+    "h264": {"MIN_BITRATE": 2_000_000, "DEFAULT_BITRATE": 6_000_000, "MAX_BITRATE": 12_000_000},
+    "vpx": {"MIN_BITRATE": 1_500_000, "DEFAULT_BITRATE": 5_000_000, "MAX_BITRATE": 10_000_000},
+}
 STUN_URLS = ["stun:stun.l.google.com:19302"]
+ALLOWED_ICE_HOSTS = frozenset({"decisions.tensology.com", "stun.l.google.com"})
+ALLOWED_ICE_SCHEMES = frozenset({"stun", "turn", "turns"})
 OFFER_TIMEOUT_SECONDS = 15.0
 VIDEO_CLOCK_RATE = 90000
-INPUT_COMMANDS = {"mouse_move", "mouse_down", "mouse_up"}
+INPUT_COMMANDS = {"mouse_move", "mouse_down", "mouse_up", "scroll"}
+MAX_SCROLL_PIXELS = 2000
 PERMISSION_ERROR = (
     "Screen Recording is off for Decisions. Turn it on in System Settings > "
     "Privacy & Security > Screen & System Audio Recording."
 )
 
 
-def target_size(width: int, height: int, max_width: int = MAX_WIDTH, max_height: int = MAX_HEIGHT):
-    """Scale (width, height) to fit the stream limits, keeping aspect; even sizes for yuv420p."""
+
+def _ice_host(url: str) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw if "://" in raw.split("?", 1)[0] else raw.replace(":", "://", 1))
+    return (parsed.hostname or "").lower().rstrip(".")
+
+
+def sanitize_ice_servers(servers) -> list:
+    """Keep stun/turn URLs on known hosts only, so a client cannot redirect media."""
+    if not isinstance(servers, list):
+        return [{"urls": url} for url in STUN_URLS]
+    out = []
+    for item in servers:
+        if not isinstance(item, dict):
+            continue
+        urls = item.get("urls")
+        url_list = urls if isinstance(urls, list) else [urls]
+        kept = []
+        for url in url_list:
+            if not isinstance(url, str) or len(url) > 256:
+                continue
+            scheme = url.split(":", 1)[0].lower()
+            if scheme in ALLOWED_ICE_SCHEMES and _ice_host(url) in ALLOWED_ICE_HOSTS:
+                kept.append(url)
+        if not kept:
+            continue
+        entry = {"urls": kept[0] if len(kept) == 1 else kept}
+        username, credential = item.get("username"), item.get("credential")
+        if isinstance(username, str) and isinstance(credential, str):
+            if 1 <= len(username) <= 128 and 1 <= len(credential) <= 256:
+                entry["username"] = username
+                entry["credential"] = credential
+        out.append(entry)
+    return out or [{"urls": url} for url in STUN_URLS]
+
+
+def _rtc_ice_servers(servers):
+    from aiortc import RTCIceServer
+    out = []
+    for item in sanitize_ice_servers(servers):
+        kwargs = {"urls": item["urls"]}
+        if item.get("username") and item.get("credential"):
+            kwargs["username"] = item["username"]
+            kwargs["credential"] = item["credential"]
+        out.append(RTCIceServer(**kwargs))
+    return out
+
+
+def target_size(width: int, height: int, max_width: int = MAX_WIDTH, max_height: int = MAX_HEIGHT,
+                pixel_scale: float = 1.0):
+    """Scale (width, height) points times ``pixel_scale`` (native pixels per point) to fit the
+    stream limits, keeping aspect; even sizes for yuv420p."""
     if width <= 0 or height <= 0:
         raise ValueError("screen has no size")
+    pixel_scale = pixel_scale if pixel_scale and pixel_scale > 0 else 1.0
+    width, height = width * pixel_scale, height * pixel_scale
     scale = min(1.0, max_width / width, max_height / height)
     out_w = max(2, int(width * scale) // 2 * 2)
     out_h = max(2, int(height * scale) // 2 * 2)
     return out_w, out_h
+
+
+def tune_encoders(bitrates: dict = ENCODER_BITRATES) -> None:
+    """Widen aiortc's encoder bitrate bounds (module constants read on every rate update)."""
+    from aiortc.codecs import h264, vpx
+
+    for module, values in ((h264, bitrates["h264"]), (vpx, bitrates["vpx"])):
+        for name, value in values.items():
+            setattr(module, name, value)
 
 
 def parse_input(raw) -> Optional[dict]:
@@ -53,6 +127,15 @@ def parse_input(raw) -> Optional[dict]:
         return None
     if not isinstance(msg, dict) or msg.get("command") not in INPUT_COMMANDS:
         return None
+    if msg["command"] == "scroll":
+        try:
+            dx, dy = int(msg.get("dx") or 0), int(msg.get("dy") or 0)
+        except (TypeError, ValueError):
+            return None
+        if not dx and not dy:
+            return None
+        clamp = lambda v: max(-MAX_SCROLL_PIXELS, min(MAX_SCROLL_PIXELS, v))
+        return {"command": "scroll", "dx": clamp(dx), "dy": clamp(dy)}
     out = {"command": msg["command"], "button": msg.get("button") if msg.get("button") in ("left", "right", "middle") else "left"}
     if msg["command"] != "mouse_up" or ("x" in msg and "y" in msg):
         try:
@@ -87,8 +170,8 @@ class ScreenGrabber:
         self.geometry = {k: int(geometry.get(k) or 0) for k in ("x", "y", "width", "height")}
         if self.geometry["width"] <= 0 or self.geometry["height"] <= 0:
             raise ValueError("screen geometry is missing")
-        self.size = target_size(self.geometry["width"], self.geometry["height"])
         self._display_id = None
+        self.size = target_size(self.geometry["width"], self.geometry["height"], pixel_scale=self._pixel_scale())
         self._cursor = None
         self._cursor_path = cursor_path
 
@@ -106,6 +189,30 @@ class ScreenGrabber:
                 break
         self._display_id = best
         return best
+
+    def _pixel_scale(self) -> float:
+        """Native pixels per point for this display (2.0 on Retina), 1.0 when unknown."""
+        if platform.system() != "Darwin":
+            return 1.0
+        try:
+            import Quartz
+
+            mode = Quartz.CGDisplayCopyDisplayMode(self._quartz_display())
+            pixels = Quartz.CGDisplayModeGetPixelWidth(mode)
+            return max(1.0, min(3.0, pixels / self.geometry["width"]))
+        except Exception:
+            return 1.0
+
+    def pointer_position(self) -> Optional[dict]:
+        """Current pointer in desktop points when it is on this display, else None."""
+        pos = self._pointer()
+        if pos is None:
+            return None
+        g = self.geometry
+        x, y = int(pos[0]), int(pos[1])
+        if g["x"] <= x < g["x"] + g["width"] and g["y"] <= y < g["y"] + g["height"]:
+            return {"x": x, "y": y}
+        return None
 
     def _grab_raw(self):
         """Full-resolution writable frame and its pixel format ("bgra" or "rgb24")."""
@@ -194,7 +301,8 @@ class ScreenGrabber:
         self.draw_pointer(raw, pixel_format)
         frame = av.VideoFrame.from_ndarray(raw, format=pixel_format)
         out_w, out_h = self.size
-        return frame.reformat(width=out_w, height=out_h, format="yuv420p")
+        # Area averaging keeps small text legible when Retina pixels are scaled down.
+        return frame.reformat(width=out_w, height=out_h, format="yuv420p", interpolation="AREA")
 
 
 def _safe_grab(grabber: ScreenGrabber):
@@ -299,11 +407,16 @@ class WebRTCScreenServer:
     """One live screen session at a time, driven from relay command threads."""
 
     def __init__(self, input_handler: Callable[[dict], None], cursor_path: Optional[str] = None,
-                 grabber_factory: Callable[[dict], ScreenGrabber] = None, stun_urls=None, fps: int = FPS):
+                 grabber_factory: Callable[[dict], ScreenGrabber] = None, stun_urls=None,
+                 ice_servers=None, fps: int = FPS):
         self._input_handler = input_handler
         self._cursor_path = cursor_path
         self._grabber_factory = grabber_factory or (lambda geo: ScreenGrabber(geo, cursor_path))
-        self._stun_urls = list(STUN_URLS if stun_urls is None else stun_urls)
+        if ice_servers is not None:
+            self._ice_servers = sanitize_ice_servers(ice_servers)
+        else:
+            self._ice_servers = [{"urls": url} for url in (STUN_URLS if stun_urls is None else stun_urls)]
+        self._stun_urls = [s["urls"] if isinstance(s["urls"], str) else s["urls"][0] for s in self._ice_servers]
         self._fps = fps
         self._loop = None
         self._loop_lock = threading.Lock()
@@ -325,14 +438,16 @@ class WebRTCScreenServer:
     def active_track(self):
         return self._session[3] if self._session else None
 
-    def answer(self, offer_sdp: str, offer_type: str, geometry: dict, session_id: str) -> dict:
+    def answer(self, offer_sdp: str, offer_type: str, geometry: dict, session_id: str,
+               ice_servers=None) -> dict:
         """Answer a browser offer; returns {"sdp", "type"}. Raises RuntimeError with a plain reason."""
         if offer_type != "offer" or not isinstance(offer_sdp, str) or "m=video" not in offer_sdp:
             raise RuntimeError("Invalid WebRTC offer")
         if not screen_capture_allowed():
             raise RuntimeError(PERMISSION_ERROR)
         grabber = self._grabber_factory(geometry)
-        return self._run(self._answer(offer_sdp, grabber, str(session_id or "")))
+        servers = sanitize_ice_servers(ice_servers) if ice_servers is not None else self._ice_servers
+        return self._run(self._answer(offer_sdp, grabber, str(session_id or ""), servers))
 
     def close(self, session_id: Optional[str] = None) -> bool:
         """Close the live session (only if it matches ``session_id`` when one is given)."""
@@ -351,12 +466,13 @@ class WebRTCScreenServer:
         logger.info("WebRTC screen session %s closed", session[0][:12])
         return True
 
-    async def _answer(self, offer_sdp: str, grabber: ScreenGrabber, session_id: str) -> dict:
-        from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
+    async def _answer(self, offer_sdp: str, grabber: ScreenGrabber, session_id: str, ice_servers=None) -> dict:
+        from aiortc import RTCConfiguration, RTCPeerConnection, RTCSessionDescription
         from aiortc.rtcrtpsender import RTCRtpSender
 
         await self._close()
-        config = RTCConfiguration(iceServers=[RTCIceServer(urls=u) for u in self._stun_urls])
+        tune_encoders()
+        config = RTCConfiguration(iceServers=_rtc_ice_servers(ice_servers if ice_servers is not None else self._ice_servers))
         pc = RTCPeerConnection(configuration=config)
         pump = InputPump(self._input_handler)
         track = _make_track(grabber, self._executor, self._fps)
@@ -397,4 +513,9 @@ class WebRTCScreenServer:
             await self._close(session_id)
             raise
         logger.info("WebRTC screen session %s answered at %sx%s, %s fps", session_id[:12], *grabber.size, self._fps)
-        return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type, "width": grabber.size[0], "height": grabber.size[1]}
+        answer = {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type, "width": grabber.size[0], "height": grabber.size[1]}
+        pointer = getattr(grabber, "pointer_position", lambda: None)()
+        if pointer:
+            # Lets a phone's trackpad-style cursor start where the real pointer is.
+            answer["pointer"] = pointer
+        return answer

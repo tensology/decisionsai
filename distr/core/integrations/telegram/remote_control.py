@@ -3,6 +3,7 @@
 import difflib
 import logging
 import os
+import platform
 import re
 import threading
 import time
@@ -363,12 +364,76 @@ class TelegramRemoteControlMixin:
         if not pyautogui:
             return
         with self._remote_control_lock:
+            if msg["command"] == "scroll":
+                self._webrtc_scroll(msg.get("dx", 0), msg.get("dy", 0))
+                return
+            held = getattr(self, "_webrtc_button_held", None)
             if "x" in msg and "y" in msg:
-                self._move_mouse_to(msg["x"], msg["y"], msg.get("screen_number", 1), instant=True)
+                if held and platform.system() == "Darwin":
+                    # macOS only treats a held move as a drag when it is a "dragged" event.
+                    self._webrtc_mac_mouse("drag", held, msg["x"], msg["y"], msg.get("screen_number", 1))
+                else:
+                    self._move_mouse_to(msg["x"], msg["y"], msg.get("screen_number", 1), instant=True)
+            button = msg.get("button") or "left"
             if msg["command"] == "mouse_down":
-                pyautogui.mouseDown(button=msg.get("button") or "left")
+                if platform.system() == "Darwin":
+                    self._webrtc_mac_mouse("down", button)
+                else:
+                    pyautogui.mouseDown(button=button)
+                self._webrtc_button_held = button
             elif msg["command"] == "mouse_up":
-                pyautogui.mouseUp(button=msg.get("button") or "left")
+                if platform.system() == "Darwin":
+                    self._webrtc_mac_mouse("up", button)
+                else:
+                    pyautogui.mouseUp(button=button)
+                self._webrtc_button_held = None
+
+    def _webrtc_mac_mouse(self, action: str, button: str, x=None, y=None, screen_number: int = 1) -> None:
+        """Post one Quartz mouse event: drags as dragged events, and presses carry a click
+        count so a quick second tap is a real double-click."""
+        import Quartz
+
+        kinds = {
+            "left": (Quartz.kCGMouseButtonLeft, Quartz.kCGEventLeftMouseDown, Quartz.kCGEventLeftMouseUp, Quartz.kCGEventLeftMouseDragged),
+            "right": (Quartz.kCGMouseButtonRight, Quartz.kCGEventRightMouseDown, Quartz.kCGEventRightMouseUp, Quartz.kCGEventRightMouseDragged),
+            "middle": (Quartz.kCGMouseButtonCenter, Quartz.kCGEventOtherMouseDown, Quartz.kCGEventOtherMouseUp, Quartz.kCGEventOtherMouseDragged),
+        }
+        cg_button, down, up, dragged = kinds.get(button, kinds["left"])
+        if action == "drag":
+            x, y = self._clamp_to_screen(x, y, screen_number)
+            event = Quartz.CGEventCreateMouseEvent(None, dragged, (x, y), cg_button)
+        else:
+            loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
+            event = Quartz.CGEventCreateMouseEvent(None, down if action == "down" else up, (loc.x, loc.y), cg_button)
+            if action == "down":
+                now = time.monotonic()
+                last = getattr(self, "_webrtc_last_press", None)
+                near = last and last[1] == button and abs(last[2] - loc.x) <= 6 and abs(last[3] - loc.y) <= 6
+                count = last[4] + 1 if near and now - last[0] <= 0.5 else 1
+                self._webrtc_last_press = (now, button, loc.x, loc.y, count)
+            last = getattr(self, "_webrtc_last_press", None)
+            Quartz.CGEventSetIntegerValueField(event, Quartz.kCGMouseEventClickState, last[4] if last else 1)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+
+    def _webrtc_scroll(self, dx: int, dy: int) -> None:
+        """Two-finger scroll from the phone, in screen pixels (positive dy = finger moved down)."""
+        if platform.system() == "Darwin":
+            import Quartz
+
+            event = Quartz.CGEventCreateScrollWheelEvent(None, Quartz.kCGScrollEventUnitPixel, 2, int(dy), int(dx))
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+            return
+        clicks = int(dy / 40)
+        if clicks:
+            pyautogui.scroll(clicks)
+
+    def _clamp_to_screen(self, x: int, y: int, screen_number: int):
+        for s in self._get_screens_list():
+            if s.get("screen_number") == screen_number:
+                geo = s["geometry"]
+                return (max(geo["x"], min(x, geo["x"] + geo["width"] - 1)),
+                        max(geo["y"], min(y, geo["y"] + geo["height"] - 1)))
+        return x, y
 
     def _dispatch_webrtc(self, data: dict) -> None:
         """Answer a live-screen WebRTC offer, or close the session, off the input lock."""
@@ -397,6 +462,7 @@ class TelegramRemoteControlMixin:
                     command_data.get("type"),
                     screen["geometry"],
                     session_id,
+                    ice_servers=command_data.get("ice_servers"),
                 )
         except Exception as exc:
             reason = str(exc) or "Live screen setup timed out"

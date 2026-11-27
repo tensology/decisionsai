@@ -60,10 +60,31 @@ class _SyntheticGrabber:
 
 @pytest.mark.parametrize(
     "size,expected",
-    [((1920, 1080), (1600, 900)), ((3024, 1964), (1538, 1000)), ((1280, 720), (1280, 720)), ((1511, 981), (1510, 980))],
+    [((1920, 1080), (1920, 1080)), ((3024, 1964), (2462, 1600)), ((1280, 720), (1280, 720)), ((1511, 981), (1510, 980))],
 )
 def test_target_size_fits_limits_and_is_even(size, expected):
     assert webrtc_screen.target_size(*size) == expected
+
+
+def test_target_size_sends_retina_pixels_within_limits():
+    # A 1512x982-point Retina panel is 3024x1964 pixels: sent at 2462x1600, not 1512x982.
+    assert webrtc_screen.target_size(1512, 982, pixel_scale=2.0) == (2462, 1600)
+    assert webrtc_screen.target_size(1920, 1080, pixel_scale=1.0) == (1920, 1080)
+    assert webrtc_screen.target_size(1920, 1080, pixel_scale=0) == (1920, 1080)
+
+
+def test_tune_encoders_widens_aiortc_bitrate_bounds(monkeypatch):
+    from aiortc.codecs import h264, vpx
+
+    for module in (h264, vpx):
+        for name in ("MIN_BITRATE", "DEFAULT_BITRATE", "MAX_BITRATE"):
+            monkeypatch.setattr(module, name, getattr(module, name))
+    webrtc_screen.tune_encoders()
+    assert (h264.MIN_BITRATE, h264.DEFAULT_BITRATE, h264.MAX_BITRATE) == (2_000_000, 6_000_000, 12_000_000)
+    assert (vpx.MIN_BITRATE, vpx.DEFAULT_BITRATE, vpx.MAX_BITRATE) == (1_500_000, 5_000_000, 10_000_000)
+    encoder = h264.H264Encoder()
+    encoder.target_bitrate = 100_000_000  # a high receiver estimate is capped at the new max
+    assert encoder.target_bitrate == 12_000_000
 
 
 def test_target_size_rejects_empty_screen():
@@ -80,6 +101,13 @@ def test_parse_input_accepts_pointer_commands_only():
     assert webrtc_screen.parse_input('{"command": "mouse_down"}') is None
     assert webrtc_screen.parse_input("not json") is None
     assert webrtc_screen.parse_input('{"command": "mouse_down", "x": 1, "y": 2, "button": "evil"}')["button"] == "left"
+
+
+def test_parse_input_accepts_bounded_scroll():
+    assert webrtc_screen.parse_input('{"command": "scroll", "dx": 3.7, "dy": -12}') == {"command": "scroll", "dx": 3, "dy": -12}
+    assert webrtc_screen.parse_input('{"command": "scroll", "dx": 0, "dy": 99999}') == {"command": "scroll", "dx": 0, "dy": 2000}
+    assert webrtc_screen.parse_input('{"command": "scroll", "dx": 0, "dy": 0}') is None
+    assert webrtc_screen.parse_input('{"command": "scroll", "dy": "up"}') is None
 
 
 def test_input_pump_coalesces_moves_and_releases_held_button():
@@ -146,7 +174,7 @@ def test_loopback_streams_video_and_delivers_input(monkeypatch):
         await pc.setLocalDescription(await pc.createOffer())
         loop = asyncio.get_running_loop()
         answer = await loop.run_in_executor(None, server.answer, pc.localDescription.sdp, "offer", geometry, "sess-1")
-        assert (answer["width"], answer["height"]) == (1600, 900)
+        assert (answer["width"], answer["height"]) == (1920, 1080)
         await pc.setRemoteDescription(RTCSessionDescription(answer["sdp"], "answer"))
         deadline = time.monotonic() + 15
         while (len(frames) < 10 or channel.readyState != "open") and time.monotonic() < deadline:
@@ -163,7 +191,7 @@ def test_loopback_streams_video_and_delivers_input(monkeypatch):
 
     frames = asyncio.run(run())
     assert len(frames) >= 10
-    assert (frames[-1].width, frames[-1].height) == (1600, 900)
+    assert (frames[-1].width, frames[-1].height) == (1920, 1080)
     assert inputs == [{"command": "mouse_move", "button": "left", "x": 10, "y": 20, "screen_number": 1}]
     deadline = time.monotonic() + 5
     while server.active_track is not None and time.monotonic() < deadline:
@@ -202,7 +230,7 @@ def test_offer_is_answered_on_fast_path_without_input_lock():
             "command": "webrtc_offer", "request_id": "r1",
             "data": {"sdp": "offer-sdp", "type": "offer", "screen_number": 2, "session_id": "abc"},
         })
-    server.answer.assert_called_once_with("offer-sdp", "offer", {"x": 1920, "y": 0, "width": 1512, "height": 982}, "abc")
+    server.answer.assert_called_once_with("offer-sdp", "offer", {"x": 1920, "y": 0, "width": 1512, "height": 982}, "abc", ice_servers=None)
     assert host.responses == [{
         "type": "remote_control_response", "command": "webrtc_offer", "request_id": "r1",
         "data": {"sdp": "answer-sdp", "type": "answer", "width": 1512, "height": 982},
@@ -231,6 +259,7 @@ def test_close_targets_the_session():
 def test_data_channel_input_moves_presses_and_releases(monkeypatch):
     fake = Mock()
     monkeypatch.setattr(remote_control, "pyautogui", fake)
+    monkeypatch.setattr(remote_control.platform, "system", lambda: "Linux")
     host = _Host()
     host._move_mouse_to = Mock()
     host._apply_webrtc_input({"command": "mouse_down", "x": 3, "y": 4, "screen_number": 2, "button": "left"})
@@ -239,3 +268,120 @@ def test_data_channel_input_moves_presses_and_releases(monkeypatch):
     host._apply_webrtc_input({"command": "mouse_up", "button": "left", "screen_number": 2})
     fake.mouseUp.assert_called_once_with(button="left")
     assert host._move_mouse_to.call_count == 1
+
+
+def test_sanitize_ice_servers_keeps_known_hosts_and_falls_back():
+    cleaned = webrtc_screen.sanitize_ice_servers([
+        {"urls": "turn:evil.example:3478", "username": "x", "credential": "yyyyyyyy"},
+        {"urls": "turn:decisions.tensology.com:3478?transport=udp", "username": "1700:rc", "credential": "abcd1234"},
+        {"urls": "stun:stun.l.google.com:19302"},
+    ])
+    assert cleaned[0]["urls"] == "turn:decisions.tensology.com:3478?transport=udp"
+    assert cleaned[0]["username"] == "1700:rc"
+    assert cleaned[1] == {"urls": "stun:stun.l.google.com:19302"}
+    assert webrtc_screen.sanitize_ice_servers([{"urls": "turn:evil.example:3478"}]) == [
+        {"urls": "stun:stun.l.google.com:19302"}
+    ]
+
+
+def test_offer_forwards_relay_ice_servers():
+    server = Mock()
+    server.answer.return_value = {"sdp": "answer-sdp", "type": "answer", "width": 1512, "height": 982}
+    host = _host_with_server(server)
+    ice = [{"urls": "turn:decisions.tensology.com:3478?transport=udp", "username": "1700:rc", "credential": "abcd1234"}]
+    host._handle_remote_control_command({
+        "command": "webrtc_offer", "request_id": "r1",
+        "data": {"sdp": "offer-sdp", "type": "offer", "screen_number": 2, "session_id": "abc", "ice_servers": ice},
+    })
+    server.answer.assert_called_once_with(
+        "offer-sdp", "offer", {"x": 1920, "y": 0, "width": 1512, "height": 982}, "abc", ice_servers=ice,
+    )
+
+
+class _FakeQuartz(types.ModuleType):
+    """Records Quartz mouse events instead of posting them (never moves the real mouse)."""
+
+    def __init__(self):
+        super().__init__("Quartz")
+        self.posted = []
+        names = ("kCGMouseButtonLeft", "kCGMouseButtonRight", "kCGMouseButtonCenter", "kCGEventLeftMouseDown",
+                 "kCGEventLeftMouseUp", "kCGEventLeftMouseDragged", "kCGEventRightMouseDown", "kCGEventRightMouseUp",
+                 "kCGEventRightMouseDragged", "kCGEventOtherMouseDown", "kCGEventOtherMouseUp",
+                 "kCGEventOtherMouseDragged", "kCGHIDEventTap", "kCGMouseEventClickState", "kCGScrollEventUnitPixel")
+        for name in names:
+            setattr(self, name, name)
+        self.location = types.SimpleNamespace(x=100.0, y=200.0)
+
+    def CGEventCreate(self, _source):
+        return None
+
+    def CGEventGetLocation(self, _event):
+        return self.location
+
+    def CGEventCreateMouseEvent(self, _source, kind, point, button):
+        return {"kind": kind, "point": tuple(point), "button": button}
+
+    def CGEventSetIntegerValueField(self, event, field, value):
+        event[field] = value
+
+    def CGEventCreateScrollWheelEvent(self, _source, unit, count, dy, dx):
+        return {"kind": "scroll", "unit": unit, "dy": dy, "dx": dx}
+
+    def CGEventPost(self, _tap, event):
+        self.posted.append(event)
+
+
+def test_mac_input_posts_drags_click_counts_and_scrolls(monkeypatch):
+    quartz = _FakeQuartz()
+    monkeypatch.setitem(sys.modules, "Quartz", quartz)
+    monkeypatch.setattr(remote_control, "pyautogui", Mock())
+    monkeypatch.setattr(remote_control.platform, "system", lambda: "Darwin")
+    host = _Host()
+    host._move_mouse_to = Mock()
+    host._get_screens_list = lambda: [{"screen_number": 1, "geometry": {"x": 0, "y": 0, "width": 1920, "height": 1080}}]
+    host._apply_webrtc_input({"command": "mouse_down", "x": 100, "y": 200, "screen_number": 1, "button": "left"})
+    host._move_mouse_to.assert_called_once_with(100, 200, 1, instant=True)
+    # Held moves are "dragged" events (clamped to the screen), not plain moves.
+    host._apply_webrtc_input({"command": "mouse_move", "x": 5000, "y": 300, "screen_number": 1, "button": "left"})
+    assert host._move_mouse_to.call_count == 1
+    host._apply_webrtc_input({"command": "mouse_up", "x": 1919, "y": 300, "screen_number": 1, "button": "left"})
+    kinds = [e["kind"] for e in quartz.posted]
+    assert kinds == ["kCGEventLeftMouseDown", "kCGEventLeftMouseDragged", "kCGEventLeftMouseDragged", "kCGEventLeftMouseUp"]
+    assert quartz.posted[1]["point"] == (1919, 300)
+    # A quick second tap at the same spot is a double-click.
+    quartz.posted.clear()
+    time.sleep(0.6)  # long after the drag: the next press starts a new click
+    for _ in range(2):
+        host._apply_webrtc_input({"command": "mouse_down", "x": 100, "y": 200, "screen_number": 1, "button": "left"})
+        host._apply_webrtc_input({"command": "mouse_up", "x": 100, "y": 200, "screen_number": 1, "button": "left"})
+    presses = [e for e in quartz.posted if e["kind"] in ("kCGEventLeftMouseDown", "kCGEventLeftMouseUp")]
+    assert [e["kCGMouseEventClickState"] for e in presses] == [1, 1, 2, 2]
+    quartz.posted.clear()
+    host._apply_webrtc_input({"command": "scroll", "dx": 0, "dy": -40})
+    assert quartz.posted == [{"kind": "scroll", "unit": "kCGScrollEventUnitPixel", "dy": -40, "dx": 0}]
+
+
+def test_answer_reports_pointer_for_touch_cursor(monkeypatch):
+    from aiortc import RTCPeerConnection
+
+    monkeypatch.setattr(webrtc_screen, "screen_capture_allowed", lambda: True)
+
+    class PointerGrabber(_SyntheticGrabber):
+        def pointer_position(self):
+            return {"x": 640, "y": 360}
+
+    server = webrtc_screen.WebRTCScreenServer(lambda m: None, grabber_factory=PointerGrabber, stun_urls=[])
+
+    async def run():
+        pc = RTCPeerConnection()
+        pc.addTransceiver("video", direction="recvonly")
+        pc.createDataChannel("input")
+        await pc.setLocalDescription(await pc.createOffer())
+        loop = asyncio.get_running_loop()
+        answer = await loop.run_in_executor(None, server.answer, pc.localDescription.sdp, "offer",
+                                            {"x": 0, "y": 0, "width": 1280, "height": 720}, "sess-p")
+        await pc.close()
+        await loop.run_in_executor(None, server.close, None)
+        return answer
+
+    assert asyncio.run(run())["pointer"] == {"x": 640, "y": 360}
