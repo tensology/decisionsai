@@ -32,6 +32,7 @@ def plan_db(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "get_session", get_session)
     monkeypatch.setattr(service, "_SCAN_QUEUES", {})
     monkeypatch.setattr(service, "_SCAN_STATUS", {})
+    monkeypatch.setattr(service, "_SCAN_STAMP_DIR", tmp_path / "scan-stamps")
     folder = tmp_path / "project"
     (folder / "frontend" / "src").mkdir(parents=True)
     (folder / "frontend" / "src" / "routes.jsx").write_text(
@@ -129,8 +130,13 @@ def test_concurrent_reopens_start_only_one_scan_for_the_same_workspace(plan_db, 
     reopened = _open(plan_db)
     assert reopened["scan"]["state"] == "done"
     assert len(calls) == 1
-    # Once the scan is older than the freshness window, an open scans again.
+    # Past the freshness window, an open scans again only when the sources changed.
     monkeypatch.setattr(service, "PLAN_SCAN_FRESH_SECONDS", 0)
+    monkeypatch.setattr(service, "_scan_is_current", lambda workspace_id, project_id: True)
+    _open(plan_db)
+    _wait(first["id"])
+    assert len(calls) == 1
+    monkeypatch.setattr(service, "_scan_is_current", lambda workspace_id, project_id: False)
     gate.clear(); gate.set()
     _open(plan_db)
     _wait(first["id"])

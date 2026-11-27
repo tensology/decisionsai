@@ -61,6 +61,26 @@ _SKIP_DIR = {
     "examples",
 }
 _SKIP_APPS = {"woocommerce", "translatable"}
+# Trees that ship inside a project but are not its own code: release build output,
+# and third-party packs vendored with a .decisions-vendor.json marker.
+_BUILD_OUTPUT_PATHS = {("installer", "release")}
+_VENDOR_MARKER = ".decisions-vendor.json"
+
+
+def _bundled_tree(root: Path, directory: Path) -> bool:
+    """True for a build-output or vendored directory below the selected root."""
+    try:
+        parts = directory.relative_to(root).parts
+    except ValueError:
+        return False
+    if any(parts[:len(prefix)] == prefix for prefix in _BUILD_OUTPUT_PATHS):
+        return True
+    return bool(parts) and (directory / _VENDOR_MARKER).is_file()
+
+
+def _inside_bundled_tree(root: Path, path: Path) -> bool:
+    parts = path.relative_to(root).parts
+    return any(_bundled_tree(root, root.joinpath(*parts[:index])) for index in range(1, len(parts)))
 _MODEL_BASES = {"Model", "MPTTModel", "TranslatableModel"}
 _REL_KINDS = {"ForeignKey", "OneToOneField", "ManyToManyField"}
 _MERMAID_TYPE = {
@@ -158,7 +178,8 @@ def _source_files(root: Path):
     """
     for directory, dirs, files in os.walk(root, followlinks=False):
         dirs[:] = sorted(name for name in dirs if name not in _SKIP_DIR
-                         and not name.startswith('.') and not name.endswith('.app'))
+                         and not name.startswith('.') and not name.endswith('.app')
+                         and not _bundled_tree(root, Path(directory) / name))
         for name in sorted(files):
             path = Path(directory) / name
             if not name.startswith('.') and not path.is_symlink():
@@ -373,7 +394,9 @@ def scan_react_pages(project_root: Path, *, cues: bool = True) -> list[dict[str,
         candidates = [
             p for p in root.rglob("*")
             if p.is_file() and p.suffix.lower() in (".tsx", ".jsx", ".vue", ".svelte")
-            and not any(part in _SKIP_DIR or part.startswith(".") for part in p.relative_to(root).parts)
+            and not any(part in _SKIP_DIR or part.startswith(".") or part.endswith(".app")
+                        for part in p.relative_to(root).parts)
+            and not _inside_bundled_tree(root, p)
         ]
     except Exception:
         return out
@@ -764,6 +787,7 @@ def _component_file(page: Path, spec: str, project_root: Path) -> Path | None:
             continue
         relative = candidate.relative_to(project_root.resolve())
         if (any(part in _SKIP_DIR or part.endswith('.app') or part.startswith('.') for part in relative.parts)
+                or _inside_bundled_tree(project_root.resolve(), candidate)
                 or candidate.is_symlink()
                 or any(parent.is_symlink() for parent in candidate.parents
                        if parent != project_root.resolve() and parent.is_relative_to(project_root.resolve()))):
@@ -1597,6 +1621,7 @@ def build_plan(
         "depth": 0,
     }
     context["widen"] = widen_routes_with_sitemap(root, context["routes"], context)
+    context["captured_cues"] = _apply_captured_cues(root, context)
     # If the operator has said where the app is served, read the pages whose
     # source describes them poorly (i18n, client-rendered). Off unless configured.
     try:
@@ -2607,6 +2632,51 @@ def enrich_cues_from_dom(
         return 0
 
 
+def _captured_page_cues(project_root: Path) -> dict[str, dict[str, Any]]:
+    """Rendered-DOM cues saved beside page screenshots in planning/, keyed by route.
+
+    The Interfaces map writes them when it captures a page (iface_shots). They
+    describe pages whose markup the source scan cannot see, such as Django admin.
+    """
+    from urllib.parse import urlparse
+
+    out: dict[str, dict[str, Any]] = {}
+    for directory in (project_root / "planning", project_root / ".planning"):
+        if not directory.is_dir() or directory.is_symlink():
+            continue
+        for meta in sorted(directory.glob("*.json")):
+            try:
+                data = json.loads(meta.read_text(encoding="utf-8"))
+            except (OSError, ValueError, UnicodeError):
+                continue
+            if not isinstance(data, dict) or not isinstance(data.get("cues"), dict) or not data.get("url"):
+                continue
+            route = _normalize_route(urlparse(str(data["url"])).path or "/")
+            if _cue_has_content(data["cues"]):
+                out.setdefault(route, data["cues"])
+    return out
+
+
+def _apply_captured_cues(root: Path, context: dict[str, Any]) -> int:
+    """Use a captured page's cues only for a route the source left empty."""
+    captured = _captured_page_cues(root)
+    if not captured:
+        return 0
+    template_cues = context.setdefault("template_cues", {})
+    applied = 0
+    for row in context.get("routes") or []:
+        url = str(row.get("url") or "")
+        cue = captured.get(_normalize_route(url)) if url else None
+        if not cue:
+            continue
+        existing = template_cues.get(url)
+        if existing and _cue_has_content(existing):
+            continue
+        template_cues[url] = {**cue, "observed": True}
+        applied += 1
+    return applied
+
+
 def widen_routes_with_sitemap(root: Path, routes: list[dict[str, str]], context: dict[str, Any]) -> dict[str, int]:
     """Union sitemap pages into `routes` (dedupe on the normalised URL) and collect template form cues into
     context["template_cues"] keyed by the route URL used in the wire output. Mutates routes/context."""
@@ -2619,6 +2689,8 @@ def widen_routes_with_sitemap(root: Path, routes: list[dict[str, str]], context:
     except Exception:  # noqa: BLE001 - widening is best effort; the plain route scan still works
         return stats
     by_norm = {_normalize_route(row["url"]): row for row in routes}
+    # React cues placed above; a Python template for the same route still counts.
+    react_cues: dict[str, dict[str, Any]] = {}
     # If the project's pages live in another stack, stencil from there. Tensology's
     # Django side is an API; its pages are 57 React components.
     try:
@@ -2637,6 +2709,7 @@ def widen_routes_with_sitemap(root: Path, routes: list[dict[str, str]], context:
                     stats["routes_added"] += 1
                 if cue and _cue_has_content(cue) and norm not in context["template_cues"]:
                     context["template_cues"][norm] = cue
+                    react_cues[norm] = cue
                     stats["template_cues"] += 1
     except Exception:
         logger.debug("scan: react page widening skipped", exc_info=True)
@@ -2658,8 +2731,15 @@ def widen_routes_with_sitemap(root: Path, routes: list[dict[str, str]], context:
             continue
         key = _resolve_template_key(str(node.get("template") or ""), templates) if node.get("template") else None
         cue = _compose_template_cue(key, templates) if key else None
-        if cue and row["url"] not in context["template_cues"]:
-            cue["path"] = templates[key]["path"]
+        if not cue:
+            continue
+        cue["path"] = templates[key]["path"]
+        react = react_cues.pop(row["url"], None)
+        if react is not None:
+            # Template first, then the React page at the same route: both are source evidence.
+            _merge_cues(cue, react)
+            context["template_cues"][row["url"]] = cue
+        elif row["url"] not in context["template_cues"]:
             context["template_cues"][row["url"]] = cue
             stats["template_cues"] += 1
     return stats

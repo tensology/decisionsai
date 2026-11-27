@@ -175,6 +175,9 @@ export function createIfaceCanvas(opts) {
                 }
                 if (placed) break;
             }
+            // No clear spot: leave the line unlabelled rather than stack text on a card or another label.
+            if (placed) text.removeAttribute('visibility');
+            else text.setAttribute('visibility', 'hidden');
         }
         labelsPlaced = true;
     }

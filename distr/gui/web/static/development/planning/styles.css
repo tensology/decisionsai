@@ -533,6 +533,8 @@ span.plan-sitemap-shot-missing { border-style: dashed; background: transparent; 
 .plan-inline-footer { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 8px 0; background: var(--studio-surface, #1b2140); }
 .plan-inline-state { color: var(--studio-muted); font-size: 12px; }
 .plan-inline-state[data-state="unsaved"] { color: var(--studio-accent); }
+/* Nothing to save: the button reads as unavailable, not as a dimmed call to action beside "Saved". */
+.plan-inline-save.header-button.primary:disabled { border-color: var(--studio-line); background: transparent; color: var(--studio-muted); opacity: 1; filter: none; }
 .md-toolbar { position: fixed; z-index: 60; display: flex; align-items: center; gap: var(--segment-gap); padding: var(--segment-pad); border: var(--segment-border); border-radius: var(--segment-radius); background: var(--studio-raised); box-shadow: 0 6px 18px rgba(0,0,0,.35); font: inherit; }
 .md-toolbar.hidden { display: none; }
 .md-toolbar > button { display: grid; width: var(--segment-item-height); height: var(--segment-item-height); place-items: center; padding: 0; border: 0; border-radius: var(--segment-item-radius); background: transparent; color: var(--studio-muted); font: inherit; font-size: 13px; cursor: pointer; }

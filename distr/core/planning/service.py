@@ -370,7 +370,9 @@ def open_project_plan(
         workspace_id = int(payload["id"])
         ensure_plan_scaffold(workspace_id)  # DB-only, cheap; stays synchronous
         if defer_scan:
-            if not _scan_is_fresh(workspace_id):
+            # Opening a plan rescans only when the project changed since the last scan.
+            # Rebuild still forces one.
+            if not _scan_is_fresh(workspace_id) and not _scan_is_current(workspace_id, int(payload["project_id"])):
                 start_background_scan(workspace_id, int(payload["project_id"]))
             scan = plan_scan_status(workspace_id)
             detail = get_workspace(workspace_id) or payload
@@ -400,6 +402,84 @@ def _scan_is_fresh(workspace_id: int) -> bool:
     return status.get("state") == "done" and isinstance(finished, (int, float)) and time.time() - finished < PLAN_SCAN_FRESH_SECONDS
 
 
+_SCAN_STAMP_DIR = Path.home() / ".decisions" / "cache" / "plan-scan"
+_FINGERPRINT_SUFFIXES = {".py", ".html", ".jsx", ".tsx", ".js", ".ts", ".vue", ".svelte"}
+
+
+def _project_root_for(project_id: int) -> Path | None:
+    with get_session() as db:
+        project = db.get(Project, int(project_id))
+        folder = str(project.folder_location or "") if project is not None else ""
+    if not folder.strip():
+        return None
+    root = Path(folder).expanduser().resolve()
+    return root if root.is_dir() else None
+
+
+def _source_fingerprint(project_root: Path) -> str:
+    """Size and mtime of every scanned source, plus the page captures beside the plan."""
+    import json
+
+    from distr.core.planning.project_scan import _source_files
+
+    marks: dict[str, dict[str, int]] = {}
+    for path in _source_files(project_root):
+        if path.suffix.lower() not in _FINGERPRINT_SUFFIXES:
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        marks[path.relative_to(project_root).as_posix()] = {"size": int(stat.st_size), "mtime_ns": int(stat.st_mtime_ns)}
+    for directory in (project_root / "planning", project_root / ".planning"):
+        if directory.is_dir():
+            for meta in directory.glob("*.json"):
+                if meta.name == "iface-layout.json":   # card positions are not project source
+                    continue
+                try:
+                    stat = meta.stat()
+                except OSError:
+                    continue
+                marks[f"capture:{meta.name}"] = {"size": int(stat.st_size), "mtime_ns": int(stat.st_mtime_ns)}
+    return hashlib.sha256(json.dumps(marks, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _scan_stamp_path(workspace_id: int) -> Path:
+    return _SCAN_STAMP_DIR / f"workspace-{int(workspace_id)}.json"
+
+
+def _scan_is_current(workspace_id: int, project_id: int) -> bool:
+    """True when the last finished scan saw the same project sources as now."""
+    import json
+
+    try:
+        stamp = json.loads(_scan_stamp_path(workspace_id).read_text(encoding="utf-8"))
+        root = _project_root_for(project_id)
+        if root is None or not isinstance(stamp, dict) or stamp.get("root") != str(root):
+            return False
+        return stamp.get("fingerprint") == _source_fingerprint(root)
+    except (OSError, ValueError, UnicodeError):
+        return False
+    except Exception:
+        logger.debug("Plan scan freshness check failed (workspace %s)", workspace_id, exc_info=True)
+        return False
+
+
+def _write_scan_stamp(workspace_id: int, project_id: int) -> None:
+    import json
+
+    try:
+        root = _project_root_for(project_id)
+        if root is None:
+            return
+        path = _scan_stamp_path(workspace_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"root": str(root), "fingerprint": _source_fingerprint(root),
+                                    "scanned_at": time.time()}) + "\n", encoding="utf-8")
+    except Exception:
+        logger.debug("Plan scan stamp not written (workspace %s)", workspace_id, exc_info=True)
+
+
 def plan_scan_status(workspace_id: int) -> dict[str, Any]:
     with _SCAN_LOCK:
         return dict(_SCAN_STATUS.get(int(workspace_id)) or {"state": "idle", "error": ""})
@@ -425,6 +505,8 @@ def _scan_workspace(workspace_id: int, project_id: int) -> dict[str, Any]:
     except Exception as exc:  # recorded for the UI; the plan stays usable
         state, error = "error", str(exc) or exc.__class__.__name__
         logger.warning("Background plan scan failed (workspace %s, project %s): %s", workspace_id, project_id, error)
+    if state == "done":
+        _write_scan_stamp(workspace_id, project_id)
     return {"state": state, "error": error, "finished_at": time.time(), **coverage}
 
 

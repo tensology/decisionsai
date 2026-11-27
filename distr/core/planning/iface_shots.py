@@ -32,6 +32,12 @@ _FRONT = ("frontend", "vite", "ng serve", "npm run dev", "yarn dev", "pnpm dev",
 _BACK = ("backend", "runserver", "uvicorn", "gunicorn", "manage.py", "django", "flask", "fastapi")
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 _LAYOUT_FILE = "iface-layout.json"
+# Decisions serves itself here, so its own plan can be captured without a terminal.
+_SELF_APP_URL = "http://127.0.0.1:8765"
+_SELF_ROOT = Path(__file__).resolve().parents[3]
+# A page that could not be captured is not retried on every plan open.
+_ATTEMPT_FILE = Path.home() / ".decisions" / "cache" / "plan-shot-attempts.json"
+_RETRY_SECONDS = 24 * 60 * 60
 
 TERMINALS_DOWN = (
     "Images cannot be fetched because the terminals are down. "
@@ -356,9 +362,61 @@ def _targets_for(project) -> dict:
         running, sessions = False, []
     prod = production_url(project.folder_location or "", project.startup_instructions or "")
     targets = describe_targets(running, sessions, project.startup_instructions or "", production=prod)
-    if not running and not targets["production_url"] and not targets["reason"]:
+    if not running and _is_self_project(project.folder_location or ""):
+        targets.update({"terminals_up": True, "frontend_url": _SELF_APP_URL,
+                        "backend_url": _SELF_APP_URL, "reason": ""})
+    if not running and not targets["production_url"] and not targets["reason"] and not targets.get("frontend_url"):
         targets["reason"] = TERMINALS_DOWN
     return targets
+
+
+def _is_self_project(folder: str) -> bool:
+    try:
+        return bool(str(folder or "").strip()) and Path(folder).expanduser().resolve() == _SELF_ROOT
+    except OSError:
+        return False
+
+
+def _attempt_key(workspace_id: int, screen_id: str) -> str:
+    return f"{int(workspace_id)}:{screen_id}"
+
+
+def _read_attempts() -> dict:
+    try:
+        data = json.loads(_ATTEMPT_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _recent_attempt(workspace_id: int, screen_id: str) -> dict | None:
+    row = _read_attempts().get(_attempt_key(workspace_id, screen_id))
+    if not isinstance(row, dict):
+        return None
+    try:
+        at = float(row.get("at") or 0)
+    except (TypeError, ValueError):
+        return None
+    return row if time.time() - at < _RETRY_SECONDS else None
+
+
+def _record_attempt(workspace_id: int, screen_id: str, reason: str | None) -> None:
+    """Remember a failed capture, or forget it after a success. Best effort."""
+    try:
+        attempts = _read_attempts()
+        key = _attempt_key(workspace_id, screen_id)
+        if reason is None:
+            if key not in attempts:
+                return
+            attempts.pop(key, None)
+        else:
+            attempts[key] = {"at": time.time(), "reason": reason}
+        _ATTEMPT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _ATTEMPT_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(attempts, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(tmp, _ATTEMPT_FILE)
+    except OSError:
+        logger.debug("Interface shot attempt log not written", exc_info=True)
 
 
 def interface_shot_status(workspace_id: int) -> dict:
@@ -457,6 +515,10 @@ def _prepare_shot_page(context, allowed_hosts):
         if _is_payment_url(route.request.url):
             route.abort()
             return
+        # A screenshot only reads: nothing the page tries to POST, PUT or DELETE is sent.
+        if route.request.method not in ("GET", "HEAD", "OPTIONS"):
+            route.abort()
+            return
         route.continue_()
 
     page.route("**/*", _on_route)
@@ -499,7 +561,7 @@ def _open_shot_url(page, url: str, allowed_hosts: set[str], deadline: float):
         raise ValueError(f"The page returned {response.status}.")
     try:
         page.wait_for_function(
-            """() => performance.getEntriesByType('resource').some((e) =>
+            r"""() => performance.getEntriesByType('resource').some((e) =>
                 /\/api\//.test(e.name) && (!e.responseStatus || e.responseStatus < 500)
             )""",
             timeout=min(6000, _shot_remaining(deadline)),
@@ -509,19 +571,23 @@ def _open_shot_url(page, url: str, allowed_hosts: set[str], deadline: float):
     return response
 
 
-def _grab(url: str, dest: Path, allowed_hosts: set[str]) -> None:
+def _browser_env() -> dict[str, str]:
+    """The app's environment without DYLD_* overrides, which stop Firefox from loading its own NSS."""
+    return {key: value for key, value in os.environ.items() if not key.startswith("DYLD_")}
+
+
+def _grab(url: str, dest: Path, allowed_hosts: set[str]) -> dict:
+    """Capture one page with headless Firefox. Returns the page's rendered-DOM cue ({} if unreadable)."""
     from playwright.sync_api import sync_playwright
 
     if not _clean_url(url, allowed_hosts):
         raise ValueError("Refusing a page outside the project.")
     dest.parent.mkdir(parents=True, exist_ok=True)
     last_error = None
+    cue: dict = {}
     for attempt in range(2):
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
-                headless=True,
-                args=["--disable-dev-shm-usage", "--disable-gpu"],
-            )
+            browser = playwright.firefox.launch(headless=True, env=_browser_env())
             try:
                 context = browser.new_context(
                     viewport=dict(_SHOT_VIEWPORT),
@@ -536,6 +602,13 @@ def _grab(url: str, dest: Path, allowed_hosts: set[str]) -> None:
                 _wait_for_shot(page, deadline)
                 # Viewport PNG at device_scale_factor 2 (2880x1800). Not a full-page shot, to keep size reasonable.
                 page.screenshot(path=str(dest), type="png")
+                try:
+                    from distr.core.planning.dom_cues import _JS_READ, _normalise
+
+                    cue = _normalise(page.evaluate(_JS_READ))
+                except Exception:
+                    logger.debug("Interface shot: rendered cues not read", exc_info=True)
+                    cue = {}
                 last_error = None
                 break
             except Exception as exc:
@@ -547,6 +620,7 @@ def _grab(url: str, dest: Path, allowed_hosts: set[str]) -> None:
             break
     if last_error is not None:
         raise last_error
+    return cue
 
 
 def _clear_shot_files(directory: Path) -> int:
@@ -608,6 +682,12 @@ def capture_interface_shot(workspace_id: int, *, screen_id: str, route: str, lan
     )
     image = _image_url(workspace_id, screen_id)
     captured_at = str(meta.get("captured_at") or "")
+    stale = bool(expected and meta.get("wire_hash") and meta.get("wire_hash") != expected)
+    if plan["action"] == "grab" and saved is None and not force:
+        recent = _recent_attempt(workspace_id, screen_id)
+        if recent is not None:
+            return {"image": "", "reason": str(recent.get("reason") or "The page did not load."),
+                    "captured_at": "", "current": False}
     if plan["action"] == "read":
         return {"image": image, "reason": "", "captured_at": captured_at, "current": True}
     if plan["action"] != "grab":
@@ -618,20 +698,25 @@ def capture_interface_shot(workspace_id: int, *, screen_id: str, route: str, lan
     if targets.get("production_url"):
         allowed.add(_host(targets["production_url"]))
     try:
-        _grab(plan["url"], dest, allowed)
+        cue = _grab(plan["url"], dest, allowed)
     except Exception as exc:
         logger.info("Interface shot skipped: %s", exc)
         if saved is not None:
             return {"image": image, "reason": "", "captured_at": captured_at, "current": not stale}
-        return {"image": "", "reason": "The page did not load from the running project or production site.",
-                "captured_at": "", "current": False}
+        reason = "The page did not load from the running project or production site."
+        _record_attempt(workspace_id, screen_id, reason)
+        return {"image": "", "reason": reason, "captured_at": "", "current": False}
+    _record_attempt(workspace_id, screen_id, None)
     stamp = datetime.now(timezone.utc).isoformat()
-    _write_meta(dest, {
+    payload = {
         "captured_at": stamp,
         "url": plan["url"],
         "screen_id": screen_id,
         "wire_hash": expected or "",
-    })
+    }
+    if cue:
+        payload["cues"] = cue
+    _write_meta(dest, payload)
     return {"image": image, "reason": "", "captured_at": stamp, "current": True}
 
 

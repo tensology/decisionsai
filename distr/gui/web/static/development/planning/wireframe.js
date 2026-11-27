@@ -107,6 +107,24 @@ function validate(node, diagnostics) {
     if (node.type === 'date' && node.attrs.min && node.attrs.max && node.attrs.min > node.attrs.max) diagnostic(diagnostics, node, 'INVALID_RANGE', 'Date min must not follow max.');
 }
 
+// Labels scanned from JSX or templates can carry HTML entities (You&apos;re, &times;).
+// Decode them once here so cards and the designer show the text, not the markup.
+const NAMED_ENTITIES = {
+    amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0', times: '\u00d7', larr: '\u2190', rarr: '\u2192',
+    uarr: '\u2191', darr: '\u2193', hellip: '\u2026', mdash: '\u2014', ndash: '\u2013', copy: '\u00a9', reg: '\u00ae',
+    trade: '\u2122', laquo: '\u00ab', raquo: '\u00bb', lsquo: '\u2018', rsquo: '\u2019', ldquo: '\u201c', rdquo: '\u201d',
+    middot: '\u00b7', bull: '\u2022', check: '\u2713', deg: '\u00b0', euro: '\u20ac', pound: '\u00a3'
+};
+export function decodeEntities(text) {
+    return String(text ?? '').replace(/&(#x[0-9a-f]{1,6}|#[0-9]{1,7}|[a-z][a-z0-9]{1,8});/gi, (whole, name) => {
+        if (name[0] === '#') {
+            const code = name[1] === 'x' || name[1] === 'X' ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
+            return Number.isInteger(code) && code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : whole;
+        }
+        return Object.hasOwn(NAMED_ENTITIES, name.toLowerCase()) ? NAMED_ENTITIES[name.toLowerCase()] : whole;
+    });
+}
+
 export function parseWireframe(source) {
     const diagnostics = [], roots = [], path = [], ids = new Set();
     const empty = { type: 'screen', label: 'Wireframe', attrs: {}, children: [], line: 0, column: 1, id: 'wf-root' };
@@ -148,7 +166,7 @@ export function parseWireframe(source) {
             } else if (!quotedLabel && booleanAttrs.has(token)) {
                 if (Object.hasOwn(node.attrs, token)) diagnostic(diagnostics, node, 'DUPLICATE_ATTRIBUTE', `Duplicate attribute "${token}".`);
                 node.attrs[token] = 'true';
-            } else if (!hasLabel) { node.label = token; hasLabel = true; }
+            } else if (!hasLabel) { node.label = decodeEntities(token); hasLabel = true; }
             else diagnostic(diagnostics, node, 'SYNTAX', `Unexpected token "${token}"; quote labels containing spaces.`);
         }
         if ([node.label, ...Object.values(node.attrs)].some(value => value.length > LIMIT.label)) diagnostic(diagnostics, node, 'TEXT_LIMIT', `Labels and attribute values are limited to ${LIMIT.label} characters.`);

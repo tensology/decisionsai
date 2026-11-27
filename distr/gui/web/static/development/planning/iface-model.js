@@ -289,7 +289,10 @@ export function pageStates(source = '', meta = {}) {
 
 function markChromeEdges(nodes, edges) {
     const pages = nodes.filter((node) => node.lane !== 'guidance').length || nodes.length;
-    const threshold = Math.max(3, Math.ceil(pages * 0.4));
+    // On a large map a page a tenth of the site links to (login, home) is shared navigation, not a flow.
+    const threshold = nodes.length > MAX_RADIAL_PAGES
+        ? Math.max(4, Math.ceil(pages * LARGE_CHROME_SHARE))
+        : Math.max(3, Math.ceil(pages * 0.4));
     const incoming = new Map();
     const outgoing = new Map();
     for (const edge of edges) {
@@ -307,6 +310,40 @@ function markChromeEdges(nodes, edges) {
 
 const HUB_LINKS = 3;
 const MAX_RADIAL_PAGES = 40;
+const LARGE_CHROME_SHARE = 0.1;
+const UNTANGLE_PASSES = 6;
+
+// Large maps: swap same-size cards inside a lane while that shortens their visible links.
+// Deterministic (fixed scan order), and only positions change; no card is added or dropped.
+function untangle(nodes, edges) {
+    const byKey = new Map(nodes.map((node) => [node.key, node]));
+    const near = new Map(nodes.map((node) => [node.key, []]));
+    for (const edge of edges) {
+        if (edge.chrome || edge.from === edge.to) continue;
+        const a = byKey.get(edge.from), b = byKey.get(edge.to);
+        if (!a || !b) continue;
+        near.get(a.key).push(b);
+        near.get(b.key).push(a);
+    }
+    const cost = (node, x, y) => near.get(node.key).reduce((sum, other) => sum + Math.hypot(x - other.x, y - other.y), 0);
+    const linked = nodes.filter((node) => near.get(node.key).length);
+    for (let pass = 0; pass < UNTANGLE_PASSES; pass += 1) {
+        let moved = false;
+        for (const a of linked) {
+            for (const b of nodes) {
+                if (a === b || a.lane !== b.lane || a.h !== b.h) continue;
+                const before = cost(a, a.x, a.y) + cost(b, b.x, b.y);
+                const after = cost(a, b.x, b.y) + cost(b, a.x, a.y);
+                if (after < before - 1) {
+                    [a.x, b.x] = [b.x, a.x];
+                    [a.y, b.y] = [b.y, a.y];
+                    moved = true;
+                }
+            }
+        }
+        if (!moved) break;
+    }
+}
 
 function cardHeight(node) {
     if (node.lane === 'guidance') return NODE.guideH;
@@ -520,6 +557,7 @@ export function layoutIface(model, { aspect = 1.6, pinned = {} } = {}) {
         y += NODE.laneGap - NODE.gapY;
     }
     for (const lane of lanes) lane.w = width + 28;
+    if (large) untangle(model.nodes, model.edges || []);
     return applyPinned(model, { lanes, width, height: Math.max(NODE.h, y - NODE.laneGap + NODE.gapY), cols, large }, pinned);
 }
 
