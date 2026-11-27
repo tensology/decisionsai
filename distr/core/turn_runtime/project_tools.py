@@ -18,6 +18,39 @@ from distr.core.turn_runtime.contracts import ToolObservation
 
 
 _IGNORED_PARTS = {".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache"}
+
+
+def _python_search(root: Path, base: Path, query: str, glob: str, limit: int) -> list[str]:
+    """Minimal ``rg -n`` stand-in: regex (literal on bad regex), relative paths."""
+    import fnmatch
+
+    try:
+        pattern = re.compile(query)
+    except re.error:
+        pattern = re.compile(re.escape(query))
+    files = [base] if base.is_file() else (path for path in sorted(base.rglob("*")) if path.is_file())
+    rows: list[str] = []
+    for path in files:
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            relative = path
+        if any(part in _IGNORED_PARTS for part in relative.parts) or is_secret_file(path):
+            continue
+        if glob and not (fnmatch.fnmatch(str(relative), glob) or fnmatch.fnmatch(path.name, glob)):
+            continue
+        try:
+            if path.stat().st_size > 2_000_000:
+                continue
+            with path.open("r", encoding="utf-8", errors="strict") as handle:
+                for number, line in enumerate(handle, 1):
+                    if pattern.search(line):
+                        rows.append(f"{relative}:{number}:{line.rstrip()[:400]}")
+                        if len(rows) >= limit:
+                            return rows
+        except (UnicodeDecodeError, OSError):
+            continue
+    return rows
 _MAX_OUTPUT = 12_000
 _AUTOMATION_DELETE_APPROVALS: dict[str, tuple[float, str, int, int]] = {}
 _AUTOMATION_DELETE_APPROVAL_TTL_SECONDS = 300.0
@@ -28,6 +61,54 @@ _DESTRUCTIVE_COMMAND_PATTERNS = (
     re.compile(r"(?i)\bgit\s+clean\s+-[a-z]*f[a-z]*d"),
     re.compile(r"(?i)\b(?:chmod|chown)\s+-R\b"),
 )
+
+
+from distr.core.secret_redaction import is_secret_file, redact_secrets  # noqa: E402
+
+
+def _redact_value(value):
+    """Mask secrets in strings at any depth; keep dict/list shapes (tokens, ids) intact."""
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, dict):
+        return {key: _redact_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_value(item) for item in value]
+    return value
+
+
+_READ_ONLY_WRITE = (
+    re.compile(r"(?<![0-9&])>{1,2}(?!\s*/dev/null)(?!&)"),
+    re.compile(r"(?i)(?:^|[;&|(]\s*|\bxargs\s+|\bsudo\s+)(?:rm|mv|cp|touch|mkdir|rmdir|ln|chmod|chown|truncate|dd|tee|install|patch|"
+               r"pip3?|npm|yarn|pnpm|brew|apt(?:-get)?|kill|pkill|systemctl|service|supervisorctl|crontab)\b"),
+    re.compile(r"(?i)\bsed\b[^|;&]*\s-i\b|\bperl\b[^|;&]*\s-i\b"),
+    re.compile(r"(?i)\bgit\s+(?:commit|push|pull|merge|rebase|reset|checkout|switch|restore|stash|clean|add|rm|mv|tag|cherry-pick|revert|apply|am|fetch)\b"),
+    re.compile(r"(?i)\b(?:manage\.py|django-admin)\s+(?!(?:check|showmigrations|diffsettings|help|inspectdb|sqlmigrate)\b)\w+"),
+    re.compile(r"(?i)\b(?:psql|mysql|sqlite3)\b[^|;&]*\b(?:insert|update|delete|drop|alter|create|truncate|grant)\b"),
+)
+
+
+def read_only_command_violation(command: str) -> str:
+    """Why a shell command would write, or '' when it only reads."""
+    for pattern in _READ_ONLY_WRITE:
+        match = pattern.search(command)
+        if match:
+            return match.group(0).strip()
+    return ""
+
+
+def _secret_reference(command: str) -> str:
+    import shlex
+
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        tokens = command.split()
+    for token in tokens:
+        for piece in re.split(r"[=<>|;&]", token):
+            if piece and not piece.startswith("-") and is_secret_file(piece.rstrip("/")):
+                return piece
+    return ""
 
 
 def _bounded_output(text: str, limit: int = _MAX_OUTPUT) -> tuple[str, bool]:
@@ -116,6 +197,9 @@ class ProjectToolExecutor:
                     "run_command": self._run_command,
                 }
             )
+        else:
+            # Read-only blocks writes, not the shell: logs, git log and tests still run.
+            self._handlers["run_command"] = self._run_command
         if self.untrusted_external:
             self._handlers = {
                 name: handler
@@ -268,6 +352,21 @@ class ProjectToolExecutor:
                         ["command"],
                     ),
                 ]
+            )
+        else:
+            definitions.append(
+                _definition(
+                    "run_command",
+                    "Run one read-only shell command in the project (inspect, search, logs, git log/diff, tests). "
+                    "Commands that write files, change git state, install packages or change a database are refused.",
+                    {
+                        "command": {"type": "string"},
+                        "working_directory": {"type": "string", "default": "."},
+                        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300},
+                        "max_chars": {"type": "integer", "minimum": 100, "maximum": _MAX_OUTPUT, "default": _MAX_OUTPUT},
+                    },
+                    ["command"],
+                )
             )
         return definitions
 
@@ -533,6 +632,12 @@ class ProjectToolExecutor:
         path = self._path(arguments.get("path"), must_exist=True)
         if not path.is_file():
             raise ValueError("The requested project path is not a file.")
+        if is_secret_file(path):
+            return ToolObservation(
+                status="error",
+                summary=f"Refused: {path.name} holds secrets and is never read by agents.",
+                error="secret file access is blocked",
+            )
         lines = path.read_text(encoding="utf-8").splitlines()
         start = max(1, int(arguments.get("start_line") or 1))
         end = min(len(lines), int(arguments.get("end_line") or min(len(lines), start + 399)))
@@ -572,6 +677,18 @@ class ProjectToolExecutor:
             raise ValueError("search_files requires a query.")
         base = self._path(arguments.get("path") or ".", must_exist=True)
         limit = max(1, min(int(arguments.get("limit") or 200), 500))
+        import shutil
+
+        if not shutil.which("rg"):
+            # ripgrep is not installed on every machine (a fresh Mac has none).
+            # Search in Python rather than failing the tool and burning turns.
+            rows = _python_search(self.root, base, query, str(arguments.get("glob") or ""), limit)
+            return ToolObservation(
+                status="warning" if len(rows) >= limit else "success",
+                summary=f"Found {len(rows)} matching lines.",
+                next_actions=("Narrow the search query or path.",) if len(rows) >= limit else (),
+                output="\n".join(rows)[:_MAX_OUTPUT],
+            )
         command = ["rg", "-n", "--hidden", "--color", "never"]
         for ignored in sorted(_IGNORED_PARTS):
             command.extend(["--glob", f"!{ignored}/**"])
@@ -645,7 +762,34 @@ class ProjectToolExecutor:
                 next_actions=("Use a scoped, recoverable project operation or ask the user for the exact destructive action.",),
                 error="destructive command requires explicit user authorization outside the native tool loop",
             )
+        secret = _secret_reference(command)
+        if secret:
+            return ToolObservation(
+                status="error",
+                summary=f"Refused: {secret} holds secrets and is never read by agents.",
+                next_actions=("Work from settings names or ask Paul which value to use; never print secret files.",),
+                error="secret file access is blocked",
+            )
+        if self.read_only:
+            violation = read_only_command_violation(command)
+            if violation:
+                return ToolObservation(
+                    status="error",
+                    summary=f"Read-only run: refused a command that writes ({violation}).",
+                    next_actions=("Use a command that only reads, or report what change is needed.",),
+                    error="write command blocked in read-only mode",
+                )
         cwd = self._path(arguments.get("working_directory") or ".", must_exist=True, directory=True)
+        if re.match(r"^\s*(?:\S+=\S+\s+)*rg\b", command):
+            import shutil
+
+            if not shutil.which("rg"):
+                return ToolObservation(
+                    status="error",
+                    summary="ripgrep (rg) is not installed here.",
+                    next_actions=("Use the search_files tool, or grep -rn, instead of rg.",),
+                    error="rg: command not found; use search_files or grep -rn",
+                )
         timeout = max(1, min(int(arguments.get("timeout_seconds") or 120), 300))
         from distr.core.rtk_support import run_cancellable_shell_command
 
@@ -699,7 +843,7 @@ class ProjectToolExecutor:
                 error="unknown tool",
             )
         try:
-            return await asyncio.to_thread(handler, dict(arguments or {}))
+            observation = await asyncio.to_thread(handler, dict(arguments or {}))
         except Exception as exc:
             return ToolObservation(
                 status="error",
@@ -707,3 +851,14 @@ class ProjectToolExecutor:
                 next_actions=("Correct the arguments and retry once, or stop with the blocker.",),
                 error=str(exc),
             )
+        # Secrets never reach the model, the thread or the event log.
+        import dataclasses
+
+        try:
+            return dataclasses.replace(
+                observation,
+                output=_redact_value(observation.output),
+                error=_redact_value(observation.error),
+            )
+        except Exception:
+            return observation

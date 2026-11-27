@@ -895,6 +895,13 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
         if provider:
             command.extend(["--provider", provider])
         command.extend(["--model", model])
+    if not task.adapter_options.get("disable_tools"):
+        # Pi's own tools (bash/read/grep) refuse secret files and mask secret
+        # values in output, the same rules as Decisions' project tools.
+        command.extend([
+            "--extension",
+            str(Path(__file__).resolve().parent / "pi_extensions" / "secret_guard.ts"),
+        ])
     if task.execution_session_id and (
         task.origin in {"workflow", "development"} or task.ticket_id
     ):
@@ -1700,9 +1707,19 @@ class PiBackend(ProjectCliBackend):
             task.origin == "development"
             and task.adapter_options.get("bounded_automation") == "email_action_items"
         )
+        # Long ticket/thread runs checkpoint before the hard ceiling: stop the
+        # tool phase early and ask the same durable session for a progress
+        # report, so "continue" resumes instead of starting over empty-handed.
+        checkpointable = bool(task.execution_session_id) and bool(
+            task.origin in {"workflow", "development"} or task.ticket_id
+        ) and not bounded_automation
+        checkpoint_reserve = min(150, max(60, int(timing.timeout_seconds * 0.15)))
         tool_phase_limit = (
             min(300, max(1, int(task.adapter_options.get("tool_phase_timeout_seconds") or 300)))
-            if bounded_automation else timing.timeout_seconds
+            if bounded_automation
+            else max(60, timing.timeout_seconds - checkpoint_reserve)
+            if checkpointable
+            else timing.timeout_seconds
         )
         tool_phase_expired = False
         process: asyncio.subprocess.Process | None = None
@@ -1736,7 +1753,7 @@ class PiBackend(ProjectCliBackend):
             assert process.stdout is not None
             while True:
                 elapsed = time.monotonic() - started_at
-                if bounded_automation and elapsed >= tool_phase_limit:
+                if (bounded_automation or checkpointable) and elapsed >= tool_phase_limit:
                     tool_phase_expired = True
                     process.terminate()
                     break
@@ -1949,9 +1966,10 @@ class PiBackend(ProjectCliBackend):
             report_error
             or (task.ticket_id and not output)
             or (bounded_automation and (tool_phase_expired or inspection_budget_exceeded))
+            or (checkpointable and tool_phase_expired)
         )
         if (
-            (task.origin == "workflow" or task.ticket_id or bounded_automation)
+            (task.origin == "workflow" or task.ticket_id or bounded_automation or checkpointable)
             and task.execution_session_id
             and needs_terminal_report
             and not timed_out
@@ -1968,7 +1986,11 @@ class PiBackend(ProjectCliBackend):
                 pi_path=pi_path,
                 task=task,
                 on_event=on_event,
-                prior_error=str(report_error or ""),
+                prior_error=str(report_error or "") or (
+                    "The time budget ran out. Report only what is verifiably done, then list what is left "
+                    "under Blockers as 'Remaining: ...' so the next run can continue from this session."
+                    if checkpointable and tool_phase_expired else ""
+                ),
             )
             if finalized_output:
                 output = finalized_output
@@ -2010,6 +2032,11 @@ class PiBackend(ProjectCliBackend):
             error = (
                 f"Pi worker reached its {timing.timeout_seconds}s safety ceiling "
                 f"({timing.rationale}); the workflow was stopped cleanly."
+            )
+        elif checkpointable and tool_phase_expired:
+            error = (
+                f"Paused near the {timing.timeout_seconds}s time limit and saved its progress. "
+                "Say continue to resume from the same session."
             )
         elif model_errors and not ignored_transient_errors:
             error = _preferred_model_error(model_errors)

@@ -103,6 +103,9 @@ def redact_text(value: Any, *, limit: int = 8000, preserve_paths: bool = False) 
     if value is None:
         return ""
     text = str(value).replace("\x00", "").replace("\r\n", "\n").strip()
+    from distr.core.secret_redaction import redact_secrets
+
+    text = redact_secrets(text)
     text = _SECRET_VALUE_RE.sub(lambda m: ((m.group(1) or "") if m.lastindex else "") + "[redacted]", text)
     text = _ASSIGNMENT_RE.sub(lambda m: f"{m.group(1)}=[redacted]", text)
     if not preserve_paths:
