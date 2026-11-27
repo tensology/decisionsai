@@ -318,10 +318,18 @@ class TelegramRemoteControlMixin:
         """Capture and stream one screenshot frame without blocking API relay calls."""
         command_data = data.get("data", {}) or {}
         request_id = data.get("request_id")
-        screen_number = command_data.get("screen_number", 1)
+        try:
+            screen_number = int(command_data.get("screen_number") or 1)
+        except (TypeError, ValueError):
+            screen_number = 1
+        all_screens = bool(command_data.get("all_screens")) or screen_number == 0
         import struct
 
-        screenshot_data = self._capture_screen_screenshot(screen_number)
+        if all_screens:
+            screenshot_data = self._capture_all_screens_screenshot()
+            screen_number = 0
+        else:
+            screenshot_data = self._capture_screen_screenshot(screen_number)
         if "error" in screenshot_data:
             self._send_websocket_message({
                 "type": "remote_control_response",
@@ -451,19 +459,37 @@ class TelegramRemoteControlMixin:
                     screen_number = int(command_data.get("screen_number") or 1)
                 except (TypeError, ValueError):
                     screen_number = 1
-                screen = next(
-                    (s for s in self._get_screens_list() if s.get("screen_number") == screen_number),
-                    None,
-                )
-                if not screen or not (screen.get("geometry") or {}).get("width"):
-                    raise RuntimeError(f"Screen {screen_number} not found")
-                response["data"] = server.answer(
-                    command_data.get("sdp"),
-                    command_data.get("type"),
-                    screen["geometry"],
-                    session_id,
-                    ice_servers=command_data.get("ice_servers"),
-                )
+                all_screens = bool(command_data.get("all_screens")) or screen_number == 0
+                screens = self._get_screens_list()
+                if all_screens:
+                    if not screens:
+                        raise RuntimeError("No screens available")
+                    from distr.core.integrations.telegram.webrtc_screen import union_geometry
+
+                    geometry = union_geometry(screens)
+                    displays = [s.get("geometry") or {} for s in screens]
+                    response["data"] = server.answer(
+                        command_data.get("sdp"),
+                        command_data.get("type"),
+                        geometry,
+                        session_id,
+                        ice_servers=command_data.get("ice_servers"),
+                        displays=displays,
+                    )
+                else:
+                    screen = next(
+                        (s for s in screens if s.get("screen_number") == screen_number),
+                        None,
+                    )
+                    if not screen or not (screen.get("geometry") or {}).get("width"):
+                        raise RuntimeError(f"Screen {screen_number} not found")
+                    response["data"] = server.answer(
+                        command_data.get("sdp"),
+                        command_data.get("type"),
+                        screen["geometry"],
+                        session_id,
+                        ice_servers=command_data.get("ice_servers"),
+                    )
         except Exception as exc:
             reason = str(exc) or "Live screen setup timed out"
             logger.warning("WebRTC %s failed: %s", command, reason)
@@ -2133,6 +2159,59 @@ class TelegramRemoteControlMixin:
         except Exception as e:
             logger.error(f"Error capturing screenshot: {e}", exc_info=True)
             return {"error": str(e), "screen_number": screen_number}
+
+    def _capture_all_screens_screenshot(self, draw_cursor: bool = True) -> dict:
+        """Capture every display and composite them onto one virtual desktop in their real arrangement."""
+        try:
+            import io
+            from PIL import Image
+            from distr.core.integrations.telegram.webrtc_screen import union_geometry
+
+            screens_info = self._get_screens_list()
+            if not screens_info:
+                return {"error": "No screens available", "screen_number": 0}
+
+            captures = []
+            for screen in screens_info:
+                number = screen.get("screen_number")
+                geo = screen.get("geometry") or {}
+                if not geo.get("width") or not geo.get("height") or not number:
+                    continue
+                pil_img = self._capture_screen_pil_image(number, draw_cursor=draw_cursor)
+                if pil_img is None:
+                    continue
+                if pil_img.mode != "RGB":
+                    pil_img = pil_img.convert("RGB")
+                captures.append((geo, pil_img))
+            if not captures:
+                return {"error": "Failed to capture screenshot", "screen_number": 0}
+
+            union = union_geometry([geo for geo, _ in captures])
+            scale = max(img.width / geo["width"] for geo, img in captures)
+            canvas = Image.new(
+                "RGB",
+                (max(1, int(round(union["width"] * scale))), max(1, int(round(union["height"] * scale)))),
+                (0, 0, 0),
+            )
+            for geo, img in captures:
+                tw = max(1, int(round(geo["width"] * scale)))
+                th = max(1, int(round(geo["height"] * scale)))
+                if img.size != (tw, th):
+                    img = img.resize((tw, th), Image.Resampling.LANCZOS)
+                canvas.paste(img, (int(round((geo["x"] - union["x"]) * scale)), int(round((geo["y"] - union["y"]) * scale))))
+
+            buf = io.BytesIO()
+            canvas.save(buf, "WEBP", quality=65, method=2)
+            return {
+                "screen_number": 0,
+                "screen_name": "All screens",
+                "geometry": union,
+                "image_data": buf.getvalue(),
+                "format": "webp",
+            }
+        except Exception as e:
+            logger.error(f"Error capturing all-screens screenshot: {e}", exc_info=True)
+            return {"error": str(e), "screen_number": 0}
 
     def _move_mouse_to(self, x: int, y: int, screen_number: int, instant: bool = False):
         """Move mouse to absolute coordinates with smooth animation. Used for drag operations.

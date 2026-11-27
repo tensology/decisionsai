@@ -110,6 +110,89 @@ def target_size(width: int, height: int, max_width: int = MAX_WIDTH, max_height:
     return out_w, out_h
 
 
+def _as_geometry(item) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    geo = item.get("geometry") if "geometry" in item and "width" not in item else item
+    if not isinstance(geo, dict):
+        return None
+    try:
+        out = {k: int(geo.get(k) or 0) for k in ("x", "y", "width", "height")}
+    except (TypeError, ValueError):
+        return None
+    if out["width"] <= 0 or out["height"] <= 0:
+        return None
+    return out
+
+
+def union_geometry(screens) -> dict:
+    """Bounding box of the given displays in desktop points, using their real arrangement."""
+    geos = [g for g in (_as_geometry(item) for item in (screens or [])) if g]
+    if not geos:
+        raise ValueError("screen geometry is missing")
+    min_x = min(g["x"] for g in geos)
+    min_y = min(g["y"] for g in geos)
+    max_x = max(g["x"] + g["width"] for g in geos)
+    max_y = max(g["y"] + g["height"] for g in geos)
+    return {"x": min_x, "y": min_y, "width": max_x - min_x, "height": max_y - min_y}
+
+
+def composite_display_frames(union: dict, parts, scale: float = 1.0):
+    """Paste captured display frames onto a black canvas in their real arrangement.
+
+    ``parts`` is a list of ``(geometry, ndarray, pixel_format)`` where pixel_format is
+    ``bgra`` or ``rgb24``. Returns ``(canvas, "bgra")``.
+    """
+    import numpy as np
+    from PIL import Image
+
+    if not scale or scale <= 0:
+        scale = 1.0
+    out_w = max(1, int(round(union["width"] * scale)))
+    out_h = max(1, int(round(union["height"] * scale)))
+    canvas = np.zeros((out_h, out_w, 4), dtype=np.uint8)
+    canvas[:, :, 3] = 255
+    for geo, frame, pixel_format in parts or []:
+        if frame is None or not isinstance(geo, dict):
+            continue
+        tw = max(1, int(round(geo["width"] * scale)))
+        th = max(1, int(round(geo["height"] * scale)))
+        arr = frame
+        if pixel_format == "rgb24":
+            img = Image.fromarray(arr)
+            if img.size != (tw, th):
+                img = img.resize((tw, th), Image.Resampling.BILINEAR)
+            rgb = np.asarray(img)
+            bgra = np.dstack((rgb[:, :, 2], rgb[:, :, 1], rgb[:, :, 0], np.full(rgb.shape[:2], 255, np.uint8)))
+        else:
+            if arr.ndim == 3 and arr.shape[2] >= 4:
+                rgba = arr[:, :, [2, 1, 0, 3]]
+                img = Image.fromarray(rgba)
+            else:
+                img = Image.fromarray(arr[:, :, :3][:, :, ::-1])
+            if img.size != (tw, th):
+                img = img.resize((tw, th), Image.Resampling.BILINEAR)
+            converted = np.asarray(img)
+            if converted.ndim == 3 and converted.shape[2] == 4:
+                bgra = converted[:, :, [2, 1, 0, 3]]
+            else:
+                bgra = np.dstack((converted[:, :, 2], converted[:, :, 1], converted[:, :, 0], np.full(converted.shape[:2], 255, np.uint8)))
+        dx = int(round((geo["x"] - union["x"]) * scale))
+        dy = int(round((geo["y"] - union["y"]) * scale))
+        src_x0 = max(0, -dx)
+        src_y0 = max(0, -dy)
+        dst_x0 = max(0, dx)
+        dst_y0 = max(0, dy)
+        src_x1 = min(bgra.shape[1], out_w - dst_x0 + src_x0)
+        src_y1 = min(bgra.shape[0], out_h - dst_y0 + src_y0)
+        if src_x1 <= src_x0 or src_y1 <= src_y0:
+            continue
+        dst_x1 = dst_x0 + (src_x1 - src_x0)
+        dst_y1 = dst_y0 + (src_y1 - src_y0)
+        canvas[dst_y0:dst_y1, dst_x0:dst_x1] = bgra[src_y0:src_y1, src_x0:src_x1]
+    return canvas, "bgra"
+
+
 def tune_encoders(bitrates: dict = ENCODER_BITRATES) -> None:
     """Widen aiortc's encoder bitrate bounds (module constants read on every rate update)."""
     from aiortc.codecs import h264, vpx
@@ -164,44 +247,57 @@ def screen_capture_allowed() -> bool:
 
 
 class ScreenGrabber:
-    """Grab one display as a scaled video frame, with the pointer drawn in."""
+    """Grab one display, or every display composited in its real arrangement, as a scaled frame."""
 
-    def __init__(self, geometry: dict, cursor_path: Optional[str] = None):
-        self.geometry = {k: int(geometry.get(k) or 0) for k in ("x", "y", "width", "height")}
-        if self.geometry["width"] <= 0 or self.geometry["height"] <= 0:
-            raise ValueError("screen geometry is missing")
-        self._display_id = None
+    def __init__(self, geometry: dict, cursor_path: Optional[str] = None, displays=None):
+        display_geos = [g for g in (_as_geometry(item) for item in (displays or [])) if g]
+        self.displays = display_geos
+        if display_geos:
+            self.geometry = union_geometry(display_geos)
+        else:
+            self.geometry = {k: int((geometry or {}).get(k) or 0) for k in ("x", "y", "width", "height")}
+            if self.geometry["width"] <= 0 or self.geometry["height"] <= 0:
+                raise ValueError("screen geometry is missing")
+        self._display_ids = {}
         self.size = target_size(self.geometry["width"], self.geometry["height"], pixel_scale=self._pixel_scale())
         self._cursor = None
         self._cursor_path = cursor_path
 
-    def _quartz_display(self):
+    def _quartz_display(self, geometry: Optional[dict] = None):
         import Quartz
 
-        if self._display_id is not None:
-            return self._display_id
+        geo = geometry or self.geometry
+        key = (geo["x"], geo["y"], geo["width"], geo["height"])
+        if key in self._display_ids:
+            return self._display_ids[key]
         err, ids, count = Quartz.CGGetActiveDisplayList(16, None, None)
         best = Quartz.CGMainDisplayID()
         for display_id in (ids or [])[: count or 0]:
             bounds = Quartz.CGDisplayBounds(display_id)
-            if int(bounds.origin.x) == self.geometry["x"] and int(bounds.origin.y) == self.geometry["y"]:
+            if int(bounds.origin.x) == geo["x"] and int(bounds.origin.y) == geo["y"]:
                 best = display_id
                 break
-        self._display_id = best
+        self._display_ids[key] = best
         return best
 
-    def _pixel_scale(self) -> float:
-        """Native pixels per point for this display (2.0 on Retina), 1.0 when unknown."""
+    def _pixel_scale_for(self, geometry: dict) -> float:
+        """Native pixels per point for one display (2.0 on Retina), 1.0 when unknown."""
         if platform.system() != "Darwin":
             return 1.0
         try:
             import Quartz
 
-            mode = Quartz.CGDisplayCopyDisplayMode(self._quartz_display())
+            mode = Quartz.CGDisplayCopyDisplayMode(self._quartz_display(geometry))
             pixels = Quartz.CGDisplayModeGetPixelWidth(mode)
-            return max(1.0, min(3.0, pixels / self.geometry["width"]))
+            return max(1.0, min(3.0, pixels / geometry["width"]))
         except Exception:
             return 1.0
+
+    def _pixel_scale(self) -> float:
+        """Native pixels per point; the highest scale when compositing several displays."""
+        if self.displays:
+            return max(self._pixel_scale_for(geo) for geo in self.displays)
+        return self._pixel_scale_for(self.geometry)
 
     def pointer_position(self) -> Optional[dict]:
         """Current pointer in desktop points when it is on this display, else None."""
@@ -214,14 +310,14 @@ class ScreenGrabber:
             return {"x": x, "y": y}
         return None
 
-    def _grab_raw(self):
-        """Full-resolution writable frame and its pixel format ("bgra" or "rgb24")."""
+    def _grab_one(self, geometry: dict):
+        """Full-resolution writable frame of one display and its pixel format ("bgra" or "rgb24")."""
         import numpy as np
 
         if platform.system() == "Darwin":
             import Quartz
 
-            image = Quartz.CGDisplayCreateImage(self._quartz_display())
+            image = Quartz.CGDisplayCreateImage(self._quartz_display(geometry))
             if image is None:
                 return None, None
             width = Quartz.CGImageGetWidth(image)
@@ -232,9 +328,19 @@ class ScreenGrabber:
             return np.ascontiguousarray(arr[:, :width, :]), "bgra"
         from PIL import ImageGrab
 
-        g = self.geometry
+        g = geometry
         img = ImageGrab.grab(bbox=(g["x"], g["y"], g["x"] + g["width"], g["y"] + g["height"]))
         return np.array(img.convert("RGB")), "rgb24"
+
+    def _grab_raw(self):
+        """Full-resolution writable frame and its pixel format ("bgra" or "rgb24")."""
+        if len(self.displays) > 1:
+            parts = []
+            for geo in self.displays:
+                frame, fmt = self._grab_one(geo)
+                parts.append((geo, frame, fmt))
+            return composite_display_frames(self.geometry, parts, self._pixel_scale())
+        return self._grab_one(self.displays[0] if self.displays else self.geometry)
 
     def _pointer(self):
         try:
@@ -411,7 +517,9 @@ class WebRTCScreenServer:
                  ice_servers=None, fps: int = FPS):
         self._input_handler = input_handler
         self._cursor_path = cursor_path
-        self._grabber_factory = grabber_factory or (lambda geo: ScreenGrabber(geo, cursor_path))
+        self._grabber_factory = grabber_factory or (
+            lambda geo, displays=None: ScreenGrabber(geo, cursor_path, displays=displays)
+        )
         if ice_servers is not None:
             self._ice_servers = sanitize_ice_servers(ice_servers)
         else:
@@ -438,14 +546,23 @@ class WebRTCScreenServer:
     def active_track(self):
         return self._session[3] if self._session else None
 
+    def _make_grabber(self, geometry: dict, displays=None):
+        factory = self._grabber_factory
+        if displays:
+            try:
+                return factory(geometry, displays)
+            except TypeError:
+                pass
+        return factory(geometry)
+
     def answer(self, offer_sdp: str, offer_type: str, geometry: dict, session_id: str,
-               ice_servers=None) -> dict:
+               ice_servers=None, displays=None) -> dict:
         """Answer a browser offer; returns {"sdp", "type"}. Raises RuntimeError with a plain reason."""
         if offer_type != "offer" or not isinstance(offer_sdp, str) or "m=video" not in offer_sdp:
             raise RuntimeError("Invalid WebRTC offer")
         if not screen_capture_allowed():
             raise RuntimeError(PERMISSION_ERROR)
-        grabber = self._grabber_factory(geometry)
+        grabber = self._make_grabber(geometry, displays)
         servers = sanitize_ice_servers(ice_servers) if ice_servers is not None else self._ice_servers
         return self._run(self._answer(offer_sdp, grabber, str(session_id or ""), servers))
 

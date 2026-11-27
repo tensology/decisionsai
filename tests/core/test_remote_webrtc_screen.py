@@ -385,3 +385,107 @@ def test_answer_reports_pointer_for_touch_cursor(monkeypatch):
         return answer
 
     assert asyncio.run(run())["pointer"] == {"x": 640, "y": 360}
+
+
+def test_union_geometry_uses_real_arrangement():
+    screens = [
+        {"x": 0, "y": 0, "width": 1512, "height": 982},
+        {"screen_number": 2, "geometry": {"x": -1920, "y": -50, "width": 1920, "height": 1080}},
+        {"x": 1512, "y": -80, "width": 1920, "height": 1080},
+    ]
+    assert webrtc_screen.union_geometry(screens) == {"x": -1920, "y": -80, "width": 5352, "height": 1110}
+
+
+def test_composite_display_frames_places_screens_on_union_canvas():
+    import numpy as np
+
+    left = {"x": 0, "y": 0, "width": 10, "height": 8}
+    right = {"x": 12, "y": 2, "width": 6, "height": 4}
+    union = webrtc_screen.union_geometry([left, right])
+    assert union == {"x": 0, "y": 0, "width": 18, "height": 8}
+    left_frame = np.zeros((8, 10, 3), np.uint8)
+    left_frame[:] = (255, 0, 0)
+    right_frame = np.zeros((4, 6, 3), np.uint8)
+    right_frame[:] = (0, 0, 255)
+    canvas, fmt = webrtc_screen.composite_display_frames(
+        union,
+        [(left, left_frame, "rgb24"), (right, right_frame, "rgb24")],
+        scale=2.0,
+    )
+    assert fmt == "bgra"
+    assert canvas.shape == (16, 36, 4)
+    assert list(canvas[0, 0]) == [0, 0, 255, 255]
+    assert list(canvas[4, 24]) == [255, 0, 0, 255]
+    assert list(canvas[0, 20, :3]) == [0, 0, 0]
+
+
+def test_grabber_combined_uses_union_size(monkeypatch):
+    displays = [
+        {"x": 0, "y": 0, "width": 100, "height": 80},
+        {"x": 120, "y": 0, "width": 40, "height": 80},
+    ]
+    monkeypatch.setattr(webrtc_screen.ScreenGrabber, "_pixel_scale", lambda self: 1.0)
+    grabber = webrtc_screen.ScreenGrabber({"x": 0, "y": 0, "width": 1, "height": 1}, displays=displays)
+    assert grabber.geometry == {"x": 0, "y": 0, "width": 160, "height": 80}
+    assert grabber.size == webrtc_screen.target_size(160, 80, pixel_scale=1.0)
+
+
+def test_offer_all_screens_uses_union_geometry_and_displays():
+    server = Mock()
+    server.answer.return_value = {"sdp": "answer-sdp", "type": "answer", "width": 2560, "height": 600}
+    host = _Host()
+    host._webrtc_server = server
+    screens = [
+        {"screen_number": 1, "geometry": {"x": 0, "y": 0, "width": 1512, "height": 982}},
+        {"screen_number": 2, "geometry": {"x": -1920, "y": -50, "width": 1920, "height": 1080}},
+        {"screen_number": 3, "geometry": {"x": 1512, "y": -80, "width": 1920, "height": 1080}},
+    ]
+    host._get_screens_list = Mock(return_value=screens)
+    host._handle_remote_control_command({
+        "command": "webrtc_offer", "request_id": "r-all",
+        "data": {"sdp": "offer-sdp", "type": "offer", "all_screens": True, "screen_number": 0, "session_id": "abc"},
+    })
+    args, kwargs = server.answer.call_args
+    assert args[0] == "offer-sdp"
+    assert args[1] == "offer"
+    assert args[2] == {"x": -1920, "y": -80, "width": 5352, "height": 1110}
+    assert args[3] == "abc"
+    assert kwargs["displays"] == [s["geometry"] for s in screens]
+    assert kwargs["ice_servers"] is None
+
+
+def test_screenshot_stream_all_screens_sends_combined_frame():
+    host = _Host()
+    host.binaries = []
+    host._send_websocket_binary = lambda data: host.binaries.append(data)
+    host._capture_all_screens_screenshot = Mock(return_value={"image_data": b"WEBPFAKE", "screen_number": 0})
+    host._handle_remote_control_command({
+        "command": "screenshot_stream", "request_id": "s1",
+        "data": {"all_screens": True},
+    })
+    assert host.binaries and host.binaries[0][:2] == b"\x00\x00"
+    assert host.binaries[0][2:] == b"WEBPFAKE"
+
+
+def test_capture_all_screens_composites_mocked_images():
+    from PIL import Image
+
+    host = _Host()
+    screens = [
+        {"screen_number": 1, "geometry": {"x": 0, "y": 0, "width": 10, "height": 8}},
+        {"screen_number": 2, "geometry": {"x": 12, "y": 2, "width": 6, "height": 4}},
+    ]
+    host._get_screens_list = Mock(return_value=screens)
+
+    def fake_capture(number, draw_cursor=True):
+        if number == 1:
+            return Image.new("RGB", (10, 8), (255, 0, 0))
+        return Image.new("RGB", (6, 4), (0, 0, 255))
+
+    host._capture_screen_pil_image = fake_capture
+    result = host._capture_all_screens_screenshot()
+    assert result["screen_number"] == 0
+    assert result["geometry"] == {"x": 0, "y": 0, "width": 18, "height": 8}
+    assert result["format"] == "webp"
+    assert result["image_data"][:4] == b"RIFF"
+
