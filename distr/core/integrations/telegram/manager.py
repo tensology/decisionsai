@@ -331,6 +331,11 @@ class TelegramWebSocketManager(
         self._health_check_timer = QTimer()
         self._health_check_timer.timeout.connect(self._check_health)
         self._health_check_timer.start(3 * 60 * 1000)  # Every 3 minutes
+        # The relay JWT lasts 5 minutes (JWT_EXPIRY_SECONDS). Reconnect 60s early
+        # so the server does not drop the socket out from under a live remote session.
+        self._relay_token_refresh_timer = QTimer()
+        self._relay_token_refresh_timer.setSingleShot(True)
+        self._relay_token_refresh_timer.timeout.connect(self._refresh_relay_ws_token)
 
         # Message Queue (for offline/burst handling)
         self._message_queue = queue.Queue(maxsize=100)
@@ -766,6 +771,7 @@ class TelegramWebSocketManager(
         if hasattr(self, "_reconnect_timer"):
             self._reconnect_timer.stop()
         self._stop_socket_heartbeat()
+        self._stop_relay_token_refresh()
 
         # Process lifecycle is an implementation detail. Do not bypass engagement
         # policy to send "Goodbye" on shutdown, and do not block the Qt/UI thread
@@ -832,6 +838,31 @@ class TelegramWebSocketManager(
                 logger.warning("[Telegram] Health check ping failed: %s — forcing reconnect", e)
                 self._active_disconnect = False
                 self.socket.close()
+
+    def _schedule_relay_token_refresh(self):
+        """Reconnect before the 5-minute relay JWT expires."""
+        timer = getattr(self, "_relay_token_refresh_timer", None)
+        if timer is None:
+            return
+        timer.start(240_000)
+
+    def _stop_relay_token_refresh(self):
+        timer = getattr(self, "_relay_token_refresh_timer", None)
+        if timer is not None:
+            timer.stop()
+
+    def _refresh_relay_ws_token(self):
+        """Close and reconnect so we pick up a fresh JWT before the server kicks us."""
+        if getattr(self, "_active_disconnect", False) or not self.is_connected():
+            return
+        logger.info("[Telegram] Refreshing relay WebSocket before token expiry")
+        self._log_detailed("RELAY TOKEN REFRESH: reconnecting before JWT expiry")
+        self._is_auto_reconnecting = True
+        self._stop_relay_token_refresh()
+        self._stop_socket_heartbeat()
+        # Leave _active_disconnect False so the existing close path auto-reconnects.
+        if self.socket:
+            self.socket.close()
 
     # =========================================================================
     # WebSocket Slots
@@ -927,6 +958,7 @@ class TelegramWebSocketManager(
         self._is_auto_reconnecting = False  # Reset flag after connection
         self._mark_socket_heartbeat_seen()
         self._start_socket_heartbeat()
+        self._schedule_relay_token_refresh()
 
         # Send Subscribe Message
         msg = {"type": "subscribe"}
@@ -971,6 +1003,7 @@ class TelegramWebSocketManager(
 
     def _on_disconnected(self):
         """Called when socket disconnects."""
+        self._stop_relay_token_refresh()
         # Release sleep prevention
         self._release_sleep()
         self._stop_socket_heartbeat()
