@@ -31,6 +31,32 @@ class OracleBackgroundRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
 
 
+def _skin_media_version(skin_dir: Path, idle_file, preview_file):
+    """Return (version, still_is_current) for a skin folder's media files."""
+    import hashlib
+
+    digest = hashlib.sha1()
+    try:
+        entries = sorted(skin_dir.iterdir(), key=lambda item: item.name)
+    except OSError:
+        entries = []
+    mtimes = {}
+    for entry in entries:
+        try:
+            info = entry.stat()
+        except OSError:
+            continue
+        if not entry.is_file():
+            continue
+        mtimes[entry.name] = info.st_mtime_ns
+        digest.update(f"{entry.name}:{info.st_size}:{info.st_mtime_ns};".encode("utf-8"))
+    idle_name = Path(idle_file).name if idle_file else None
+    still_current = bool(preview_file) and (
+        idle_name not in mtimes or mtimes.get(preview_file, 0) >= mtimes[idle_name]
+    )
+    return digest.hexdigest()[:12], still_current
+
+
 def register_routes(router, templates):
 
     @router.get("/skins")
@@ -49,12 +75,17 @@ def register_routes(router, templates):
             preview_file = Path(idle_file).with_suffix(".webp").name if idle_file else None
             if preview_file and not (Path(AVATARS_DIR) / folder_name / preview_file).is_file():
                 preview_file = None
+            media_version, preview_current = _skin_media_version(Path(AVATARS_DIR) / folder_name, idle_file, preview_file)
             skins.append({
                 "folder_name": folder_name,
                 "name": config.name,
                 "type": config.type,
                 "idle_animation": idle_file,
                 "preview_image": preview_file,
+                # Remote clients key cached clips by media_version, so a regenerated
+                # skin shows up; a still older than the idle clip shows a superseded look.
+                "media_version": media_version,
+                "preview_image_current": preview_current,
                 "idle_playback": idle_anim.playback if idle_anim else "loop",
                 "shape": config.rendering.shape,
                 "image_scale": config.rendering.image_scale,

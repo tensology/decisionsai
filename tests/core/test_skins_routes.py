@@ -178,6 +178,28 @@ class TestListSkins:
         assert data["skins"][0]["preview_image"] == "idle.webp"
         assert data["skins"][0]["chroma_key"] == [0, 255, 0]
         assert data["skins"][0]["chroma_threshold"] == 35
+        assert data["skins"][0]["preview_image_current"] is True
+        assert len(data["skins"][0]["media_version"]) == 12
+
+    def test_media_version_changes_and_stale_still_is_flagged(self, skin_dir):
+        app = FastAPI()
+        router = APIRouter()
+        register_routes(router, None)
+        app.include_router(router)
+        folder = skin_dir / "test-skin"
+
+        with patch("distr.core.paths.AVATARS_DIR", str(skin_dir)):
+            client = TestClient(app)
+            before = client.get("/skins").json()["skins"][0]
+            # The idle clip is regenerated after the authored still.
+            still_time = os.stat(folder / "idle.webp").st_mtime_ns
+            (folder / "idle.webm").write_bytes(b"\x1a\x45\xdf\xa3 new clip")
+            os.utime(folder / "idle.webm", ns=(still_time + 10**9, still_time + 10**9))
+            after = client.get("/skins").json()["skins"][0]
+
+        assert after["media_version"] != before["media_version"]
+        assert after["preview_image"] == "idle.webp"  # the desktop picker keeps its thumbnail
+        assert after["preview_image_current"] is False
 
     def test_empty_when_no_valid_skins(self, tmp_path):
         app = FastAPI()
