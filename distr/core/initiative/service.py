@@ -644,7 +644,39 @@ class InitiativeService:
         signal_manager.chat_stream_started.connect(self._on_chat_started)
         self._idle_timer.start(self.IDLE_TIMEOUT_MS)
         self._schedule_timer.start(self.SCHEDULE_TICK_MS)
+        threading.Thread(target=self._run_setup_check, name="decisions-setup-check", daemon=True).start()
         logger.debug("InitiativeService: started")
+
+    def _run_setup_check(self) -> None:
+        """Self-check setup once at start; speak only if nothing can work."""
+        try:
+            from distr.core.setup_check import automation_model_routes, linked_projects, run_setup_check
+            from distr.core.utils import load_settings_from_db
+
+            settings = load_settings_from_db() or {}
+            report = run_setup_check(
+                settings,
+                projects=linked_projects(),
+                probe_cloud=True,
+                automation_routes=automation_model_routes(),
+            )
+            for issue in report.issues:
+                logger.info("Setup check: %s %s (%s)", issue.message, issue.action,
+                            "routed around" if issue.routed_around else "needs attention")
+            message = report.one_message()
+            if message:
+                self._send_telegram_if_allowed(
+                    message,
+                    settings,
+                    kind="setup_check",
+                    subject_type="setup",
+                    subject_id="setup",
+                    state_fingerprint=hashlib.sha256(message.encode("utf-8")).hexdigest()[:16],
+                    requires_response=True,
+                    priority="high",
+                )
+        except Exception:
+            logger.debug("InitiativeService: setup check failed", exc_info=True)
 
     def stop(self) -> None:
         if not self._started:
@@ -671,7 +703,25 @@ class InitiativeService:
     def get_pending_drafts(self) -> list:
         """Return all pending draft entries (for the web UI)."""
         self._draft_queue.expire_old()
+        self._drop_settled_drafts()
         return [dataclasses.asdict(e) for e in self._draft_queue.get_all()]
+
+    def _drop_settled_drafts(self) -> int:
+        """Forget lane moves that already happened by another route."""
+        def lane_of(ticket_id: int):
+            from distr.core.db import get_session
+            from distr.core.db.kanban import KanbanLane, KanbanTicket
+
+            with get_session() as db:
+                ticket = db.get(KanbanTicket, int(ticket_id))
+                lane = db.get(KanbanLane, ticket.lane_id) if ticket is not None else None
+                return lane.name if lane is not None else None
+
+        try:
+            return self._draft_queue.drop_settled_lane_moves(lane_of)
+        except Exception:
+            logger.debug("Initiative: settled-draft sweep failed", exc_info=True)
+            return 0
 
     def approve_draft(self, draft_id: str) -> bool:
         """Run optional ``execute_payload``, then remove the draft entry."""
@@ -684,7 +734,7 @@ class InitiativeService:
 
     def reject_draft(self, draft_id: str) -> bool:
         """Reject and remove a draft entry."""
-        removed = self._draft_queue.remove(draft_id)
+        removed = self._draft_queue.reject(draft_id)
         if removed:
             logger.info("InitiativeService: draft %s rejected and removed", draft_id)
         return removed
@@ -1077,6 +1127,7 @@ class InitiativeService:
 
             # Expire old drafts
             self._draft_queue.expire_old()
+            self._drop_settled_drafts()
 
             # Assemble context
             bundle = self._context_assembler.build(settings)
@@ -2149,6 +2200,7 @@ class InitiativeService:
         from distr.core.initiative.tiers import PermissionTier
 
         self._draft_queue.expire_old()
+        self._drop_settled_drafts()
         drafts = self._draft_queue.get_all()
         if not drafts:
             return
@@ -2296,7 +2348,9 @@ class InitiativeService:
                 else None
             ),
         )
-        self._draft_queue.add(entry)
+        if self._draft_queue.add(entry) is False:
+            # Already pending, or Paul rejected this: no new card, no new ping.
+            return
         logger.info("InitiativeService: draft queued %s: %s", entry.id, entry.description)
 
         # Notify via Telegram if possible
@@ -2536,7 +2590,7 @@ class InitiativeService:
                 logger.info("InitiativeService: sent desktop notification (%s): %s", decision.route_reason, outbound_text[:100])
                 return
             if decision.channel == "remote":
-                if self._send_remote_notification(outbound_text):
+                if self._send_remote_notification(outbound_text, context=base_event_data):
                     logger.info("InitiativeService: sent remote notification (%s): %s", decision.route_reason, outbound_text[:100])
                     return
                 if not allow_telegram:
@@ -2617,12 +2671,27 @@ class InitiativeService:
         except Exception:
             logger.debug("InitiativeService: could not record notification route", exc_info=True)
 
-    def _send_remote_notification(self, text: str) -> bool:
+    _REMOTE_CONTEXT_KEYS = (
+        "thread_id", "requires_response", "engagement_kind", "engagement_subject_type",
+        "engagement_subject_id", "engagement_priority", "engagement_goal_hint",
+        "workflow_id", "run_id", "step_id", "ticket_id", "board_id", "project_id",
+        "execution_session_id", "ticket_title", "workflow_title", "step_title", "state_fingerprint",
+    )
+
+    def _send_remote_notification(self, text: str, *, context: dict | None = None) -> bool:
+        """Remote-app ping that carries its run/ticket, so a spoken follow-up
+        ("continue", "what's that about?") is grounded in the run that pinged,
+        not whatever thread the oracle last had open."""
         from distr.core.integrations.telegram.remote_tts_delivery import enqueue_remote_tts_delivery
 
+        scope = {
+            key: value for key, value in (context or {}).items()
+            if key in self._REMOTE_CONTEXT_KEYS and value not in (None, "")
+        }
         return enqueue_remote_tts_delivery(
             text,
             data={
+                **scope,
                 "mode": "proactive",
                 "source_command": "initiative_notification",
                 "engagement_source": "initiative",
@@ -2785,6 +2854,41 @@ class InitiativeService:
                 return clean
         return ""
 
+    def _superseded_by_failover(self, row, output_packet: dict, rows, *, window_s: float = 180.0) -> bool:
+        """A provider-route failure the work recovered from on another provider."""
+        if output_packet.get("fallback_model") or output_packet.get("fallback_backend"):
+            return True
+        error = str(getattr(row, "error", "") or output_packet.get("error") or "")
+        try:
+            from distr.core.provider_failover import is_failover_error, next_failover
+
+            if not is_failover_error(error):
+                return False
+            input_packet = self._packet(getattr(row, "input_packet", None))
+            provider = str(input_packet.get("model_provider") or input_packet.get("backend_id") or "")
+            model = str(getattr(row, "selected_model", "") or input_packet.get("model") or "")
+            # Development turns fail over to the next keyed provider on their
+            # own; the provider-down notice covers the case where none is left.
+            if str(getattr(row, "origin", "") or "") == "development" and next_failover(provider, model, error=error) is not None:
+                return True
+        except Exception:
+            return False
+        started = getattr(row, "started_at", None)
+        if started is None:
+            return False
+        for other, _project in rows or ():
+            if other is row or getattr(other, "id", None) == getattr(row, "id", None):
+                continue
+            if getattr(other, "project_id", None) != getattr(row, "project_id", None):
+                continue
+            other_started = getattr(other, "started_at", None)
+            if other_started is None:
+                continue
+            delta = (other_started - started).total_seconds()
+            if 0 <= delta <= window_s and getattr(other, "ticket_id", None) == getattr(row, "ticket_id", None):
+                return True
+        return False
+
     def _execution_idle_fingerprint(self, row, status: str, input_packet: dict) -> str:
         # Idle means the user-facing state has not changed. updated_at can churn
         # from bookkeeping, so keep it out of this fingerprint.
@@ -2904,6 +3008,10 @@ class InitiativeService:
                     backend_label, backend_surface = self._execution_backend_label(row, input_packet, project)
                     project_name = self._execution_project_label(row, input_packet, project, backend_surface)
                     instruction = self._execution_instruction_summary(row, input_packet)
+                    if status == "failed" and self._superseded_by_failover(row, output_packet, project_rows):
+                        # This route failed (e.g. out of credits) but the work carried
+                        # on on another provider; that run's result is reported, not this.
+                        continue
                     if status in {"completed", "failed"}:
                         age_s = self._dt_age_s(row.completed_at or row.updated_at)
                         if age_s is not None and age_s > self._execution_terminal_notice_window_s:
@@ -3033,11 +3141,17 @@ class InitiativeService:
                                 build_workflow_waiting_nudge,
                             )
 
+                            needs_context = run_data.get("needs_input_context") if isinstance(run_data.get("needs_input_context"), dict) else {}
+                            clear_need = str(run_data.get("worker_question") or "").strip() if waiting_kind in {"worker_needs_input", "needs_human_input"} else ""
                             nudge_text, nudge_voice = build_workflow_waiting_nudge(
                                 workflow_name=workflow_name,
                                 ticket_title=ticket_title,
                                 step_name=step_name,
                                 waiting_kind=waiting_kind,
+                                project_name=str(run_data.get("project_name") or ""),
+                                why=str(needs_context.get("blockers") or needs_context.get("reason") or "") if clear_need else "",
+                                tried=str(run_data.get("self_serve_tried") or "") if clear_need else "",
+                                need=clear_need,
                             )
                             try:
                                 from distr.core.kanban.ticket_workflow_engagement import (
@@ -3052,7 +3166,8 @@ class InitiativeService:
                                         or ""
                                     )
                                 )
-                                if waiting_question:
+                                # The clear worker message already carries the question.
+                                if waiting_question and not clear_need:
                                     nudge_text = (
                                         f"{nudge_text}\nQuestion: {waiting_question}\n"
                                         + _operator_reply_footer(
@@ -3096,8 +3211,10 @@ class InitiativeService:
                                     "InitiativeService: waiting chat notice failed",
                                     exc_info=True,
                                 )
+                            # A worker question gets one clear Telegram message,
+                            # not a reminder every 20 minutes.
                             reminder_bucket = (
-                                int(time.time() // repeat_s) if repeat_s > 0 else 0
+                                int(time.time() // repeat_s) if repeat_s > 0 and not clear_need else 0
                             )
                             self._send_telegram_if_allowed(
                                 nudge_text,
@@ -3108,6 +3225,21 @@ class InitiativeService:
                                 state_fingerprint=f"{waiting_kind}:{run.started_at}:{reminder_bucket}",
                                 requires_response=True,
                                 voice_body=nudge_voice,
+                                initiative_context={
+                                    "run_id": run.id,
+                                    "workflow_id": run.workflow_id,
+                                    "ticket_id": run.ticket_id,
+                                    "board_id": getattr(run, "board_id", None),
+                                    "step_id": run.current_step_id,
+                                    "ticket_title": ticket_title,
+                                    "workflow_title": workflow_name,
+                                    "step_title": step_name,
+                                    "goal_hint": (
+                                        f"Reply about run #{run.id}"
+                                        + (f" (ticket #{run.ticket_id})" if run.ticket_id else "")
+                                        + ": continue or stop applies to this run."
+                                    ),
+                                },
                             )
                             sent_this_tick += 1
                             if sent_this_tick >= max_notices:

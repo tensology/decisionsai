@@ -34,6 +34,39 @@ class DraftEntry:
 
 _DRAFT_ENTRY_FIELDS = {f.name for f in dataclasses.fields(DraftEntry)}
 
+# A rejected proposal stays rejected: the same tickets for 30 days, and anything
+# of the same kind for the same board/lane/project for a day.
+REJECTION_MEMORY_SECONDS = 30 * 24 * 3600
+LOOSE_REJECTION_SECONDS = 24 * 3600
+
+
+def draft_fingerprints(entry: DraftEntry) -> tuple[str, str]:
+    """(strict, loose) identity of a draft, ignoring counts and "last cycle 51s ago"."""
+    import re
+
+    payload = entry.execute_payload or {}
+    if not payload:
+        # Plain notes have no stable identity; never merge or suppress them.
+        return "", ""
+    action = payload.get("action") if isinstance(payload.get("action"), dict) else {}
+    inner = action.get("payload") if isinstance(action.get("payload"), dict) else {}
+    candidate = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
+    kind = str(action.get("action_type") or entry.action_type or payload.get("kind") or "")
+    scope = "|".join(
+        f"{key}={inner.get(key)}" for key in ("board_id", "project_id", "workflow_id", "target_lane")
+        if inner.get(key) not in (None, "")
+    )
+    if candidate.get("id"):
+        scope = f"{scope}|candidate={candidate.get('id')}"
+    if payload.get("preset_id"):
+        scope = f"{scope}|preset={payload.get('preset_id')}"
+    if not scope:
+        text = re.sub(r"\[[^\]]*\]", " ", str(entry.description or ""))
+        scope = re.sub(r"[^a-z]+", " ", text.lower()).strip()[:160]
+    ids = sorted(int(v) for v in (inner.get("ticket_ids") or []) if str(v).isdigit())
+    loose = f"{kind}|{scope}"
+    return (f"{loose}|tickets={','.join(map(str, ids))}" if ids else loose), loose
+
 
 class DraftQueue:
     def __init__(self, path: str | None = None) -> None:
@@ -47,10 +80,74 @@ class DraftQueue:
     # Public API
     # ------------------------------------------------------------------
 
-    def add(self, entry: DraftEntry) -> None:
+    def add(self, entry: DraftEntry) -> bool:
+        """Queue a draft unless the same thing is already pending or was rejected."""
+        strict, loose = draft_fingerprints(entry)
         with self._lock:
+            if not strict:
+                self._entries.append(entry)
+                self._save()
+                return True
+            if any(draft_fingerprints(existing)[0] == strict for existing in self._entries):
+                logger.info("Draft %s duplicates a pending draft; not queued", entry.id)
+                return False
+            rejected = self._load_rejections()
+            now = datetime.now(tz=timezone.utc).timestamp()
+            if now - rejected.get(strict, 0) < REJECTION_MEMORY_SECONDS or now - rejected.get(loose, 0) < LOOSE_REJECTION_SECONDS:
+                logger.info("Draft %s matches a rejected draft; not queued", entry.id)
+                return False
             self._entries.append(entry)
             self._save()
+            return True
+
+    def reject(self, entry_id: str) -> bool:
+        """Remove a draft and remember the rejection so it does not come back."""
+        with self._lock:
+            for i, entry in enumerate(self._entries):
+                if entry.id == entry_id:
+                    self._remember_rejections([entry])
+                    del self._entries[i]
+                    self._save()
+                    return True
+            return False
+
+    def reject_all(self) -> int:
+        with self._lock:
+            count = len(self._entries)
+            if count:
+                self._remember_rejections(self._entries)
+                self._entries = []
+                self._save()
+            return count
+
+    def _rejections_path(self) -> str:
+        root, ext = os.path.splitext(self._path)
+        return f"{root}_rejected{ext or '.json'}"
+
+    def _load_rejections(self) -> dict[str, float]:
+        try:
+            with open(self._rejections_path(), "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            return {str(k): float(v) for k, v in dict(raw).items()}
+        except (OSError, ValueError, TypeError):
+            return {}
+
+    def _remember_rejections(self, entries: list[DraftEntry]) -> None:
+        now = datetime.now(tz=timezone.utc).timestamp()
+        rejected = {k: v for k, v in self._load_rejections().items() if now - v < REJECTION_MEMORY_SECONDS}
+        for entry in entries:
+            for key in draft_fingerprints(entry):
+                if key:
+                    rejected[key] = now
+        try:
+            path = self._rejections_path()
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(rejected, fh)
+            os.replace(tmp, path)
+        except OSError:
+            logger.warning("Could not save draft rejections", exc_info=True)
 
     def get_all(self) -> list[DraftEntry]:
         with self._lock:
@@ -64,6 +161,36 @@ class DraftQueue:
                     self._save()
                     return True
             return False
+
+    def drop_settled_lane_moves(self, lane_of) -> int:
+        """Drop lane-move drafts whose tickets already sit in the target lane.
+
+        Another path (planner orchestration, a run, or Paul) may have made the
+        move already; asking again is the duplicate proposal (Merrypak #306).
+        ``lane_of(ticket_id)`` returns the ticket's lane name or None.
+        """
+        with self._lock:
+            keep: list[DraftEntry] = []
+            for entry in self._entries:
+                payload = entry.execute_payload or {}
+                action = payload.get("action") if isinstance(payload.get("action"), dict) else {}
+                inner = action.get("payload") if isinstance(action.get("payload"), dict) else {}
+                kind = str(action.get("action_type") or entry.action_type or "")
+                target = str(inner.get("target_lane") or "").strip().lower()
+                ids = [int(v) for v in (inner.get("ticket_ids") or []) if str(v).isdigit()]
+                if kind == "ticket_lane_move" and target and ids:
+                    try:
+                        lanes = [str(lane_of(i) or "").strip().lower() for i in ids]
+                    except Exception:
+                        lanes = []
+                    if lanes and all(lane == target for lane in lanes):
+                        continue
+                keep.append(entry)
+            dropped = len(self._entries) - len(keep)
+            if dropped:
+                self._entries = keep
+                self._save()
+            return dropped
 
     def set_failure_reason(self, entry_id: str, message: str) -> bool:
         """Retain a failed approval with its bounded, reviewable explanation."""

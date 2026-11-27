@@ -273,9 +273,11 @@ def build_planner_orchestration_actions(bundle: ContextBundle, *, scope: str) ->
             continue
         board_name = _first_nonempty(board.get("name"), board.get("board_name"), default="Board")
         lane_by_name = _lane_lookup(board)
-        current = lane_by_name.get("current") or lane_by_name.get("doing") or lane_by_name.get("in progress")
         backlog = lane_by_name.get("backlog") or lane_by_name.get("todo") or lane_by_name.get("to do")
-        if _lane_tickets(current):
+        # Any started work on the board (the legacy "Current" lane or In Progress)
+        # means nothing new is pulled in: an empty legacy "Current" lane made this
+        # move one more Backlog ticket to In Progress every morning with no work.
+        if any(_lane_tickets(lane_by_name.get(name)) for name in ("current", "doing", "in progress", "qa")):
             continue
         backlog_tickets = _lane_tickets(backlog)
         if not backlog_tickets:
@@ -749,13 +751,21 @@ def generate_planner_markdown(
         {"role": "user", "content": user_prompt},
     ]
 
+    from distr.core.litellm_utils import litellm_completion, ollama_model_available, provider_credentials
+
     failure_reasons: list[tuple[str, str, str]] = []
     for provider, model in _llm_candidates(settings):
         litellm_model = _litellm_model(provider, model, settings)
+        if provider == "ollama" and ollama_model_available(litellm_model, str(settings.get("ollama_url") or "")) is False:
+            # e.g. an OpenRouter id saved under Ollama, or the llama3.2 default
+            # that was never pulled: skip instead of a guaranteed failure.
+            failure_reasons.append((provider, model, "not installed in Ollama"))
+            continue
         try:
-            response = litellm.completion(
+            response = litellm_completion(
                 model=litellm_model,
                 messages=messages,
+                **provider_credentials(litellm_model, settings),
                 **_completion_options(litellm_model),
             )
             raw = (response.choices[0].message.content or "").strip()

@@ -104,6 +104,12 @@ def test_generate_planner_markdown_prefers_medium_complexity_tier_when_configure
     assert call_kw["model"] == "gpt-5"
 
 
+@pytest.fixture(autouse=True)
+def _no_local_ollama_probe(monkeypatch):
+    """Keep planner tests hermetic: do not ask this machine's Ollama what is installed."""
+    monkeypatch.setattr("distr.core.litellm_utils.ollama_installed_models", lambda *_a, **_k: None)
+
+
 def test_generate_planner_markdown_uses_scope_specific_system_prompt():
     """Avoid requiring ``litellm`` installed at import time (stub module in sys.modules)."""
     fake_litellm = MagicMock()

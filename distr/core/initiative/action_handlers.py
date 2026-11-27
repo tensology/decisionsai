@@ -719,4 +719,22 @@ def _run_async(awaitable: Any) -> Any:
         asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(awaitable)
-    raise RuntimeError("Cannot run project CLI task from inside an active event loop")
+    # Called from an async route or bot handler (e.g. approving a "run this
+    # ticket" proposal): run the task on its own loop in a worker thread
+    # instead of failing the approval.
+    import threading
+
+    outcome: dict[str, Any] = {}
+
+    def _worker() -> None:
+        try:
+            outcome["result"] = asyncio.run(awaitable)
+        except BaseException as exc:  # re-raised in the caller
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=_worker, name="decisions-project-cli-task", daemon=True)
+    thread.start()
+    thread.join()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome.get("result")

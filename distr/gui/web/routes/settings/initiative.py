@@ -1,6 +1,7 @@
 """
 Initiative routes — /initiative
 """
+import asyncio
 import logging
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -180,7 +181,8 @@ def register_routes(router, templates):
             from distr.core.initiative.draft_queue import DraftQueue
 
             queue = DraftQueue()
-            removed = approve_draft_in_queue(queue, draft_id)
+            # Approval can start a long project CLI run; keep it off the event loop.
+            removed = await asyncio.to_thread(approve_draft_in_queue, queue, draft_id)
             if removed:
                 return JSONResponse({"success": True, "message": "Draft approved and removed"})
             retained = queue.get_by_id(draft_id)
@@ -203,7 +205,7 @@ def register_routes(router, templates):
         try:
             from distr.core.initiative.draft_queue import DraftQueue
             queue = DraftQueue()
-            removed = queue.remove(draft_id)
+            removed = queue.reject(draft_id)
             if removed:
                 return JSONResponse({"success": True, "message": "Draft rejected and removed"})
             return JSONResponse({"success": False, "error": "Draft not found"}, status_code=404)
@@ -218,7 +220,7 @@ def register_routes(router, templates):
             from distr.core.initiative.draft_queue import DraftQueue
             queue = DraftQueue()
             queue.expire_old()
-            removed = queue.clear()
+            removed = queue.reject_all()
             return JSONResponse({
                 "success": True,
                 "message": f"Rejected {removed} pending draft(s)",

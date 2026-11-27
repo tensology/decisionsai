@@ -514,4 +514,4 @@ def test_prompts_and_copy_frame_the_agent_as_decision_support():
     assert "help you decide" in TEMPLATE.read_text()
     card = of.intake_card("tok", {"client": "Anna", "source_label": "WhatsApp", "project": "", "summary": "Fix it"})
     assert "Your call:" in card["text"] and "nothing is sent to Anna" in card["text"]
-    assert "Your options:" in of.work_done_text("Anna", "whatsapp", "Done")
+    assert "Ready to send to Anna" in of.work_done_text("Anna", "whatsapp", "Done")
