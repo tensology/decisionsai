@@ -477,20 +477,30 @@ async def execute_turn(
             while fallback_request is not None and attempts < _MAX_FAILOVER_ATTEMPTS:
                 attempts += 1
                 if execution_session_id:
-                    from distr.core.kanban.project_execution import complete_execution_session
+                    # Keep this run's session open: the fallback's result is the run's
+                    # result. Closing it as "failed" here left tickets showing failed
+                    # while OpenRouter was doing the work.
+                    from distr.core.kanban.project_execution import append_execution_event
 
-                    complete_execution_session(
-                        execution_session_id,
-                        success=False,
-                        output_packet={
-                            "runtime_id": selected,
-                            "fallback_backend": fallback_request.route.backend_id,
-                            "fallback_model": fallback_request.route.model,
-                        },
-                        error=result.error or result.output,
-                    )
+                    try:
+                        append_execution_event(
+                            execution_session_id,
+                            event_type="provider_failover",
+                            status="running",
+                            message=(
+                                f"{request.route.provider or request.route.backend_id} failed; continuing on "
+                                f"{fallback_request.route.provider or fallback_request.route.backend_id} "
+                                f"{fallback_request.route.model}."
+                            ),
+                            payload={
+                                "fallback_backend": fallback_request.route.backend_id,
+                                "fallback_model": fallback_request.route.model,
+                                "provider_error": str(result.error or result.output or "")[:500],
+                            },
+                        )
+                    except Exception:
+                        pass
                     _record_native_certification(request, result, execution_session_id)
-                    execution_session_id = None
                 fallback_runtime_id = select_turn_runtime_id(fallback_request)
                 active.runtime_id = fallback_runtime_id
                 _emit_failover_notice(request, fallback_request, result.error or result.output, on_event, fallback_runtime_id)

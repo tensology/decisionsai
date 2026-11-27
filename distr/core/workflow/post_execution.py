@@ -687,6 +687,12 @@ class PostExecutionMixin:
             }
             run_data["human_intervention_state"] = "needs_human_input"
             run_data["next_action"] = "needs_human_input"
+            self_serve = self._self_serve_for_worker_question(
+                db, run_data, question=decision.question, blockers=str(report.get("blockers", "") or ""),
+            )
+            if self_serve is not None:
+                run_data["self_serve_attempts"] = int(run_data.get("self_serve_attempts") or 0) + 1
+                run_data["self_serve_tried"] = self_serve.tried
             run.run_data = json.dumps(run_data)
             db.add(AutoWorkflowStepResult(
                 step_id=int(step_id),
@@ -700,6 +706,20 @@ class PostExecutionMixin:
             db.commit()
 
         increment_workflow_updated()
+        if self_serve is not None:
+            # Answer from what Decisions already has, once, before asking Paul.
+            try:
+                from distr.core.workflow.dispatcher import _resume_worker_needs_input
+
+                routed = getattr(self, "_routed_steps", None)
+                if routed is not None:
+                    with self._routed_lock:
+                        routed.discard(step_id)
+                resumed = _resume_worker_needs_input(int(run_id), self_serve.feedback)
+                if resumed.get("success"):
+                    return True
+            except Exception:
+                logger.warning("Self-serve resume failed for run %s; asking the user instead", run_id, exc_info=True)
         try:
             from distr.core.orchestration_events import emit_orchestration_event
 
@@ -735,6 +755,29 @@ class PostExecutionMixin:
         except Exception:
             logger.debug("Could not notify direct worker needs-input", exc_info=True)
         return True
+
+    @staticmethod
+    def _self_serve_for_worker_question(db, run_data: dict, *, question: str, blockers: str):
+        """Pointers Decisions can find itself (repo paths, SSH aliases), or None."""
+        try:
+            from distr.core.workflow.unstick import self_serve_answer
+
+            folder = str(run_data.get("project_folder") or "")
+            name = str(run_data.get("project_name") or "")
+            project_id = run_data.get("project_id")
+            if str(project_id or "").isdigit() and (not folder or not name):
+                from distr.core.db.projects import Project
+
+                project = db.get(Project, int(project_id))
+                if project is not None:
+                    folder = folder or str(getattr(project, "folder_location", "") or "")
+                    name = name or str(getattr(project, "name", "") or "")
+            return self_serve_answer(
+                run_data, question=question, blockers=blockers, project_folder=folder, project_name=name,
+            )
+        except Exception:
+            logger.debug("Self-serve lookup failed", exc_info=True)
+            return None
 
     @staticmethod
     def _build_wait_handoff_text(step_name: str, result_text: str, run_id: Optional[int]) -> Dict[str, str]:

@@ -99,9 +99,15 @@ def compile_requested_execution_policy(value: str) -> dict[str, Any]:
         approval_before_roles.append("deployment")
 
     policy: dict[str, Any] = {}
-    if re.search(
-        r"\b(?:read[ -]?only|without (?:editing|changing|modifying)|"
-        r"do not (?:edit|change|modify)|don't (?:edit|change|modify)|no file changes)\b",
+    from distr.core.intent_scope import requests_read_only_run
+
+    # "read-only" about one named thing ("the v2 repo - read-only", "keep
+    # production read-only") or a negated one ("not read-only") must not turn
+    # the whole run into a review.
+    if requests_read_only_run(text) or re.search(
+        r"\b(?:without (?:editing|changing|modifying) (?:[\w-]+ ){0,2}?(?:files?|code|anything)|"
+        r"do not (?:edit|change|modify) (?:[\w-]+ ){0,2}?(?:files?|code|anything)|"
+        r"don't (?:edit|change|modify) (?:[\w-]+ ){0,2}?(?:files?|code|anything)|no file changes)\b",
         lowered,
     ):
         policy["read_only"] = True

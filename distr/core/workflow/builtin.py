@@ -234,7 +234,10 @@ def project_has_code(project_folder: Optional[str]) -> Optional[bool]:
 
 def deploy_intent(text: str) -> Optional[str]:
     """'production' / 'development' when the text asks to deploy, else None (negations ignored)."""
-    cleaned = _DEPLOY_NEGATION.sub(" ", str(text or ""))
+    from distr.core.intent_scope import strip_negated_deploys
+
+    # Lists such as "don't commit, push or deploy" are negations too.
+    cleaned = strip_negated_deploys(_DEPLOY_NEGATION.sub(" ", str(text or "")))
     if not _DEPLOY.search(cleaned):
         return None
     if _DEV_ENV.search(cleaned):

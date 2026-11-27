@@ -334,11 +334,12 @@ def test_project_tools_read_only_mode_removes_mutating_actions(tmp_path):
     tools = ProjectToolExecutor(str(root), read_only=True)
     names = {definition["function"]["name"] for definition in tools.definitions()}
 
-    assert {"read_file", "list_files", "search_files"}.issubset(names)
-    assert {"replace_text", "write_file", "run_command"}.isdisjoint(names)
-    result = asyncio.run(tools.execute("run_command", {"command": "pwd"}))
+    assert {"read_file", "list_files", "search_files", "run_command"}.issubset(names)
+    assert {"replace_text", "write_file"}.isdisjoint(names)
+    # Read-only keeps the shell for inspection (2026-11-27) but refuses writes.
+    result = asyncio.run(tools.execute("run_command", {"command": "touch new.txt"}))
     assert result.status == "error"
-    assert "not available" in result.summary
+    assert not (root / "new.txt").exists()
 
 
 def test_untrusted_external_runtime_exposes_no_project_or_automation_tools(tmp_path):
