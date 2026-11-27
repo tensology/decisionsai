@@ -555,9 +555,16 @@ def build_workflow_waiting_nudge(
     ticket_title: str = "",
     step_name: str = "",
     waiting_kind: str = "",
+    project_name: str = "",
+    why: str = "",
+    tried: str = "",
+    need: str = "",
 ) -> tuple[str, str]:
     """Actionable text + voice for initiative / background workflow-waiting alerts."""
     subject = (ticket_title or workflow_name or "A workflow").strip()
+    project = (project_name or "").strip()
+    if project and project.lower() not in subject.lower():
+        subject = f"{project}: {subject}"
     step = (step_name or "").strip()
     kind = (waiting_kind or "").strip().lower()
 
@@ -602,6 +609,19 @@ def build_workflow_waiting_nudge(
             f"{subject} was safely paused after a restart. "
             "Say continue to retry the saved step, or stop to cancel."
         )
+    elif kind in {"ide_handoff", "needs_human_input", "worker_needs_input"} and (need or why):
+        # One message: what is stuck, why, what was already tried, the exact ask.
+        need_text = _operator_question_excerpt(need or why, max_chars=320).rstrip(". ")
+        parts = [f"{subject} is stuck."]
+        why_text = _operator_question_excerpt(why, max_chars=200).rstrip(". ") if why and why != need else ""
+        if why_text:
+            parts.append(f"Why: {why_text}.")
+        if tried:
+            parts.append(f"Already tried: {_operator_question_excerpt(tried, max_chars=200).rstrip('. ')}.")
+        parts.append(f"I need: {need_text}.")
+        parts.append("Reply here with it, or say stop.")
+        text = " ".join(parts)
+        voice = f"{subject} is stuck. It needs: {need_text}."
     elif kind in {"ide_handoff", "needs_human_input", "worker_needs_input"}:
         # "waiting in the linked IDE or harness" told the user nothing about what
         # was actually needed. Say what it is stuck on, then how to unblock it.

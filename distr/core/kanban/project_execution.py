@@ -9,11 +9,14 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import logging
 from typing import Any
 
 from distr.core.db import Base, engine, get_session
 from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
 from distr.core.db.time import utc_now_naive
+
+logger = logging.getLogger(__name__)
 
 
 def _json_dumps(value: Any) -> str:
@@ -138,6 +141,7 @@ def create_execution_session(
             increment_workflow_updated()
         except Exception:
             pass
+        _start_thread_timer(int(row.id))
         return int(row.id)
 
 
@@ -346,6 +350,8 @@ def complete_execution_session(
         except Exception:
             pass
 
+    _settle_thread_timer(int(session_id), now)
+    _record_ticket_outcome(int(session_id))
     if clean_status == "completed" and not pending_review:
         persist_execution_feedback(row, safe_output_packet)
 
@@ -394,10 +400,176 @@ def cancel_execution_session(session_id: int | None, *, reason: str = "Stopped b
             payload=_json_dumps({}),
         ))
         session.commit()
+    _settle_thread_timer(int(session_id), utc_now_naive())
     try:
         from distr.gui.web.workflow_events import increment_workflow_updated
 
         increment_workflow_updated()
+    except Exception:
+        pass
+
+
+# After this many runs in a row fail for the same reason, stop retrying and
+# mark the ticket blocked with that reason instead of re-running it.
+SAME_FAILURE_BLOCK_AFTER = 3
+
+
+def _failure_reason_key(error: str) -> str:
+    import re
+
+    text = re.sub(r"\d+", "#", str(error or "").lower())
+    return re.sub(r"\s+", " ", text).strip()[:90]
+
+
+def _record_ticket_outcome(session_id: int) -> None:
+    """Keep the ticket's status honest and stop retry loops.
+
+    - a provider failure that failed over is not the run's outcome (the run's
+      final result is), so it never marks the ticket failed;
+    - a run blocked on Paul (needs_input) marks the ticket blocked with why;
+    - N failures in a row with the same reason mark it blocked, so nothing keeps
+      re-running it until someone says continue.
+    """
+    try:
+        from distr.core.db.kanban import KanbanTicket
+        from distr.core.kanban.ticket_audit import append_ticket_audit_entry
+
+        with get_session() as session:
+            row = session.get(ProjectExecutionSession, int(session_id))
+            if row is None or not row.ticket_id:
+                return
+            ticket = session.get(KanbanTicket, int(row.ticket_id))
+            if ticket is None:
+                return
+            output = _loads(row.output_packet) or {}
+            if isinstance(output, dict) and (output.get("fallback_model") or output.get("fallback_backend")) and row.status != "completed":
+                return
+            reason = ""
+            if row.status == "completed":
+                if str(ticket.workflow_status or "") in {"failed", "blocked"}:
+                    ticket.workflow_status = "completed"
+                if _run_changed_files(output):
+                    _advance_to_qa(session, row, ticket)
+            elif row.status == "blocked":
+                reason = str(row.error or "Waiting on your input.")
+            elif row.status == "failed":
+                recent = (
+                    session.query(ProjectExecutionSession.status, ProjectExecutionSession.error)
+                    .filter(ProjectExecutionSession.ticket_id == int(row.ticket_id))
+                    .order_by(ProjectExecutionSession.id.desc())
+                    .limit(SAME_FAILURE_BLOCK_AFTER)
+                    .all()
+                )
+                keys = {_failure_reason_key(error) for status, error in recent if status == "failed"}
+                if len(recent) >= SAME_FAILURE_BLOCK_AFTER and len(keys) == 1 and all(st == "failed" for st, _ in recent):
+                    reason = (
+                        f"Failed {SAME_FAILURE_BLOCK_AFTER} times in a row for the same reason: "
+                        f"{str(row.error or '').strip()[:240]}"
+                    )
+            if reason and str(ticket.workflow_status or "") != "blocked":
+                ticket.workflow_status = "blocked"
+                append_ticket_audit_entry(
+                    session,
+                    ticket_id=int(row.ticket_id),
+                    run_id=row.run_id,
+                    step_id=row.step_id,
+                    step_result_id=None,
+                    execution_lane="cli",
+                    status="blocked",
+                    final_verdict="blocked",
+                    summary=f"Blocked: {reason[:300]}",
+                    details="Not retried automatically. Say continue on the ticket to try again.",
+                )
+            session.commit()
+    except Exception:
+        logger.debug("Ticket outcome update failed for execution %s", session_id, exc_info=True)
+
+
+def _run_changed_files(output: dict) -> bool:
+    """A finished write run that actually changed the workspace."""
+    if not isinstance(output, dict) or output.get("waits_for_human"):
+        return False
+    if output.get("read_only_expected") or output.get("success") is False:
+        return False
+    delta = output.get("workspace_state_delta")
+    if isinstance(delta, dict) and delta.get("changed"):
+        return True
+    before, after = output.get("git_status_before"), output.get("git_status_after")
+    return bool(after) and before != after
+
+
+def _advance_to_qa(session, row, ticket) -> bool:
+    """In Progress -> QA once the work is done; Complete stays Paul's call."""
+    try:
+        from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
+        from distr.core.kanban.ticket_audit import append_ticket_audit_entry
+
+        lane = getattr(getattr(ticket, "lane", None), "name", "") or ""
+        if lane.strip().lower() != "in progress":
+            return False
+        if not move_ticket_to_delivery_lane(session, int(ticket.id), "QA"):
+            return False
+        append_ticket_audit_entry(
+            session,
+            ticket_id=int(ticket.id),
+            run_id=row.run_id,
+            step_id=row.step_id,
+            step_result_id=None,
+            execution_lane="cli",
+            status="completed",
+            final_verdict="completed",
+            summary="Moved to QA: the run finished and changed files.",
+            details=str((_loads(row.output_packet) or {}).get("summary") or "")[:2000],
+        )
+        return True
+    except ValueError:
+        return False
+    except Exception:
+        logger.debug("QA move failed for ticket %s", getattr(ticket, "id", None), exc_info=True)
+        return False
+
+
+def _execution_chat_id(session_id: int) -> int | None:
+    """The Development thread a Pi/Codex/workflow-step run belongs to."""
+    try:
+        with get_session() as session:
+            row = session.get(ProjectExecutionSession, int(session_id))
+            if row is None:
+                return None
+            packet = _loads(row.input_packet) or {}
+            chat_id = packet.get("chat_id") if isinstance(packet, dict) else None
+            if not chat_id and row.run_id:
+                from distr.core.db.workflow import AutoWorkflowRun
+
+                run = session.get(AutoWorkflowRun, int(row.run_id))
+                chat_id = getattr(run, "chat_id", None)
+            return int(chat_id) if chat_id else None
+    except Exception:
+        return None
+
+
+def _start_thread_timer(session_id: int) -> None:
+    """Real work started: run the thread (and its ticket) timer."""
+    chat_id = _execution_chat_id(session_id)
+    if not chat_id:
+        return
+    try:
+        from distr.core.workflow.development_control import resume_thread_time
+
+        resume_thread_time(int(chat_id))
+    except Exception:
+        pass  # no Development thread for this run, or the timer is unavailable
+
+
+def _settle_thread_timer(session_id: int, finished_at) -> None:
+    """Real work stopped: close the timer at the run's end unless other work holds it."""
+    chat_id = _execution_chat_id(session_id)
+    if not chat_id:
+        return
+    try:
+        from distr.core.workflow.development_control import settle_finished_thread_time
+
+        settle_finished_thread_time(int(chat_id), finished_at=finished_at)
     except Exception:
         pass
 

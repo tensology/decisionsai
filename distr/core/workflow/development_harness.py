@@ -13,6 +13,7 @@ import subprocess
 import threading
 import uuid
 from dataclasses import replace
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,12 @@ logger = logging.getLogger(__name__)
 
 ACTIVE_EXECUTION_STATUSES = {"initializing", "queued", "running", "waiting"}
 _FOLLOWUP_STARTUP_PROCESS = uuid.uuid4().hex
+# When this Decisions process started (naive UTC), and native jobs first seen
+# without a live turn. A finished turn unregisters a moment before its result
+# is saved; failing it on first sight labelled finished runs "interrupted".
+_PROCESS_STARTED_AT = utc_now_naive()
+_NATIVE_STALE_SEEN: dict[str, float] = {}
+_NATIVE_STALE_GRACE_SECONDS = 20.0
 CLI_BACKENDS = {"pi", "cursor", "codex", "claude_code"}
 # Local Ollama workers appear beside Pi/Cursor/Codex. The picker source of truth
 # is the live installed catalog (ollama list /api/tags) — not a hard-coded list.
@@ -346,7 +353,12 @@ def _audit_only_request(prompt: str) -> bool:
         text,
     ):
         return False
-    if re.search(r"\b(?:audit[ -]only|review[ -]only|read[ -]only|do not (?:make fixes|edit|modify|change)|don't (?:make fixes|edit|modify|change))\b", text):
+    from distr.core.intent_scope import requests_read_only_run
+
+    # "keep production read-only" in a steer limits production, not this turn.
+    if requests_read_only_run(text) or re.search(
+        r"\b(?:do not|don't) (?:make fixes|(?:edit|modify|change) (?:[\w-]+ ){0,2}?(?:files?|code|anything)\b)", text
+    ):
         return True
     if re.search(r"\b(?:and|then)\s+(?:fix|implement|change|deploy|publish)\b", text):
         return False
@@ -1468,7 +1480,22 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
             stale_for = (utc_now_naive() - datetime.fromisoformat(started_at)).total_seconds()
         except (TypeError, ValueError):
             stale_for = 0
-        if stale_for >= 30 and not active_turn_registered(int(chat_id)):
+        job_key = f"{chat_id}:{execution.get('job_id') or started_at}"
+        unregistered = stale_for >= 30 and not active_turn_registered(int(chat_id))
+        if not unregistered:
+            _NATIVE_STALE_SEEN.pop(job_key, None)
+        else:
+            first_seen = _NATIVE_STALE_SEEN.setdefault(job_key, time.monotonic())
+            try:
+                started_here = datetime.fromisoformat(started_at) >= _PROCESS_STARTED_AT
+            except (TypeError, ValueError):
+                started_here = False
+            if started_here and time.monotonic() - first_seen < _NATIVE_STALE_GRACE_SECONDS:
+                # Same process: give the finished turn time to save its result.
+                unregistered = False
+        if unregistered:
+            _NATIVE_STALE_SEEN.pop(job_key, None)
+            interrupted_message = _interrupted_turn_message(execution.get("activity"), restarted=not started_here)
             execution = _update_execution(
                 int(chat_id),
                 job_id=str(execution.get("job_id") or "") or None,
@@ -1477,8 +1504,8 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
                 interrupted=True,
                 completed_at=utc_now_naive().isoformat(),
                 activity_status="failed",
-                summary="The native Development turn was interrupted when DecisionsAI stopped.",
-                error="The native Development turn was interrupted when DecisionsAI stopped.",
+                summary=interrupted_message,
+                error=interrupted_message,
             )
     if session_rejected:
         execution.pop("execution_session_id", None)
@@ -1487,6 +1514,32 @@ def development_execution_state(chat_id: int) -> dict[str, Any]:
     execution["turn_routes"] = turn_routes
     execution.pop("followup_start", None)
     return {**execution, **result_marker}
+
+
+def _interrupted_turn_message(activity: Any, *, restarted: bool = True) -> str:
+    """Say why a native turn stopped, using its last recorded activity, plus the next step.
+
+    The generic "interrupted when DecisionsAI stopped" hid the real cause (for
+    example the step limit) that was already sitting in ``activity``.
+    """
+    last = re.sub(r"\s+", " ", str(activity or "")).strip()
+    limit = re.search(r"(\d+)-(?:iteration|step) (?:safety )?limit", last)
+    if limit:
+        return (
+            f"Stopped at the {limit.group(1)}-step limit before finishing. "
+            "Say continue and it will pick up from what it has already done."
+        )
+    if not restarted:
+        tail = f" Last thing it reported: {last[:219]}" if last else ""
+        return f"This turn stopped without saving its result.{tail} Say continue to pick it up again."
+    if not last:
+        return "DecisionsAI restarted while this turn was running. Say continue to pick it up again."
+    if len(last) > 220:
+        last = last[:219].rsplit(" ", 1)[0] + "…"
+    return (
+        "DecisionsAI restarted before this turn saved its result. "
+        f"Last thing it reported: {last} Say continue to pick it up again."
+    )
 
 
 def development_execution_active(chat_id: int) -> bool:
@@ -1937,7 +1990,8 @@ def _agent_instruction(chat_id: int, prompt: str, metadata: dict[str, Any], *, a
         )
     elif selected_skills:
         skill_instruction = (
-            "Skills selected by the user for this turn: "
+            ("Skills auto-matched for this turn (skip any that clearly do not fit the request): "
+             if metadata.get("turn_skills_auto") else "Skills selected by the user for this turn: ")
             + ", ".join(selected_skills)
             + ". Read each exact skill with read_harness_skill before acting, then apply its instructions. Do not search or list the skill catalog first."
         )

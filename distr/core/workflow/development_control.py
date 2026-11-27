@@ -700,10 +700,13 @@ def thread_time_state(chat_id: int, *, auto_pause_after_seconds: int = 2) -> dic
         item = db.query(DevelopmentWorkItem).filter_by(chat_id=int(chat_id)).first()
         if item is None:
             raise LookupError("Development thread not found.")
-        _close_idle_segment(
-            db, item, now=now, agent_active=agent_active,
-            grace_seconds=auto_pause_after_seconds, min_idle_seconds=auto_pause_after_seconds,
-        )
+        # A workflow step or Pi/Codex run on this thread is work even when the
+        # chat harness is idle; the 2-second UI pause used to cut it short.
+        if not agent_active and not _thread_has_live_run(db, int(chat_id), now):
+            _close_idle_segment(
+                db, item, now=now, agent_active=False,
+                grace_seconds=auto_pause_after_seconds, min_idle_seconds=auto_pause_after_seconds,
+            )
         payload = _thread_time_payload(item, now)
         payload["entries"] = _list_time_entries_for_item(db, int(chat_id))
         _sync_ticket_time(db, item, payload["seconds"])
@@ -711,8 +714,11 @@ def thread_time_state(chat_id: int, *, auto_pause_after_seconds: int = 2) -> dic
         return payload
 
 
-# A run row in one of these states still owns the thread's timer.
-LIVE_RUN_STATUSES = ("initializing", "queued", "running", "waiting")
+# A run row in one of these states still owns the thread's timer. "waiting"
+# (on Paul's answer or review) is not work: a run held there kept a timer open
+# for hours. A worker still running inside a waiting step is caught by its
+# live project execution session instead.
+LIVE_RUN_STATUSES = ("initializing", "queued", "running")
 # The background sweep only closes timers idle at least this long, so it never
 # races a run that has just started its timer but not yet marked itself active.
 TIMER_SWEEP_IDLE_SECONDS = 5 * 60
@@ -743,7 +749,8 @@ def _close_idle_segment(
 
     activity_at = settled_segment_end(
         item.time_started_at,
-        thread_turns(db, int(item.chat_id), item.time_started_at),
+        [*thread_turns(db, int(item.chat_id), item.time_started_at),
+         *execution_turns(db, int(item.chat_id), item.time_started_at)],
         last_activity_at=item.time_last_activity_at,
         now=now,
         grace_seconds=0,
@@ -755,6 +762,63 @@ def _close_idle_segment(
     item.time_started_at = None
     item.time_paused = True
     return True
+
+
+def execution_turns(db, chat_id: int, since: datetime) -> list[tuple[datetime, datetime | None]]:
+    """(started, finished) of Pi/Codex/workflow-step runs on this thread since ``since``.
+
+    Workflow steps run as project execution sessions, not chat turns, so a timer
+    closed from chat turns alone billed a 15-minute step as 2 seconds.
+    """
+    try:
+        from distr.core.db.kanban import ProjectExecutionSession
+        from distr.core.db.workflow import AutoWorkflowRun
+
+        run_ids = [int(r[0]) for r in db.query(AutoWorkflowRun.id).filter(AutoWorkflowRun.chat_id == int(chat_id)).all()]
+        rows = (
+            db.query(ProjectExecutionSession.started_at, ProjectExecutionSession.completed_at,
+                     ProjectExecutionSession.updated_at, ProjectExecutionSession.run_id,
+                     ProjectExecutionSession.input_packet)
+            .filter(ProjectExecutionSession.started_at >= since - timedelta(hours=6))
+            .all()
+        )
+    except Exception:
+        return []
+    out: list[tuple[datetime, datetime | None]] = []
+    for started, completed, updated, run_id, raw in rows:
+        owned = run_id is not None and int(run_id) in run_ids
+        if not owned:
+            try:
+                owned = int((json.loads(raw or "{}") or {}).get("chat_id") or 0) == int(chat_id)
+            except (TypeError, ValueError, AttributeError):
+                owned = False
+        if owned and started is not None:
+            end = completed or updated or started
+            if end >= since:
+                out.append((max(started, since), end))
+    return out
+
+
+def _dispatched_turn_finished(run_data: dict, chat_id: int) -> bool:
+    """An automation run handed to a Development thread is over once that turn is.
+
+    Its own row is only settled when someone lists the automation's history, so
+    a finished (or interrupted) turn otherwise kept the thread timer running.
+    """
+    if run_data.get("execution_mode") != "development_harness" or run_data.get("development_workflow_id") is not None:
+        return False
+    job_id = str(run_data.get("development_run_id") or "")
+    if not job_id:
+        return False
+    try:
+        from distr.core.workflow.development_harness import development_execution_state
+
+        execution = development_execution_state(int(chat_id))
+    except Exception:
+        return False
+    if str(execution.get("job_id") or "") != job_id:
+        return False
+    return str(execution.get("status") or "").lower() not in {*LIVE_RUN_STATUSES, "waiting"}
 
 
 def _thread_has_live_run(db, chat_id: int, now: datetime) -> bool:
@@ -780,6 +844,31 @@ def _thread_has_live_run(db, chat_id: int, now: datetime) -> bool:
         try:
             data = json.loads(raw or "{}")
             if isinstance(data, dict) and int(data.get("chat_id") or 0) == int(chat_id):
+                if _dispatched_turn_finished(data, chat_id):
+                    continue
+                return True
+        except (TypeError, ValueError):
+            continue
+    # A Pi/Codex project run on this thread is real work too: a 15-minute run
+    # was being billed as 5 seconds because only workflow/automation runs counted.
+    try:
+        from distr.core.db.kanban import ProjectExecutionSession
+
+        sessions = (
+            db.query(ProjectExecutionSession.input_packet)
+            .filter(
+                ProjectExecutionSession.status.in_(["queued", "running"]),
+                ProjectExecutionSession.completed_at.is_(None),
+                ProjectExecutionSession.started_at >= cutoff,
+            )
+            .all()
+        )
+    except Exception:
+        sessions = []
+    for (raw,) in sessions:
+        try:
+            data = json.loads(raw or "{}")
+            if isinstance(data, dict) and int(data.get("chat_id") or 0) == int(chat_id):
                 return True
         except (TypeError, ValueError):
             continue
@@ -787,13 +876,20 @@ def _thread_has_live_run(db, chat_id: int, now: datetime) -> bool:
 
 
 def _execution_active_or_unknown(chat_id: int) -> bool:
-    from distr.core.workflow.development_harness import development_execution_active
+    """True while the agent is working; a run waiting on Paul's review is not work."""
+    from distr.core.workflow import development_harness
 
     try:
-        return bool(development_execution_active(int(chat_id)))
+        if not development_harness.development_execution_active(int(chat_id)):
+            return False
     except Exception:
         # When the state cannot be read, leave the timer alone.
         return True
+    try:
+        status = str(development_harness.development_execution_state(int(chat_id)).get("status") or "").lower()
+    except Exception:
+        return True
+    return status != "waiting"
 
 
 def settle_finished_thread_time(

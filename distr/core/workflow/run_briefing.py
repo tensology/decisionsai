@@ -347,6 +347,14 @@ def enter_step_review_wait(
         run_data["pending_next_step_id"] = int(next_step_id)
         run_data.pop("pending_first_step_id", None)
         run.run_data = json.dumps(run_data)
+        if passed and run.ticket_id:
+            # Finished work waiting on Paul's review sits in QA, not In Progress.
+            try:
+                from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
+
+                move_ticket_to_delivery_lane(db, int(run.ticket_id), "QA")
+            except ValueError:
+                pass
         db.commit()
     try:
         from distr.core.kanban.ticket_workflow_engagement import notify_ticket_workflow_progress

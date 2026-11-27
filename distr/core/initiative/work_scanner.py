@@ -365,8 +365,8 @@ def _scan_local_boards(scan: dict[str, Any], settings: dict[str, Any]) -> None:
                 "name": board.name or "",
                 "description": board.description or "",
                 "source": board.source or "database",
-                "source_lane": "Current",
-                "done_lane": "QA / Assess",
+                "source_lane": "In Progress",
+                "done_lane": "QA",
                 "default_workflow_id": board.default_workflow_id,
                 "default_project_id": board.default_project_id,
                 "send_to_cli": bool(board.send_to_cli),
@@ -474,7 +474,7 @@ def _ticket_row(ticket: Any, lane_name: str, board: Any) -> dict[str, Any]:
 # is in flight, or the ticket already reached a terminal state. Re-proposing a
 # cancelled/completed ticket every cycle starves the rest of the work scan.
 _NON_RUNNABLE_WORKFLOW_STATUSES = frozenset({
-    "running", "waiting",
+    "running", "waiting", "blocked",
     "cancelled", "canceled", "completed", "complete", "done", "succeeded", "success",
 })
 _SMOKE_FIXTURE_MARKER = "[dai-smoke-loop-fixture]"

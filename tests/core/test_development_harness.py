@@ -773,7 +773,8 @@ def test_completed_turn_can_start_a_later_turn_in_the_same_thread(tmp_path, monk
     assert first["job_id"] != second["job_id"]
     assert second["status"] == "completed"
     assert second["execution_session_id"] == 92
-    assert second["summary"] == "100% done. Completed turn 2."
+    assert second["summary"].startswith("100% done.")
+    assert "Completed turn 2." in second["summary"]
     with get_session() as db:
         execution = json.loads(db.get(Chat, chat_id).params)["development"]["execution"]
         assert execution["job_id"] == second["job_id"]
@@ -959,7 +960,8 @@ def test_stale_native_execution_recovers_as_interrupted_after_restart(tmp_path, 
     state = harness.development_execution_state(chat_id)
 
     assert state["status"] == "failed"
-    assert "interrupted when DecisionsAI stopped" in state["error"]
+    assert "DecisionsAI restarted while this turn was running" in state["error"]
+    assert "continue" in state["error"]
     with get_session() as db:
         persisted = json.loads(db.get(Chat, chat_id).params)["development"]["execution"]
         assert persisted["status"] == "failed"

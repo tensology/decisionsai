@@ -177,10 +177,22 @@ def test_sweep_leaves_a_live_workflow_run_alone(development_db, monkeypatch):  #
     _idle_agent(monkeypatch)
     _running_since(session, chat_id, START)
     with session() as db:
-        db.add(AutoWorkflowRun(workflow_id=1, chat_id=chat_id, status="waiting", started_at=START))
+        db.add(AutoWorkflowRun(workflow_id=1, chat_id=chat_id, status="running", started_at=START))
         db.commit()
     assert control.sweep_idle_thread_timers(_session_provider=session) == []
     assert _item(session, chat_id).time_paused is False
+
+
+def test_sweep_pauses_a_run_waiting_on_review(development_db, monkeypatch):  # noqa: F811
+    # 2026-11-27: Jackcat #257 billed hours while run 190 sat waiting for Paul's review.
+    session, chat_id = development_db["session"], development_db["chat_id"]
+    monkeypatch.setattr(control, "utc_now_naive", lambda: START + timedelta(hours=2))
+    _idle_agent(monkeypatch)
+    _running_since(session, chat_id, START)
+    with session() as db:
+        db.add(AutoWorkflowRun(workflow_id=1, chat_id=chat_id, status="waiting", started_at=START))
+        db.commit()
+    assert control.sweep_idle_thread_timers(_session_provider=session) == [chat_id]
 
 
 def test_sweep_does_not_race_a_run_that_just_started(development_db, monkeypatch):  # noqa: F811

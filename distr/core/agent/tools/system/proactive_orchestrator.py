@@ -201,6 +201,9 @@ class ProactiveOrchestratorTool(BaseTool):
         )
         if proposals_block:
             markdown = markdown.rstrip() + "\n" + proposals_block
+        stale_block = _stale_lane_block()
+        if stale_block:
+            markdown = markdown.rstrip() + "\n" + stale_block
         orchestration_actions = build_planner_orchestration_actions(bundle, scope="day")
         orchestration_results = self._execute_orchestration_actions(
             orchestration_actions,
@@ -299,3 +302,25 @@ class ProactiveOrchestratorTool(BaseTool):
             format=format,
             **kwargs,
         )
+
+
+def _stale_lane_block(limit: int = 8) -> str:
+    """Flag In Progress / QA tickets nobody touched in days instead of leaving them silently."""
+    try:
+        from distr.core.db import get_session
+        from distr.core.kanban.lifecycle import STALE_LANE_DAYS, stale_lane_tickets
+
+        with get_session() as db:
+            stale = stale_lane_tickets(db)
+    except Exception:
+        return ""
+    if not stale:
+        return ""
+    lines = [f"\n## Stale tickets (no activity for {STALE_LANE_DAYS}+ days)\n"]
+    for item in stale[:limit]:
+        days = f"{item['idle_days']}d" if item.get("idle_days") is not None else "no activity recorded"
+        lines.append(f"- #{item['ticket_id']} {item['title'][:80]} ({item['board']}, {item['lane']}, {days}): move back to Backlog, close it, or say continue.")
+    if len(stale) > limit:
+        lines.append(f"- …and {len(stale) - limit} more.")
+    return "\n".join(lines) + "\n"
+

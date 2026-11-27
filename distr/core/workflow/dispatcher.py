@@ -3456,6 +3456,14 @@ def _handle_step_review_response(
             run_data.pop("step_review_result", None)
             run_data.pop("step_review_passed", None)
             run.run_data = json.dumps(run_data)
+            if run.ticket_id:
+                # Work continues: the ticket goes back from QA to In Progress.
+                try:
+                    from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
+
+                    move_ticket_to_delivery_lane(db, int(run.ticket_id), "In Progress")
+                except ValueError:
+                    pass
             db.commit()
 
     record_workflow_chat_event(

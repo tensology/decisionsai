@@ -84,7 +84,20 @@ def require_automation_lane(lane_name: str) -> str:
 
     if is_complete_lane_name(target_name):
         raise ValueError("Only a human may move a QA ticket to Complete")
-    return target_name
+    return canonical_delivery_lane_name(target_name)
+
+
+def canonical_delivery_lane_name(lane_name: str) -> str:
+    """Map a legacy lane name (e.g. ``Current``) to its canonical lifecycle lane."""
+    name = str(lane_name or "").strip()
+    key = name.casefold()
+    for canonical in DELIVERY_LANES:
+        if canonical.casefold() == key:
+            return canonical
+    for canonical, aliases in _LEGACY_DELIVERY_LANE_ALIASES.items():
+        if any(alias.casefold() == key for alias in aliases):
+            return canonical
+    return name
 
 
 def ensure_delivery_lanes(
@@ -216,3 +229,53 @@ def move_ticket_to_delivery_lane(
 
         queue_source_chat_ticket_notice(session, int(ticket_id), from_lane=current_name, to_lane=target_name)
     return True
+
+
+STALE_LANE_DAYS = 3
+
+
+def stale_lane_tickets(session: Any, *, days: int = STALE_LANE_DAYS, now: Any = None) -> list[dict[str, Any]]:
+    """In Progress / QA tickets with no work, lane move or edit for ``days`` days.
+
+    Flagged to Paul instead of being left (or re-laned) silently. Read-only.
+    """
+    from datetime import timedelta
+
+    from distr.core.db.kanban import KanbanBoard, ProjectExecutionSession
+    from distr.core.db.time import utc_now_naive
+    from distr.core.db.kanban import KanbanTicketLaneHistory
+
+    now = now or utc_now_naive()
+    cutoff = now - timedelta(days=max(1, int(days)))
+    rows = (
+        session.query(KanbanTicket, KanbanLane, KanbanBoard)
+        .join(KanbanLane, KanbanLane.id == KanbanTicket.lane_id)
+        .join(KanbanBoard, KanbanBoard.id == KanbanLane.board_id)
+        .filter(KanbanLane.name.in_(("In Progress", "QA")))
+        .all()
+    )
+    out: list[dict[str, Any]] = []
+    for ticket, lane, board in rows:
+        stamps = [ticket.modified_date]
+        last_move = (
+            session.query(func.max(KanbanTicketLaneHistory.created_at))
+            .filter(KanbanTicketLaneHistory.ticket_id == ticket.id)
+            .scalar()
+        )
+        last_run = (
+            session.query(func.max(ProjectExecutionSession.updated_at))
+            .filter(ProjectExecutionSession.ticket_id == ticket.id)
+            .scalar()
+        )
+        stamps += [last_move, last_run]
+        last = max((stamp for stamp in stamps if stamp is not None), default=None)
+        if last is None or last < cutoff:
+            out.append({
+                "ticket_id": int(ticket.id),
+                "title": str(ticket.title or ""),
+                "board": str(board.name or ""),
+                "lane": str(lane.name or ""),
+                "idle_days": (now - last).days if last else None,
+            })
+    out.sort(key=lambda item: -(item["idle_days"] or 0))
+    return out

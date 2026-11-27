@@ -56,7 +56,9 @@ _TICKET_SKILL_HINTS: list[tuple[list[str], list[str]]] = [
     (["brainstorm", "design feature", "explore idea"], ["brainstorming", "ceo-scope-review"]),
     (["research", "competitor", "deep dive", "look up", "twitter", "reddit", "youtube", "rss", "podcast"], ["decisions-agent-reach", "agent-reach", "last30days"]),
     (["humanize", "ai slop", "sounds robotic", "polish copy"], ["humanizer"]),
-    (["marketing", "landing page", "conversion", "cro", "seo audit"], ["decisions-marketing-skills", "product-marketing"]),
+    # Not bare "conversion": an order-to-invoice conversion is billing work, not CRO.
+    (["marketing", "landing page", "conversion rate", "conversion optimisation", "conversion optimization", "cro", "seo audit"],
+     ["decisions-marketing-skills", "product-marketing"]),
     (["youtube", "yt-dlp", "subtitle", "transcript", "video brief"], ["decisions-yt-dlp", "video-editing"]),
     (["gmail", "slack", "notion", "linear", "jira", "composio", "send email", "post to slack"], ["decisions-composio"]),
     (["aesthetic", "design system", "glassmorphism", "bento grid"], ["decisions-design-aesthetics"]),
