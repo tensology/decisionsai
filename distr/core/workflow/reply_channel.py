@@ -144,6 +144,9 @@ _PROMISE_PATTERNS = (
     r"\bit(?:'s| is) (?:now )?live in production\b",
     r"\bwe(?:'ve| have) (?:deployed|shipped|released)\b",
     r"\bguaranteed?\b",
+    # Claims of checks the draft may not have evidence for hold the reply for approval.
+    r"\b(?:i|we)(?:'ve| have)? (?:now |also |already )?(?:reproduced|replicated)\b",
+    r"\b(?:i|we)(?:'ve| have)? (?:now |also |already )?(?:tested|verified|confirmed) (?:it|this|that|the fix)\b",
 )
 
 _EM_DASH_RE = re.compile(r"\s*[\u2014\u2013]\s*")
@@ -184,7 +187,9 @@ def humanize_reply(text: str) -> str:
     Applies the rules we already hold elsewhere: no em dashes, no filler
     openers, no double spaces. It never invents or removes information.
     """
-    out = str(text or "")
+    from distr.core.client_voice import apply_client_voice
+
+    out = apply_client_voice(str(text or ""))
     out = _EM_DASH_RE.sub(", ", out)
     out = _FILLER_RE.sub("", out)
     out = re.sub(r"[ \t]{2,}", " ", out)

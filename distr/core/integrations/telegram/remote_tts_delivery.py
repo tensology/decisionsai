@@ -69,8 +69,12 @@ def is_remote_delivery_available(
     now: float | None = None,
     window_s: float = DEFAULT_REMOTE_ACTIVE_WINDOW_S,
 ) -> bool:
-    """Return True when the desktop relay is up and a remote web session is likely open."""
-    if not _manager_connected(manager):
+    """Return True when a remote web session is likely open.
+
+    A relay blip is not "unavailable": the remote worker waits for the relay
+    and retries, so a reply is never rerouted or dropped over a reconnect.
+    """
+    if manager is None:
         return False
     now = float(now if now is not None else time.time())
     try:
@@ -86,6 +90,49 @@ def is_remote_delivery_available(
         created = float(ctx.get("created_at") or 0)
         if created and now - created <= max(window_s, 180.0):
             return True
+    return False
+
+
+def consume_remote_context(manager: Any, request_id: str) -> bool:
+    """Forget a pending remote request once its reply was actually delivered."""
+    rid = str(request_id or "").strip()
+    if manager is None or not rid:
+        return False
+    queue = _pending_remote_contexts(manager)
+    remaining = [ctx for ctx in queue if str(ctx.get("request_id") or "") != rid]
+    if len(remaining) == len(queue):
+        return False
+    _store_pending_remote_contexts(manager, remaining)
+    return True
+
+
+REMOTE_RETRY_DELAYS_S = (2.0, 4.0, 8.0, 15.0, 30.0, 30.0, 30.0, 60.0)
+
+
+def deliver_remote_with_retry(
+    manager: Any,
+    deliver: Callable[[], bool],
+    request_id: str = "",
+    *,
+    delays: tuple[float, ...] = REMOTE_RETRY_DELAYS_S,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Deliver, waiting out relay reconnects; consume the context only on success."""
+    for attempt, delay in enumerate((0.0, *delays)):
+        if delay:
+            sleep(delay)
+        if not _manager_connected(manager):
+            continue
+        try:
+            delivered = bool(deliver())
+        except Exception:
+            logger.warning("[REMOTE TTS] Delivery attempt %d failed: request_id=%s", attempt + 1, request_id, exc_info=True)
+            delivered = False
+        if delivered:
+            if request_id:
+                consume_remote_context(manager, request_id)
+            return True
+    logger.error("[REMOTE TTS] Reply not delivered after %d attempts; context kept: request_id=%s", len(delays) + 1, request_id)
     return False
 
 
@@ -282,7 +329,11 @@ def deliver_remote_tts(
 
     # Agent-modal commands request Enter only after the agent turn has completed.
     # This keeps the keystroke ordered behind any tools/actions from the turn.
+    if not _manager_connected(manager):
+        return False
+
     if bool(remote_ctx.get("press_enter")) and not is_cancelled():
+        remote_ctx["press_enter"] = False  # a retry after a relay blip must not press it again
         try:
             manager._press_key("enter", take_screenshot=False)
             logger.info(
@@ -296,7 +347,7 @@ def deliver_remote_tts(
             )
 
     if send_text_first and not is_cancelled():
-        manager._send_websocket_message(
+        text_sent = manager._send_websocket_message(
             {
                 "type": "remote_agent_response",
                 "request_id": request_id,
@@ -307,6 +358,9 @@ def deliver_remote_tts(
                 ),
             }
         )
+        if text_sent is False:
+            logger.warning("[REMOTE TTS] Relay did not take the reply text: request_id=%s", request_id)
+            return False
 
     generated_audio_file = None
     stream_audio_file = None

@@ -40,6 +40,15 @@ finally:
             sys.modules.pop(_k, None)
 
 
+def _web_modules():
+    # Import by module object: a string target ("distr.gui.web.server.x") is
+    # resolved by attribute walk and breaks when an earlier test has swapped
+    # distr.gui in sys.modules ("module 'distr.gui' has no attribute 'web'").
+    web_server = importlib.import_module("distr.gui.web.server")
+    web_security = importlib.import_module("distr.gui.web.security")
+    return web_server, web_security
+
+
 class _SignalCollector:
     def __init__(self):
         self.calls = 0
@@ -113,8 +122,9 @@ def test_planning_scope_and_conflict_survive_api_relay(monkeypatch, suffix):
     response.json.return_value = detail
     http_get = Mock(return_value=response)
     monkeypatch.setattr("requests.get", http_get)
-    monkeypatch.setattr("distr.gui.web.server.get_unified_server", lambda: None)
-    monkeypatch.setattr("distr.gui.web.security.get_internal_api_token", lambda: "fixture-token")
+    web_server, web_security = _web_modules()
+    monkeypatch.setattr(web_server, "get_unified_server", lambda: None)
+    monkeypatch.setattr(web_security, "get_internal_api_token", lambda: "fixture-token")
 
     host._handle_remote_control_command({
         "command": "api_relay",
@@ -138,8 +148,9 @@ def test_relay_keeps_the_proposal_source_read_window(monkeypatch, suffix):
     path = "/api/workflows/studio/incoming/proposals/source?review_key=" + "a" * 64 + suffix
     get = Mock(return_value=Mock(status_code=200, json=Mock(return_value={})))
     monkeypatch.setattr("requests.get", get)
-    monkeypatch.setattr("distr.gui.web.server.get_unified_server", lambda: None)
-    monkeypatch.setattr("distr.gui.web.security.get_internal_api_token", lambda: "fixture-token")
+    web_server, web_security = _web_modules()
+    monkeypatch.setattr(web_server, "get_unified_server", lambda: None)
+    monkeypatch.setattr(web_security, "get_internal_api_token", lambda: "fixture-token")
     host._dispatch_api_relay({"request_id": "source", "data": {"method": "GET", "path": path}})
     assert get.call_args.args[0].endswith(path)
     assert get.call_args.kwargs["timeout"] == 25
@@ -155,8 +166,9 @@ def test_relay_only_extends_the_timeout_for_source_reply_writes(monkeypatch, pat
     host = _Host()
     post = Mock(return_value=Mock(status_code=200, json=Mock(return_value={})))
     monkeypatch.setattr("requests.post", post)
-    monkeypatch.setattr("distr.gui.web.server.get_unified_server", lambda: None)
-    monkeypatch.setattr("distr.gui.web.security.get_internal_api_token", lambda: "fixture-token")
+    web_server, web_security = _web_modules()
+    monkeypatch.setattr(web_server, "get_unified_server", lambda: None)
+    monkeypatch.setattr(web_security, "get_internal_api_token", lambda: "fixture-token")
     host._dispatch_api_relay({
         "request_id": "reply",
         "data": {"method": "POST", "path": path, "body": {}},

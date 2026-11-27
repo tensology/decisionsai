@@ -403,7 +403,9 @@ def test_native_runtime_stops_at_iteration_limit():
 
     assert result.success is False
     assert result.runtime_id == "native"
-    assert "2-iteration safety limit" in result.error
+    assert "2-step limit" in result.error
+    assert "continue" in result.error
+    assert result.evidence["step_limit_reached"] is True
 
 
 def test_native_runtime_stops_repeated_failed_tool_calls_before_iteration_limit():

@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import random
+import re
 import time
 import urllib.parse
 from typing import Any, Awaitable, Callable
@@ -91,6 +92,55 @@ def work_request_summary(event: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
+# One incident (e.g. a database restart) can produce a dozen error emails and a
+# dozen near-identical proposals. Ping once per incident; the rest stay in
+# Incoming without another Telegram/chat alert.
+INCIDENT_WINDOW_SECONDS = 2 * 60 * 60
+_INCIDENT_SYNONYMS = {
+    "postgresql": "database", "postgres": "database", "psql": "database", "db": "database",
+    "pgbouncer": "database", "databases": "database", "connections": "connection",
+    "workers": "worker", "timeouts": "timeout", "timed": "timeout", "500s": "500",
+}
+_INCIDENT_SYMPTOMS = frozenset({
+    "database", "connection", "timeout", "500", "502", "503", "504", "worker", "celery", "rabbitmq",
+    "redis", "outage", "down", "ssl", "certificate", "memory", "disk", "dns", "cron", "queue",
+})
+_INCIDENT_STOP = frozenset({
+    "investigate", "fix", "recurring", "repeated", "failure", "failures", "failing", "error", "errors",
+    "issue", "issues", "on", "the", "a", "an", "and", "for", "of", "in", "to", "with", "causing",
+    "page", "pages", "request", "requests", "check", "look", "into", "production", "prod", "from",
+})
+_recent_incidents: list[tuple[float, str, frozenset[str]]] = []
+
+
+def _incident_tokens(title: str) -> frozenset[str]:
+    words = re.findall(r"[a-z0-9]+", str(title or "").lower())
+    return frozenset(
+        _INCIDENT_SYNONYMS.get(word, word)
+        for word in words
+        if word not in _INCIDENT_STOP and not word.isdigit() or word in {"500", "502", "503", "504"}
+    )
+
+
+def is_repeat_incident(event: dict[str, Any], *, now: float | None = None) -> bool:
+    """True when this proposal looks like one already announced for the same project."""
+    project = " ".join(str(event.get("project") or "").lower().split())
+    tokens = _incident_tokens(event.get("title") or "")
+    if not project or not tokens:
+        return False
+    current = time.time() if now is None else now
+    _recent_incidents[:] = [item for item in _recent_incidents if current - item[0] <= INCIDENT_WINDOW_SECONDS]
+    for _seen_at, seen_project, seen_tokens in _recent_incidents:
+        if seen_project != project:
+            continue
+        shared = tokens & seen_tokens
+        union = tokens | seen_tokens
+        if len(shared & _INCIDENT_SYMPTOMS) >= 2 or (union and len(shared) / len(union) >= 0.6):
+            return True
+    _recent_incidents.append((current, project, tokens))
+    return False
+
+
 def handle_work_request_signal(event: Any) -> None:
     """A Tensology work proposal arrived: describe it and put it in front of the user.
 
@@ -144,6 +194,10 @@ def handle_work_request_signal(event: Any) -> None:
         invalidate_proposals_list_cache()
     except Exception:
         logger.debug("Incoming proposals cache invalidate failed", exc_info=True)
+    if is_repeat_incident(event):
+        logger.info("Tensology proposal %s repeats an announced incident; kept in Incoming without a new alert",
+                    event.get("request_id"))
+        return
     from distr.core.tensology_notify import notify_proposal_created
 
     notify_proposal_created(event)

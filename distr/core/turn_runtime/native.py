@@ -23,6 +23,7 @@ from distr.core.turn_runtime.contracts import (
     TurnRequest,
     TurnResult,
     TurnStatus,
+    TurnCancelled,
 )
 
 
@@ -657,7 +658,29 @@ class NativeTurnRuntime:
                 messages.append({"role": "user", "content": pending_read_nudge})
             apply_steering()
 
-        message = f"The native Development turn reached its {self._max_iterations}-iteration safety limit."
+        message = (
+            f"Stopped at the {self._max_iterations}-step limit before finishing. "
+            "Say continue and it will pick up from what it has already done."
+        )
+        # Checkpoint instead of dying silently: one tool-free call turns the
+        # work already in this turn into a progress note (done / left / next).
+        checkpoint = ""
+        try:
+            token.raise_if_cancelled()
+            messages.append({
+                "role": "user",
+                "content": (
+                    "You have used this turn's step budget. Do not call tools. Using only the work "
+                    "already done above, reply in plain words: what is done (only what tool results "
+                    "prove), what is left, and the exact next step. Do not claim anything you did not verify."
+                ),
+            })
+            final = await self._model.complete(messages, (), on_delta=None)
+            checkpoint = str(final.text or "").strip()
+        except TurnCancelled:
+            raise
+        except Exception:
+            checkpoint = ""
         self._emit(
             on_event,
             kind=TurnEventKind.FAILED,
@@ -669,6 +692,12 @@ class NativeTurnRuntime:
             runtime_id=self.runtime_id,
             backend_id="native",
             model=request.route.model,
+            output=checkpoint,
             error=message,
-            evidence={"iterations": self._max_iterations, "context_compactions": context_compactions},
+            evidence={
+                "iterations": self._max_iterations,
+                "context_compactions": context_compactions,
+                "step_limit_reached": True,
+                "checkpoint": bool(checkpoint),
+            },
         )

@@ -1082,10 +1082,11 @@ class EventHandlerMixin:
             )
             from distr.core.agent.services.tts.outbound_voice import is_voice_delivery_provider
 
+            # Peek only: the remote worker consumes the context once delivery succeeds.
             remote_ctx = resolve_remote_delivery_context(
                 self.telegram_manager,
                 data,
-                consume_pending=not bool(data.get("explicit_notification_intent")),
+                consume_pending=False,
             )
 
         force_telegram = bool(data.get("force_telegram_delivery"))
@@ -1105,10 +1106,11 @@ class EventHandlerMixin:
             and origin_surface in {"", "remote"}
             and is_voice_delivery_provider(provider)
             and has_telegram_manager
-            and telegram_connected
             and not force_telegram
             and not telegram_chat_voice_reply
         ):
+            # A remote-app reply goes to the remote app even while the relay
+            # reconnects; the worker waits and retries instead of dropping it.
             app_ref = self
 
             def send_to_remote_thread():
@@ -1118,7 +1120,13 @@ class EventHandlerMixin:
                     logger.error(f"Error in send_to_remote thread: {e}", exc_info=True)
 
             threading.Thread(target=send_to_remote_thread, daemon=True, name="SendToRemoteApp").start()
-        elif (
+            return
+        if remote_ctx and not data.get("explicit_notification_intent"):
+            # Not delivered to the remote app: release its context as before.
+            from distr.core.integrations.telegram.remote_tts_delivery import consume_remote_context
+
+            consume_remote_context(self.telegram_manager, remote_ctx.get("request_id"))
+        if (
             telegram_delivery_allowed
             and (
                 is_voice_delivery_provider(provider)
@@ -1170,9 +1178,7 @@ class EventHandlerMixin:
         if not hasattr(self, "telegram_manager") or not self.telegram_manager:
             logger.warning("[EVENT QUEUE] Ignoring send_to_remote (Telegram manager not available)")
             return
-        if not self.telegram_manager.is_connected():
-            logger.warning("[EVENT QUEUE] Ignoring send_to_remote (relay not connected)")
-            return
+        # No relay-connected gate here: the remote worker waits out reconnects.
 
         from distr.core.integrations.telegram.remote_tts_delivery import (
             is_remote_delivery_available,
@@ -1248,15 +1254,21 @@ class EventHandlerMixin:
             )
             return
 
+        from distr.core.integrations.telegram.remote_tts_delivery import deliver_remote_with_retry
+
         self._record_remote_reply_context(data, text, channel="remote")
-        deliver_remote_tts(
+        deliver_remote_with_retry(
             self.telegram_manager,
-            text,
-            remote_ctx,
-            generate_tts=self._telegram_generate_tts,
-            convert_wav_to_ogg=self._convert_wav_to_ogg,
-            cleanup_files=self._telegram_cleanup_temp_files,
-            send_text_first=True,
+            lambda: deliver_remote_tts(
+                self.telegram_manager,
+                text,
+                remote_ctx,
+                generate_tts=self._telegram_generate_tts,
+                convert_wav_to_ogg=self._convert_wav_to_ogg,
+                cleanup_files=self._telegram_cleanup_temp_files,
+                send_text_first=True,
+            ),
+            str(remote_ctx.get("request_id") or ""),
         )
 
     def _record_remote_reply_context(self, data: dict, outbound_text: str, *, channel: str) -> None:
