@@ -609,7 +609,7 @@ class VoiceDictationMixin:
                 if decision == "approve":
                     ok = approve_draft_in_queue(dq, gate_draft_id)
                 else:
-                    ok = dq.remove(gate_draft_id)
+                    ok = dq.reject(gate_draft_id)
                 if ok:
                     snippet = (target_meta.description or "")[:200]
                     await self._speak_text(

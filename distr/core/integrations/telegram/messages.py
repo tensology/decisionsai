@@ -969,7 +969,7 @@ class TelegramMessagesMixin:
             thread.start()
             self.send_to_telegram("Queued that Initiative action and started execution in the background.")
             return True
-        removed = queue_obj.remove(draft_id)
+        removed = queue_obj.reject(draft_id) if hasattr(queue_obj, "reject") else queue_obj.remove(draft_id)
         self.send_to_telegram("Rejected and removed from the Initiative queue." if removed else "That pending action was not found.")
         return True
 

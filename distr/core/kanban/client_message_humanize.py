@@ -146,11 +146,22 @@ def humanize_client_message(text: str) -> str:
     out = str(text or "").strip()
     if not out:
         return ""
+    from distr.core.client_voice import apply_client_voice
+
+    # Paul's voice: one developer ("I"), no lecture on the client's own setup.
+    out = apply_client_voice(out)
     phrase_res, filler_res = _skill_rules()
     for pattern, replacement in filler_res:
         out = pattern.sub(replacement, out)
     out = _EM_DASH.sub(", ", out)
     out = _CHATBOT.sub("", out)
+    # A sentence that opens with a stock phrase ("Let me know if ...") goes whole;
+    # cutting just the phrase left fragments like "if anything looks off."
+    sentences = re.split(r"(?<=[.!?])[ \t]+", out)
+    out = " ".join(
+        sentence for sentence in sentences
+        if not any(pattern.match(sentence.lstrip()) for pattern in phrase_res)
+    ) or out
     for pattern in phrase_res:
         out = pattern.sub("", out)
     out = _BOLD.sub(r"\1", out)
