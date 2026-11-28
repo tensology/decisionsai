@@ -522,12 +522,19 @@ def publish_proposal(proposal: dict[str, Any], *, settings: dict[str, Any], publ
     """Put the curated proposal into Tensology's Incoming, which shows it in Decisions and sends the
     Accept/Decline card to Telegram. Returns {"ok": False, "error": ...} instead of raising."""
     try:
+        record = proposal.get("_record")
+        proposal = {k: v for k, v in proposal.items() if k != "_record"}  # local only: never sent to Tensology
         if publish is not None:
             out = publish(proposal)
         else:
             from distr.core.tensology_client import create_curated_work_request
 
             out = create_curated_work_request(proposal, idempotency_key=f"client-issue-{proposal['source']['message_ids'][0]}"[:120])
+        if record and (out or {}).get("id") and (out or {}).get("created", True):
+            # Remember the plan so that accepting THIS proposal applies THIS plan (client_issue_pipeline.apply_approved).
+            from distr.core.initiative import client_issue_pipeline as pipe
+
+            pipe.save_plan_record(int(out["id"]), record)
         return {"ok": True, "id": (out or {}).get("id"), "created": (out or {}).get("created")}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}

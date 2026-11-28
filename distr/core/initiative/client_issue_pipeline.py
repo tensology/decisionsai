@@ -53,6 +53,26 @@ class PipelineError(RuntimeError):
     pass
 
 
+class ApprovalError(PipelineError):
+    """The proposal was not accepted, or is not the one the plan was made for."""
+
+
+_APPROVAL_KEY = object()
+
+
+@dataclass(frozen=True)
+class Approval:
+    """Proof that Paul accepted this exact proposal. Only ``check_approval`` makes one."""
+    proposal_id: int
+    plan_hash: str
+    status: str
+    _key: Any = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._key is not _APPROVAL_KEY:
+            raise ApprovalError("An Approval can only come from check_approval().")
+
+
 def _money(text: str) -> Decimal | None:
     try:
         return Decimal(re.sub(r"[ ,]", "", text)).quantize(Decimal("0.01"))
@@ -92,11 +112,11 @@ class Runner:
             raise PipelineError(f"ssh step failed ({proc.returncode}): {(proc.stderr or proc.stdout)[-300:]}")
         return proc.stdout
 
-    def script(self, name: str, params: dict[str, Any], *, write: bool = False) -> dict[str, Any]:
+    def script(self, name: str, params: dict[str, Any], *, write: bool = False, _mode: str = "") -> dict[str, Any]:
         if write and not _SCRATCH_RE.match(self.db_name or ""):
             raise PipelineError("Refusing to run a write script outside a scratch_ database copy.")
         body = (SCRIPT_DIR / f"{name}.py").read_text() + "\n" + (SCRIPT_DIR / "wrapper.py").read_text()
-        blob = base64.b64encode(json.dumps({**params, "_mode": "write" if write else "read"}).encode()).decode()
+        blob = base64.b64encode(json.dumps({**params, "_mode": _mode or ("write" if write else "read")}).encode()).decode()
         env = f"TS_PARAMS={blob} "
         prep = ""
         if self.db_name:
@@ -116,6 +136,17 @@ class Runner:
             if line.startswith(RESULT_MARK):
                 return json.loads(line[len(RESULT_MARK):])
         raise PipelineError(f"{name} returned no result: {out[-300:]}")
+
+    def approved_script(self, name: str, params: dict[str, Any], approval: "Approval") -> dict[str, Any]:
+        """The only way to run a write on a real database: needs an Approval that was checked against
+        the accepted proposal, and only the two fixed live scripts."""
+        if not isinstance(approval, Approval):
+            raise ApprovalError("A live write needs a verified approval for the accepted proposal.")
+        if name not in ("apply_live", "revert_live"):
+            raise ApprovalError(f"{name} is not an approved live script.")
+        params = {**params, "proposal_id": approval.proposal_id, "plan_hash": approval.plan_hash,
+                  "confirm": f"{'APPLY' if name == 'apply_live' else 'REVERT'} {approval.proposal_id} {approval.plan_hash}"}
+        return self.script(name, params, _mode="approved")
 
     # -- scratch database lifecycle -------------------------------------------------
     def create_scratch(self, name: str) -> "Runner":
@@ -325,7 +356,9 @@ def describe_plan(plan: dict[str, Any], investigation: dict[str, Any], *, scratc
         tasks.append(f"{lu['invoice']}: change line '{lu['name']}' from {_r(lu['from'])} to {_r(lu['to'])} (line total {_r(lu['amount_from'])} to {_r(lu['amount_to'])}).")
     tasks += ["Let the app recalculate each invoice, then re-read it and check no line is at the wrong rate and the totals add up.",
               "Render the corrected invoice PDF. Draft the reply from what actually changed. Send nothing."]
-    waiting = ["Production write: the invoice and project changes above are made on the live records only after you accept this.",
+    waiting = ["Production write: the invoice and project changes above are made on the live records only after you accept this, "
+               "by Decisions in one guarded transaction (current values checked first, backed up, verified, rolled back on any failure). "
+               "The development thread started by Accept must not change these records by hand.",
                "Send: the reply and the corrected invoice go out only when you tap send on the drafted reply."]
     waiting += plan["waiting_on_paul"]
     desc = ("What is wrong:\n" + "\n".join(f"- {b}" for b in bad) +
@@ -338,11 +371,15 @@ def describe_plan(plan: dict[str, Any], investigation: dict[str, Any], *, scratc
 
 def proposal_payload(flow: dict[str, Any], plan: dict[str, Any], investigation: dict[str, Any]) -> dict[str, Any]:
     text = describe_plan(plan, investigation)
-    return {"curated": True,
+    fingerprint = plan_hash(plan)
+    record = {"flow": {k: flow.get(k) for k in ("thread_id", "message_id", "sender", "client")}, "plan": _plain(plan),
+              "tasks": list(text["tasks"]), "stated": investigation.get("stated") or {},
+              "invoices": list(investigation.get("invoices") or plan.get("invoices") or [])}
+    return {"curated": True, "_record": record,
             "source": {"channel": "mailshot", "source_thread_id": str(flow.get("thread_id") or ""),
                        "message_ids": [str(flow.get("message_id") or "")]},
             "title": text["title"], "description": text["description"], "tasks": text["tasks"],
-            "rationale": text.get("rationale", ""), "priority": "high",
+            "rationale": (text.get("rationale", "") + f" Plan fingerprint {fingerprint}.").strip(), "priority": "high",
             "kind": "client_issue", "root_cause": text.get("root_cause", []),
             "waiting_on_paul": text.get("waiting_on_paul", []), "reply_to": str(flow.get("sender") or "")}
 
@@ -484,3 +521,275 @@ def dry_run(flow: dict[str, Any], complaint_text: str, runner: Runner, *, as_of:
                 report["steps"].append(f"COULD NOT DROP {name}: {exc}")
     report["runner_log"] = runner.log
     return report
+
+
+# ---------------------------------------------------------------------------
+# 4. The approved live write (only after Paul accepts that specific proposal)
+# ---------------------------------------------------------------------------
+#
+# Gate:   check_approval() reads the proposal back from Tensology: it must be accepted, carry this
+#         plan's fingerprint, and list exactly the tasks Paul saw. One accept applies one proposal:
+#         the record is claimed once (state published -> applying -> applied/aborted/reverted).
+# Safety: a fresh read of the live records must still match what the plan expected; the client-rate
+#         rule is checked (R850 only where it is the client's agreed rate); the whole database is
+#         dumped; the write runs in ONE transaction that checks again, backs the rows up, applies,
+#         re-reads, renders the documents and logs the rates (billing.rates and the client history).
+#         Any failure rolls back. A check that fails after the commit restores the saved rows.
+# Output: the reply is drafted from the verified live result and stays a draft on the card.
+
+
+
+def _store_dir() -> Path:
+    import os
+
+    return Path(os.environ.get("DECISIONS_DB_DIR") or Path.home() / ".decisions") / "client_issue"
+
+
+PROD_DB = "tensology"
+BACKUP_DIR = "/var/backups/tensology"
+ACCEPTED_STATUSES = {"sent_to_decisions", "approved"}
+
+
+def _plain(value: Any) -> Any:
+    return json.loads(json.dumps(value, default=str))
+
+
+def plan_hash(plan: dict[str, Any]) -> str:
+    import hashlib
+
+    return hashlib.sha256(json.dumps(_plain(plan), sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _record_path(proposal_id: int) -> Path:
+    return _store_dir() / f"proposal-{int(proposal_id)}.json"
+
+
+def save_plan_record(proposal_id: int, record: dict[str, Any]) -> dict[str, Any]:
+    """Remember what was proposed, so that accepting proposal N can only ever apply plan N."""
+    _store_dir().mkdir(parents=True, exist_ok=True)
+    path = _record_path(proposal_id)
+    if path.exists():
+        return json.loads(path.read_text())
+    rec = {**record, "proposal_id": int(proposal_id), "plan_hash": plan_hash(record["plan"]), "state": "published",
+           "created_at": datetime.now(timezone.utc).isoformat()}
+    path.write_text(json.dumps(rec, indent=1, default=str))
+    path.chmod(0o600)
+    return rec
+
+
+def load_plan_record(proposal_id: int) -> dict[str, Any] | None:
+    try:
+        return json.loads(_record_path(proposal_id).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _set_state(rec: dict[str, Any], state: str, **extra: Any) -> None:
+    rec.update({"state": state, "updated_at": datetime.now(timezone.utc).isoformat(), **extra})
+    _record_path(rec["proposal_id"]).write_text(json.dumps(rec, indent=1, default=str))
+
+
+def _claim(proposal_id: int) -> bool:
+    import os
+
+    try:
+        os.close(os.open(str(_record_path(proposal_id).with_suffix(".lock")), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        return True
+    except FileExistsError:
+        return False
+
+
+def fetch_proposal(proposal_id: int) -> dict[str, Any]:
+    from distr.core.tensology_client import configured_tensology_client
+
+    return configured_tensology_client(source="client-issue").get(f"work-requests/{int(proposal_id)}") or {}
+
+
+def check_approval(proposal_id: int, record: dict[str, Any], fetch: Callable[[int], dict[str, Any]] | None = None) -> Approval:
+    """Raise unless Tensology says this proposal was accepted and is the one this plan belongs to."""
+    p = (fetch or fetch_proposal)(int(proposal_id))
+    status = str(p.get("stored_status") or p.get("status") or "").strip().lower()
+    if status not in ACCEPTED_STATUSES:
+        raise ApprovalError(f"proposal #{proposal_id} is '{status or 'unknown'}', not accepted")
+    if plan_hash(record["plan"]) != record["plan_hash"] or record["plan_hash"] not in str(p.get("rationale") or ""):
+        raise ApprovalError(f"proposal #{proposal_id} does not carry this plan's fingerprint")
+    if [str(t) for t in p.get("tasks") or []] != [str(t) for t in record["tasks"]]:
+        raise ApprovalError(f"proposal #{proposal_id} was edited after it was filed; the plan is not what was approved")
+    return Approval(int(proposal_id), record["plan_hash"], status, _APPROVAL_KEY)
+
+
+def guard_rates(plan: dict[str, Any], probe: dict[str, Any]) -> list[str]:
+    """The client-rate rule. R850 is Tensology's own rate: never a target unless it is the client's
+    explicit agreed rate (their account rate). Targets must be positive."""
+    problems: list[str] = []
+    cust = {inv["number"]: _dec(inv.get("customer_rate")) for inv in probe.get("invoices") or [] if inv.get("found")}
+    for u in plan["line_updates"]:
+        to = _dec(u["to"])
+        if to is None or to <= 0:
+            problems.append(f"{u['invoice']} '{u['name']}': no valid target rate")
+        elif to == INTERNAL_DEFAULT_RATE and cust.get(u["invoice"]) != INTERNAL_DEFAULT_RATE:
+            problems.append(f"{u['invoice']} '{u['name']}': {_r(to)} is Tensology's own rate, not this client's agreed rate")
+    allowed = any(c == INTERNAL_DEFAULT_RATE for c in cust.values())
+    for u in plan["project_updates"]:
+        to = _dec(u["to"])
+        if to is None or to <= 0:
+            problems.append(f"project '{u['project']}': no valid target rate")
+        elif to == INTERNAL_DEFAULT_RATE and not allowed:
+            problems.append(f"project '{u['project']}': {_r(to)} is Tensology's own rate, not the client's agreed rate")
+    return problems
+
+
+def check_current_values(plan: dict[str, Any], probe: dict[str, Any]) -> list[str]:
+    """The live records must still be exactly what the proposal described."""
+    problems: list[str] = []
+    lines = {l["id"]: l for inv in probe.get("invoices") or [] for l in inv.get("lines") or []}
+    projects = {p["id"]: p for inv in probe.get("invoices") or [] for p in inv.get("projects") or []}
+    for u in plan["line_updates"]:
+        l = lines.get(u["line_id"])
+        if l is None:
+            problems.append(f"line {u['line_id']} ({u['invoice']}) was not found")
+        elif _dec(l.get("unit")) != _dec(u["from"]) or _dec(l.get("amount")) != _dec(u["amount_from"]):
+            problems.append(f"{u['invoice']} '{u['name']}' is now {_r(l.get('unit'))} / {_r(l.get('amount'))}, "
+                            f"the proposal expected {_r(u['from'])} / {_r(u['amount_from'])}")
+    for u in plan["project_updates"]:
+        p = projects.get(u["project_id"])
+        if p is None or _dec(p.get("rate")) != _dec(u["from"]):
+            problems.append(f"project '{u['project']}' is now {_r((p or {}).get('rate'))}, the proposal expected {_r(u['from'])}")
+    return problems
+
+
+def backup_database(runner: Runner, approval: Approval, *, backup_dir: str = BACKUP_DIR) -> dict[str, Any]:
+    """Full PostgreSQL dump (custom format, mode 600) before the write; checked by listing it."""
+    if not isinstance(approval, Approval):
+        raise ApprovalError("A backup for a live write needs the verified approval.")
+    db = runner.db_name or PROD_DB
+    if not re.match(r"^[a-z0-9_]{3,40}$", db):
+        raise PipelineError("unexpected database name")
+    path = f"{backup_dir}/client-issue-{approval.proposal_id}-{time.strftime('%Y%m%d-%H%M%S')}.dump"
+    out = runner._ssh(f"set -e; umask 077; mkdir -p {backup_dir}; sudo -u postgres pg_dump -Fc {db} > {path}; "
+                      f"test -s {path}; echo SIZE=$(stat -c %s {path}); echo ITEMS=$(pg_restore -l {path} | wc -l)")
+    size = int(re.search(r"SIZE=(\d+)", out).group(1)) if "SIZE=" in out else 0
+    items = int(re.search(r"ITEMS=(\d+)", out).group(1)) if "ITEMS=" in out else 0
+    if size < 1000 or items < 10:
+        raise PipelineError("the database backup looks empty; not writing anything")
+    runner.log.append({"script": "backup_database", "db": db, "path": path, "bytes": size, "items": items})
+    return {"path": path, "bytes": size, "items": items, "db": db}
+
+
+def apply_approved(proposal_id: int, *, runner: Runner | None = None, fetch: Callable | None = None,
+                   say: Callable[[str, str], Any] | None = None, notify: Callable[[str], Any] | None = None,
+                   settings: dict[str, Any] | None = None, out_dir: str | None = None,
+                   backup_dir: str = BACKUP_DIR) -> dict[str, Any]:
+    """Apply the plan of ONE accepted proposal to the live records. Never raises; returns
+    {status, ...}. Statuses: not_a_client_issue, already_<state>, not_approved, drifted, blocked,
+    aborted, reverted, applied. Sends nothing to a client."""
+    record = load_plan_record(proposal_id)
+    if record is None:
+        return {"status": "not_a_client_issue"}
+    flow = record.get("flow") or {}
+    job = f"mail:{str(flow.get('message_id') or proposal_id)[:40]}"
+    if say is None:
+        from distr.core.initiative import job_progress
+
+        say = lambda kind, text: job_progress.report(job, kind, text, title="Mail to proposal")  # noqa: E731
+
+    def tell(text: str) -> None:
+        try:
+            if notify is not None:
+                notify(text)
+            else:
+                from distr.core.initiative import outcome_flow as of
+
+                of.send_telegram(text, settings=settings)
+        except Exception:  # noqa: BLE001
+            logger.warning("client issue: could not tell Paul", exc_info=True)
+
+    if record.get("state") != "published" or not _claim(proposal_id):
+        return {"status": "already_" + str(record.get("state") or "claimed")}
+    plan = record["plan"]
+    runner = runner or Runner(target=str((settings or {}).get(SSH_TARGET_KEY) or DEFAULT_SSH_TARGET))
+    out_dir = out_dir or str(_store_dir() / "out" / f"proposal-{int(proposal_id)}")
+    report: dict[str, Any] = {"proposal_id": int(proposal_id), "steps": []}
+
+    def stop(status: str, kind: str, why: str, **extra: Any) -> dict[str, Any]:
+        _set_state(record, status, why=why, **extra)
+        say(kind, why)
+        tell(f"Proposal #{proposal_id}: I did not change anything on the live records. {why}" if status != "reverted"
+             else f"Proposal #{proposal_id}: {why}")
+        return {**report, "status": status, "why": why, **extra}
+
+    try:
+        _set_state(record, "applying")
+        say("picked_up", f"your accepted proposal #{proposal_id}: applying its fix to the live records")
+        say("step", "checking the proposal you accepted is the one I planned")
+        approval = check_approval(proposal_id, record, fetch)
+        say("step", "reading the live records again (read only)")
+        probe = runner.script("probe", {"invoices": record["invoices"]})
+        problems = guard_rates(plan, probe)
+        if problems:
+            return stop("blocked", "blocked", "Client-rate rule: " + "; ".join(problems))
+        problems = check_current_values(plan, probe)
+        if problems:
+            return stop("drifted", "blocked", "The records changed since the proposal: " + "; ".join(problems)
+                        + ". Nothing was written; ask me to look again.")
+        say("step", "backing up the database before the write")
+        backup = backup_database(runner, approval, backup_dir=backup_dir)
+        report["database_backup"] = backup
+        say("step", "writing in one transaction: check, back up rows, change, verify, render")
+        pdf_dir = f"/tmp/client-issue-{int(proposal_id)}"
+        changes = runner.approved_script("apply_live", {"plan": plan, "reason": "Corrected to the client's agreed rate",
+                                                         "pdf_dir": pdf_dir, "backup_dir": backup_dir}, approval)
+        if not changes.get("ok"):
+            return stop("aborted", "failed", f"The write was refused or rolled back at '{changes.get('stage')}': "
+                        + "; ".join(changes.get("problems") or ["unknown"]), changes=changes, database_backup=backup)
+        report["changes"] = changes
+        say("step", "re-reading the committed records to verify")
+        after = runner.script("probe", {"invoices": record["invoices"]})
+        stated = {**(record.get("stated") or {}), "stated_wrong": _dec((record.get("stated") or {}).get("stated_wrong")),
+                  "stated_correct": _dec((record.get("stated") or {}).get("stated_correct"))}
+        verification = verify(probe, after, stated, plan, changes)
+        if not verification["passed"]:
+            reverted = runner.approved_script("revert_live", {"backup": changes.get("backup")}, approval)
+            failed = "; ".join(c["check"] for c in verification["checks"] if not c["ok"])
+            return stop("reverted" if reverted.get("ok") else "failed", "failed",
+                        f"The check after the write failed ({failed}); " + ("I restored the saved rows." if reverted.get("ok")
+                        else f"restoring failed ({'; '.join(reverted.get('problems') or [])}). Restore from {backup['path']}."),
+                        changes=changes, database_backup=backup, restore=reverted)
+        execution = {"changes": changes, "after": after, "verification": verification}
+        for i in changes["invoices"]:
+            path = (i.get("pdf") or {}).get("path")
+            if path and runner.fetch_file(path, Path(out_dir) / Path(path).name):
+                i["pdf"]["local"] = str(Path(out_dir) / Path(path).name)
+        reply = draft_reply(flow, plan, execution)
+        card = (f"Live fix applied for accepted proposal #{proposal_id}.\nBackups: database {backup['path']} ({backup['bytes']} bytes); "
+                f"rows {changes.get('backup')}. Logged in billing.rates and the client's history.\n\n"
+                + completion_card(flow, plan, execution, reply, dry_run=False))
+        _set_state(record, "applied", reply=reply, card=card, database_backup=backup, changes=changes, verification=verification)
+        say("done", f"fixed and verified: {len(changes['lines'])} line(s), {len(changes['invoices'])} invoice(s); draft reply is on your card, nothing sent")
+        tell(card)
+        return {**report, "status": "applied", "execution": execution, "reply": reply, "card": card}
+    except ApprovalError as exc:
+        return stop("not_approved", "blocked", f"Not applied: {exc}.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("client issue: live fix failed (%s)", type(exc).__name__, exc_info=True)
+        return stop("failed", "failed", f"The live fix stopped with {type(exc).__name__}: {str(exc)[:160]}. "
+                    "If a write had started it ran in a transaction and was rolled back.")
+
+
+def on_proposal_accepted(proposal_id: Any, *, background: bool = True) -> bool:
+    """Called when Paul accepts a proposal (Telegram or Incoming). Does nothing unless the proposal
+    is one this pipeline filed. Returns True when it started the live fix."""
+    try:
+        pid = int(str(proposal_id).lstrip("#"))
+    except (TypeError, ValueError):
+        return False
+    record = load_plan_record(pid)
+    if record is None or record.get("state") != "published":
+        return False
+    if not background:
+        apply_approved(pid)
+        return True
+    import threading
+
+    threading.Thread(target=apply_approved, args=(pid,), name=f"client-issue-fix-{pid}", daemon=True).start()
+    return True

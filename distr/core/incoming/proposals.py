@@ -2892,6 +2892,19 @@ def _fetch_handoff_work_request(proposal_id: int):
     return client, client.get(f"work-requests/{proposal_id}")
 
 
+def _client_issue_accepted(proposal_id: Any, start_work: bool) -> None:
+    """Accepting a proposal the client-issue pipeline filed also applies ITS plan (guarded live write,
+    see client_issue_pipeline.apply_approved). A no-op for every other proposal. Never raises."""
+    if not start_work or proposal_id is None:
+        return
+    try:
+        from distr.core.initiative.client_issue_pipeline import on_proposal_accepted
+
+        on_proposal_accepted(proposal_id)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).warning("client issue: accept hook failed for proposal %s", proposal_id, exc_info=True)
+
+
 def create_proposal_thread(proposal: dict[str, Any], *, start_work: bool = False, require_review: bool = False,
                            telegram_chat_id: int | None = None, _only_unclaimed: bool = False) -> int:
     key = _proposal_handoff_key(proposal)
@@ -2910,10 +2923,12 @@ def create_proposal_thread(proposal: dict[str, Any], *, start_work: bool = False
         if proposal_id is not None:
             client, authoritative = _fetch_handoff_work_request(proposal_id)
         with _HANDOFF_LOCK:
-            return _create_proposal_thread(
+            thread_id = _create_proposal_thread(
                 proposal, start_work=start_work, require_review=require_review, telegram_chat_id=telegram_chat_id,
                 client=client, authoritative=authoritative, release_for_transcription=release_for_transcription,
             )
+        _client_issue_accepted(proposal_id, start_work)
+        return thread_id
     finally:
         with _HANDOFF_LOCK:
             _HANDOFF_IN_FLIGHT.remove(key)

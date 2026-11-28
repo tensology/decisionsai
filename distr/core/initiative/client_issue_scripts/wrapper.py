@@ -5,7 +5,9 @@ from django.db import connection, transaction
 _P = json.loads(base64.b64decode(os.environ["TS_PARAMS"]).decode())
 _MODE = _P.get("_mode", "read")
 _DB = _s.DATABASES["default"]["NAME"]
-if _MODE != "read" and not str(_DB).startswith("scratch_"):
+# "write" (rewind, fix) is scratch only. "approved" is the guarded live write: only Runner.approved_script
+# sends it, and only after Paul accepted that exact proposal; the script itself runs in one transaction.
+if _MODE not in ("read", "approved") and not str(_DB).startswith("scratch_"):
     raise SystemExit("REFUSED: write scripts only run on a scratch_ database, not %r" % _DB)
 
 with transaction.atomic():
