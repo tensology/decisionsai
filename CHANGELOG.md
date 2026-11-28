@@ -51,6 +51,14 @@ Continuous conversation uses full-duplex audio with echo cancellation on support
 
 Chats can use their own agent, model, voice, and Oracle skin. Chat groups can route to the agent you configured, and the skin follows the chat you have open. Hayley has a fuller set of animations, and the headphone-wearing Llama joins the skin picker.
 
+### Live remote control and faster voice replies
+
+The redesigned Computer view now streams your desktop over WebRTC by default. The simpler toolbar leaves more room for the desktop feed. The on-screen keyboard starts hidden and can be toggled from the monitor row. On a multi-monitor setup, choose one display or use **All screens** to stitch them into a single view. Switch to App view to hide the desktop feed and use the Decisions web interface.
+
+On a phone, move one finger to steer the pointer, tap to click, and double-tap to double-click. Tap with two fingers to right-click, move two fingers together to scroll, and pinch to zoom. To drag an item, press and hold or double-tap and keep your finger down, then move it.
+
+When you hold to talk or dictate, the slide-to-cancel strip stays aligned with the button. Text-to-speech replies now stream as audio is generated, so playback can start with the first chunk. You can stop a reply or interrupt it by speaking.
+
 ## [2.9.5] - 2026-11-07
 
 ### A simpler way to install on Apple Silicon
