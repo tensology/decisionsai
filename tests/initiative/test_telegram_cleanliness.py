@@ -52,13 +52,14 @@ def test_initiative_approval_telegram_is_conversational_and_has_no_payload(tmp_p
         tier=PermissionTier.APPROVE,
     )
 
-    sent = svc.telegram_manager.send_to_telegram.call_args.kwargs["text"]
-    assert "board update" in sent
-    assert "Goal:" in sent
-    assert "Payload:" not in sent
-    assert "Draft:" not in sent
-    assert "[Initiative]" not in sent
-    assert "[APPROVE]" not in sent
+    calls = svc.telegram_manager.send_to_telegram.call_args_list
+    assert len(calls) == 2
+    for ticket_id, call in zip((7, 12), calls):
+        sent = call.kwargs["text"]
+        assert f"I want to move ticket {ticket_id}" in sent
+        assert "Approve or Decline" in sent
+        for marker in ("Payload:", "Draft:", "[Initiative]", "[APPROVE]"):
+            assert marker not in sent
 
 
 def test_approval_notifications_use_event_queue_and_include_context(tmp_path, monkeypatch):
@@ -98,14 +99,15 @@ def test_approval_notifications_use_event_queue_and_include_context(tmp_path, mo
         tier=PermissionTier.APPROVE,
     )
 
-    assert queue.items, "draft approval should be queued for send_to_telegram"
+    assert len(queue.items) == 2
     event_name, data = queue.items[0][0]
     assert event_name == "send_to_telegram"
     assert data["engagement_source"] == "initiative"
     assert data["board_id"] == 1
     assert data["ticket_id"] == 7
     assert "engagement_goal_hint" in data
-    assert "2 backlog item" in data["engagement_goal_hint"]
+    assert "Move ticket 7" in data["engagement_goal_hint"]
+    assert queue.items[1][0][1]["ticket_id"] == 12
     assert data["requires_response"] is True
     assert "input_type" in data
     svc.telegram_manager.send_to_telegram.assert_not_called()
@@ -134,8 +136,10 @@ def test_duplicate_pending_initiative_draft_does_not_notify_again(tmp_path, monk
     svc._draft_and_ask(action, settings, tier=PermissionTier.APPROVE)
     svc._draft_and_ask(action, settings, tier=PermissionTier.APPROVE)
 
-    assert len(svc._draft_queue.get_all()) == 1
-    assert svc.telegram_manager.send_to_telegram.call_count == 1
+    entries = svc._draft_queue.get_all()
+    assert len(entries) == 2
+    assert {tuple(entry.execute_payload["action"]["payload"]["ticket_ids"]) for entry in entries} == {(7,), (12,)}
+    assert svc.telegram_manager.send_to_telegram.call_count == 2
 
 
 def test_telegram_sender_audit_removes_raw_initiative_blocks():
@@ -344,12 +348,25 @@ def test_orchestrator_triage_reply_approves_all_with_clean_plural_wording(monkey
     handler = TelegramMessagesMixin()
     handler.send_to_telegram = MagicMock()
 
+    # "approve all" never dispatches: it lists each item with the single-ticket phrase for it.
     handled = handler._handle_initiative_draft_command("approve all")
-
     assert handled is True
-    sent = handler.send_to_telegram.call_args.args[0]
-    assert sent == "Approved 2 pending items."
-    assert "item(s)" not in sent
+    listing = handler.send_to_telegram.call_args.args[0]
+    assert "Nothing has been approved" in listing
+    assert "Create a ticket?" in listing and "approve hermes-o" in listing
+    assert len(queue.get_all()) == 2  # nothing approved yet
+
+    # Even a plain "confirm approve all" is not an approval: it re-lists and dispatches nothing.
+    handled = handler._handle_initiative_draft_command("confirm approve all")
+    assert handled is True
+    relisting = handler.send_to_telegram.call_args.args[0]
+    assert "Nothing has been approved" in relisting
+    assert len(queue.get_all()) == 2
+
+    # Only naming one goes through the single-ticket path.
+    handled = handler._handle_initiative_draft_command("approve hermes-o")
+    assert handled is True
+    assert len(queue.get_all()) == 1
 
 
 def test_orchestrator_triage_reply_can_show_numbered_decisions(monkeypatch, tmp_path):

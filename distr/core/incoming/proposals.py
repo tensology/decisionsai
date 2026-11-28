@@ -156,6 +156,42 @@ def merge_retry_reference(value: Any) -> dict | None:
     return {'replacement_id': replacement, 'original_ids': sorted(originals)}
 
 
+def _decisions_approval_ticket(tensology_id: Any) -> int | None:
+    """The Pi write proposal ticket this Incoming row mirrors, if it is approval-managed in Decisions."""
+    try:
+        wanted = int(tensology_id)
+    except (TypeError, ValueError):
+        return None
+    try:
+        from distr.core.initiative import pi_write_proposals as pw
+
+        for key, rec in (pw._load() or {}).items():
+            if isinstance(rec, dict) and rec.get("tensology_id") == wanted:
+                try:
+                    return int(key)
+                except (TypeError, ValueError):
+                    return None
+    except Exception:
+        return None
+    return None
+
+
+def require_startable(proposal: dict[str, Any], *, verb: str) -> None:
+    """Refuse to start or merge an expired proposal, or an approval-managed Decisions code-change request.
+
+    The one approval key (``pi-write-dispatch-<ticket>``) is the only dispatcher for those; Incoming buttons
+    must not become a second one."""
+    from distr.core.incoming.expiry import proposal_expiry
+
+    if proposal_expiry(proposal).get("is_expired"):
+        raise ValueError(f"This proposal has expired; Incoming will not {verb} it. Refresh Incoming.")
+    ticket = proposal.get("approval_ticket_id") or _decisions_approval_ticket(_tensology_id(proposal.get("id")))
+    if ticket is not None:
+        raise ValueError(
+            f"This proposal is a Decisions code-change request (ticket {ticket}). Approve it in Decisions; "
+            f"Incoming will not {verb} it.")
+
+
 def _from_tensology(row: dict[str, Any], project_map: dict[str, int] | None = None) -> dict[str, Any] | None:
     """Map a Tensology work-request onto the Incoming proposal shape.
 
@@ -173,6 +209,7 @@ def _from_tensology(row: dict[str, Any], project_map: dict[str, int] | None = No
     tensology_project_name = str(project.get("name") or "").strip()
     local_project_id = project.get("decisions_project_id") or (project_map or {}).get(tensology_project_name.lower())
     source_started = proposal_source_started_at(row)
+    approval_ticket = _decisions_approval_ticket(row.get("id"))
     context_ids = {str(value) for value in row.get('source_context_message_ids') or []}
     message_ids = [str(value) for value in row.get('source_message_ids') or [] if value]
     if not message_ids:
@@ -256,6 +293,8 @@ def _from_tensology(row: dict[str, Any], project_map: dict[str, int] | None = No
            if isinstance(row.get('source_scope'), list) else {}),
         "decisions_project_id": row.get("decisions_project_id"),
         "can_push_to_thread": bool(local_project_id),
+        "approval_managed": approval_ticket is not None,
+        "approval_ticket_id": approval_ticket,
     }
 
 
@@ -1569,6 +1608,8 @@ def merge_proposals(first: dict[str, Any], second: dict[str, Any], complete=None
 
     require_authoritative_proposal(first)
     require_authoritative_proposal(second)
+    require_startable(first, verb="merge")
+    require_startable(second, verb="merge")
     with _HANDOFF_LOCK:
         return _merge_proposals(first, second, complete=complete)
 
@@ -2907,6 +2948,7 @@ def _client_issue_accepted(proposal_id: Any, start_work: bool) -> None:
 
 def create_proposal_thread(proposal: dict[str, Any], *, start_work: bool = False, require_review: bool = False,
                            telegram_chat_id: int | None = None, _only_unclaimed: bool = False) -> int:
+    require_startable(proposal, verb="start")
     key = _proposal_handoff_key(proposal)
     # Only release the acquisition below if this caller entered without the lock.
     release_for_transcription = not _HANDOFF_LOCK._is_owned()

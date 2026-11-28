@@ -709,7 +709,26 @@ def development_pending_interactions(*, run_id: int | None, development_chat_id:
     return pending
 
 
-def resolve_interaction(
+def resolve_interaction(*, token: str, action: str, **kwargs: Any) -> dict[str, Any]:
+    """Claim and apply a checkpoint decision. Answered off Telegram (remote app, desktop, web), its Telegram
+    card is edited to say so and loses its buttons, so the same checkpoint cannot be answered twice."""
+    result = _resolve_interaction(token=token, action=action, **kwargs)
+    source = str(kwargs.get("source", "telegram"))
+    if isinstance(result, dict) and result.get("success") and not source.lower().startswith("telegram"):
+        try:
+            from distr.core.initiative.approval_notice import on_interaction_resolved
+
+            with engine.begin() as conn:
+                row = conn.execute(text("SELECT * FROM workflow_interactions WHERE token=:token"),
+                                   {"token": token}).mappings().first()
+            if row:
+                on_interaction_resolved(dict(row), action, source)
+        except Exception:
+            logger.debug("could not close the Telegram card for checkpoint %s", token[:6], exc_info=True)
+    return result
+
+
+def _resolve_interaction(
     *, token: str, action: str, response_text: str = "", source: str = "telegram",
     resolver_id: str = "", chat_id: int | str | None = None,
     background: bool = False,

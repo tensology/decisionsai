@@ -323,6 +323,7 @@
 @media (prefers-reduced-motion: reduce) { .proposal-loading-spinner { animation: none; } }
 .proposal-card { border: 1px solid var(--studio-line); border-radius: 12px; background: var(--studio-raised); padding: 16px; }
 .proposal-expired { position: relative; overflow: hidden; }
+.proposal-expired .proposal-head { padding-inline-end: 72px; }
 .proposal-expired-ribbon { position: absolute; z-index: 1; top: 19px; right: -34px; width: 132px; transform: rotate(45deg); text-align: center; background: var(--studio-muted); color: var(--studio-bg); padding: 4px 0; font-size: 12px; font-weight: 600; pointer-events: none; }
 .proposal-expiry-context { color: var(--studio-muted); font-size: 12px; }
 .proposal-head { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 2px 12px; align-items: center; }

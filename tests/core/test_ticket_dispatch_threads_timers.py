@@ -40,6 +40,7 @@ def store(monkeypatch):
             db.close()
 
     monkeypatch.setattr(KanbanTicketTool, "_get_session", lambda self: session())
+    monkeypatch.setattr("distr.core.db.get_session", session)
     monkeypatch.setattr("distr.core.incoming.media.sync_thread_files_safely", lambda *a, **k: None)
     yield session
     engine.dispose()
@@ -296,8 +297,7 @@ def test_pi_write_proposal_files_a_backlog_ticket_and_waits_for_approval(store, 
     ids = _seed(store)
     cards = []
     out = pw.file_write_proposal(ids.project, "Synthetic Shop", "Update the banking line on the synthetic site",
-                                 notify=lambda text, markup: cards.append((text, markup)) or True,
-                                 _session_provider=store)
+                                 notify=lambda text, markup: cards.append((text, markup)) or True)
     assert out["status"] == "proposed" and out["card_sent"] is True
     tid = out["ticket_id"]
     with store() as db:
@@ -310,9 +310,11 @@ def test_pi_write_proposal_files_a_backlog_ticket_and_waits_for_approval(store, 
     assert pw.get(tid)["status"] == "pending"
 
     started = []
-    reply = pw.decide(tid, "approve", start=lambda t: started.append(t) or "Ticket is running.\n\nREFERENCE:\nx")
+    monkeypatch.setattr("distr.core.agent.tools.integrations.kanban_ticket.KanbanTicketTool._action_send_to_cli",
+                        lambda self, t, approved=False: started.append(t) or "Ticket is running.\n\nREFERENCE:\nx")
+    reply = pw.decide(tid, "approve")
     assert started == [tid] and reply["text"].startswith("Approved. Ticket is running.")
-    again = pw.decide(tid, "approve", start=lambda t: started.append(t))
+    again = pw.decide(tid, "approve")
     assert "already approved" in again["text"] and started == [tid]
 
 
@@ -322,9 +324,11 @@ def test_declined_pi_write_proposal_starts_nothing(store, monkeypatch, tmp_path)
     monkeypatch.setenv("DECISIONS_DB_DIR", str(tmp_path))
     ids = _seed(store)
     out = pw.file_write_proposal(ids.project, "Synthetic Shop", "Remove the old banner",
-                                 notify=lambda *a: True, _session_provider=store)
+                                 notify=lambda *a: True)
     started = []
-    assert "Declined" in pw.decide(out["ticket_id"], "decline", start=lambda t: started.append(t))["text"]
+    monkeypatch.setattr("distr.core.agent.tools.integrations.kanban_ticket.KanbanTicketTool._action_send_to_cli",
+                        lambda self, t, approved=False: started.append(t))
+    assert "Declined" in pw.decide(out["ticket_id"], "decline")["text"]
     assert started == [] and pw.get(out["ticket_id"])["status"] == "declined"
 
 
@@ -413,7 +417,7 @@ def test_chat_send_to_cli_of_a_code_change_waits_for_the_card(store, monkeypatch
     monkeypatch.setattr(pw, "_mirror_to_incoming", lambda *a: None)  # mirror covered below
 
     out = KanbanTicketTool()._run(action="send_to_cli", ticket_id=ids.wanted)
-    assert AWAITING_APPROVAL_MARK in out and "waits for your approval" in out
+    assert AWAITING_APPROVAL_MARK in out and "The card is waiting in Telegram" in out and f"ticket {ids.wanted}," in out
     again = KanbanTicketTool()._run(action="send_to_cli", ticket_id=ids.wanted)
     assert "already waiting" in again
     assert len(cards) == 1
@@ -452,7 +456,7 @@ def test_proposal_is_mirrored_to_tensology_incoming_and_decline_dismisses_it(sto
     monkeypatch.setenv("DECISIONS_DB_DIR", str(tmp_path))
     ids = _seed(store)
     out = pw.file_write_proposal(ids.project, "Synthetic Shop", "Replace the card form with hosted checkout",
-                                 _sync=True, _session_provider=store)
+                                 _sync=True)
     payload, key = no_tensology.posted[0]
     assert key == f"pi-write-{out['ticket_id']}"
     assert payload["origin"] == "decisions" and payload["origin_ref"] == f"decisions-ticket-{out['ticket_id']}"
@@ -473,7 +477,7 @@ def test_tensology_outage_does_not_stop_the_telegram_card(store, monkeypatch, tm
         raise RuntimeError("synthetic outage")
 
     out = pw.file_write_proposal(ids.project, "Synthetic Shop", "Rename the banner", post_incoming=down,
-                                 _sync=True, _session_provider=store)
+                                 _sync=True)
     assert out["status"] == "proposed" and out["card_sent"] is True
     assert "tensology_id" not in pw.get(out["ticket_id"])
 
@@ -487,10 +491,12 @@ def test_telegram_approve_marks_the_tensology_item_accepted_and_edits_the_card(
     monkeypatch.setenv("DECISIONS_DB_DIR", str(tmp_path))
     ids = _seed(store)
     out = pw.file_write_proposal(ids.project, "Synthetic Shop", "Swap the payment provider",
-                                 _sync=True, _session_provider=store)
+                                 _sync=True)
     tid = out["ticket_id"]
     started = []
-    reply = pw.decide(tid, "approve", start=lambda t: started.append(t) or "Ticket is running.")
+    monkeypatch.setattr("distr.core.agent.tools.integrations.kanban_ticket.KanbanTicketTool._action_send_to_cli",
+                        lambda self, t, approved=False: started.append(t) or "Ticket is running.")
+    reply = pw.decide(tid, "approve")
     assert started == [tid]
     assert no_tensology.accepted == [(9001, tid)]
     assert no_tensology.dismissed == []
@@ -500,8 +506,7 @@ def test_telegram_approve_marks_the_tensology_item_accepted_and_edits_the_card(
     assert "This card is closed." in reply["text"]
     assert no_tensology.edits and "This card is closed." in no_tensology.edits[0][0]
     # A later Tensology "sent" event must not start it again.
-    pw.handle_remote_decision({"request_id": 9001, "status": "sent_to_decisions", "event": "proposal_decided"},
-                              start=lambda t: started.append(t))
+    pw.handle_remote_decision({"request_id": 9001, "status": "sent_to_decisions", "event": "proposal_decided"})
     assert started == [tid]
 
 
@@ -511,22 +516,23 @@ def test_tensology_send_edits_the_card_and_dispatches_only_once(store, monkeypat
     monkeypatch.setenv("DECISIONS_DB_DIR", str(tmp_path))
     ids = _seed(store)
     out = pw.file_write_proposal(ids.project, "Synthetic Shop", "Replace the card form",
-                                 _sync=True, _session_provider=store)
+                                 _sync=True)
     tid = out["ticket_id"]
     started = []
+    monkeypatch.setattr("distr.core.agent.tools.integrations.kanban_ticket.KanbanTicketTool._action_send_to_cli",
+                        lambda self, t, approved=False: started.append(t) or "Ticket is running.")
     reply = pw.handle_remote_decision(
         {"request_id": 9001, "status": "sent_to_decisions", "event": "proposal_decided",
          "thread_id": f"decisions:decisions-ticket-{tid}"},
-        start=lambda t: started.append(t) or "Ticket is running.",
     )
     assert started == [tid]
     assert "Approved." in reply["text"] and reply.get("suppress") is True
     assert pw.get(tid)["status"] == "approved" and pw.get(tid)["dispatched"] is True
-    again = pw.decide(tid, "approve", start=lambda t: started.append(t))
+    again = pw.decide(tid, "approve")
     assert started == [tid] and "already approved" in again["text"]
     # An unknown Tensology proposal is ignored.
     assert pw.handle_remote_decision({"request_id": 42, "status": "sent_to_decisions",
-                                      "event": "proposal_decided"}, start=lambda t: started.append(t)) is None
+                                      "event": "proposal_decided"}) is None
     assert started == [tid]
 
 
@@ -548,9 +554,10 @@ def test_remote_dismiss_closes_the_card_without_starting(store, monkeypatch, tmp
     monkeypatch.setenv("DECISIONS_DB_DIR", str(tmp_path))
     ids = _seed(store)
     out = pw.file_write_proposal(ids.project, "Synthetic Shop", "Remove the old banner",
-                                 _sync=True, _session_provider=store)
+                                 _sync=True)
     started = []
-    reply = pw.handle_remote_decision({"request_id": 9001, "status": "dismissed", "event": "proposal_decided"},
-                                      start=lambda t: started.append(t))
+    monkeypatch.setattr("distr.core.agent.tools.integrations.kanban_ticket.KanbanTicketTool._action_send_to_cli",
+                        lambda self, t, approved=False: started.append(t))
+    reply = pw.handle_remote_decision({"request_id": 9001, "status": "dismissed", "event": "proposal_decided"})
     assert started == [] and pw.get(out["ticket_id"])["status"] == "declined"
     assert reply.get("suppress") is True and "Declined." in reply["text"]

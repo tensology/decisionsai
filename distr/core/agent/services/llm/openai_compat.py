@@ -37,6 +37,22 @@ from .base_service import BaseLLMService
 logger = logging.getLogger(__name__)
 
 
+def _pending_ack_work(tool_calls: list | None) -> str:
+    """A short name for the work that is queued (not yet started), for the pre-execution status line."""
+    names = {
+        str(tc.get("function", {}).get("name", ""))
+        for tc in (tool_calls or [])
+        if isinstance(tc, dict)
+    }
+    if names & {"run_workflow", "continue_workflow"}:
+        return "start the workflow"
+    if names & {"pi_agent"}:
+        return "hand that to Pi"
+    if names & {"playwright_browser", "screenshot_analyzer"}:
+        return "open the browser and check"
+    return ""
+
+
 class OpenAICompatibleLLMService(BaseLLMService):
     """
     Base for services using OpenAI-compatible APIs (Groq, OpenRouter, KiloCode).
@@ -447,17 +463,22 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 if msg.get('role') == 'user':
                     last_user_msg = msg.get('content', '')
                     break
-            tools_list = self._tools_list_for_message(last_user_msg)
-            logger.info("%s: [2] prepare_messages+tools: %.3fs (%d msgs, %d tools)",
-                        self.SERVICE_NAME, _time.time() - _t1, len(validated_messages),
-                        len(tools_list) if tools_list else 0)
-
-            _t2 = _time.time()
-            stream = self._iter_stream_with_retry(validated_messages, tools_list)
-            logger.info("%s: [3] call_stream returned: %.3fs", self.SERVICE_NAME, _time.time() - _t2)
+            from distr.core.initiative.approval_notice import approve_all_preview, is_bulk_approval
 
             _t3 = _time.time()
-            full_content, tool_calls = await self._consume_stream(stream, my_generation)
+            if is_bulk_approval(last_user_msg):
+                full_content, tool_calls = approve_all_preview()["text"], []
+                await self._push_pipeline_frame(TextFrame(text=full_content))
+            else:
+                tools_list = self._tools_list_for_message(last_user_msg)
+                logger.info("%s: [2] prepare_messages+tools: %.3fs (%d msgs, %d tools)",
+                            self.SERVICE_NAME, _time.time() - _t1, len(validated_messages),
+                            len(tools_list) if tools_list else 0)
+                _t2 = _time.time()
+                stream = self._iter_stream_with_retry(validated_messages, tools_list)
+                logger.info("%s: [3] call_stream returned: %.3fs", self.SERVICE_NAME, _time.time() - _t2)
+                _t3 = _time.time()
+                full_content, tool_calls = await self._consume_stream(stream, my_generation)
             if my_generation != self._response_generation:
                 logger.info(
                     "%s: response superseded during stream — abandoning stale reply",
@@ -488,8 +509,11 @@ class OpenAICompatibleLLMService(BaseLLMService):
             if tool_calls and not full_content.strip():
                 if self._should_speak_acknowledgment(last_user_msg, tool_calls):
                     from distr.core.agent.tool_audio_timing import wait_before_tool_side_effects
+                    from distr.core.initiative.approval_notice import preparing_status
 
-                    ack = "Working on it."
+                    # Nothing has run yet: say what is queued, not that work has started. The confirmed
+                    # start is reported by job progress once a tool actually begins.
+                    ack = preparing_status(_pending_ack_work(tool_calls))
                     await self._push_pipeline_frame(TextFrame(text=ack))
                     await self._push_pipeline_frame(LLMFullResponseEndFrame())
                     await wait_before_tool_side_effects(self, ack, end_current_utterance=False)
@@ -1604,8 +1628,11 @@ class OpenAICompatibleLLMService(BaseLLMService):
             return
 
         try:
+            from distr.core.initiative.approval_notice import preparing_status
             from distr.core.signals import speak_text_directly_event_queue
-            speak_text_directly_event_queue("Working on it.")
+
+            # Pre-execution only: a factual queued line. The real start is spoken by job progress.
+            speak_text_directly_event_queue(preparing_status(_pending_ack_work(tool_calls or [])))
         except Exception:
             pass
 

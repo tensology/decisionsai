@@ -463,6 +463,7 @@ class KanbanTicketTool(BaseTool):
         "Use action='attach_file' with ticket_id and file_path to attach files. "
         "Use action='send_to_project' with ticket_id to send ticket to the linked project folder. "
         "Use action='send_to_cli' with ticket_id to send ticket to pi coding agent for execution. "
+        "Use action='approve_proposal' or 'decline_proposal' (ticket_id optional when only one is waiting) when Paul says approve or decline to a proposal or approval you told him about. "
         "Use action='workflow_overview' to get active workflow/backend run phases. "
         "Use action='whatsapp_sync' when the user asks to sync or refresh WhatsApp messages from the relay. "
         "Use action='whatsapp_latest_activity' when the user asks who messaged last, whether any WhatsApp messages came in, or for the latest WhatsApp activity. "
@@ -1678,6 +1679,10 @@ class KanbanTicketTool(BaseTool):
                 # Explicit ticket only: a remembered or "first on the board" ticket once sent the
                 # wrong work (ticket 290 instead of 335) to a worker.
                 return self._action_send_to_cli(ticket_id)
+            elif action in ("approve_proposal", "decline_proposal", "approve", "decline"):
+                # Paul said "approve" / "decline" (remote voice, desktop). Same decision as the Telegram button:
+                # one dispatch key, the card edited, the Tensology copy updated.
+                return self._action_decide_proposal("approve" if action.startswith("approve") else "decline", ticket_id)
             elif action in ("workflow_overview", "board_overview"):
                 return self._action_workflow_overview()
             elif action in ("whatsapp_sync", "wa_sync", "sync_whatsapp"):
@@ -1761,7 +1766,7 @@ class KanbanTicketTool(BaseTool):
                     "activate_board, list_lanes, create_ticket, list_tickets, get_ticket, discuss_ticket, update_ticket, "
                     "move_ticket, merge_ticket, update_external_ticket, move_external_ticket, comment_external_ticket, "
                     "delete_ticket, attach_file, delete_file, add_todo, toggle_todo, "
-                    "delete_todo, add_link, delete_link, send_to_project, send_to_cli, workflow_overview, "
+                    "delete_todo, add_link, delete_link, send_to_project, send_to_cli, approve_proposal, decline_proposal, workflow_overview, "
                     "whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, "
                     "whatsapp_list_chats, whatsapp_list_messages, whatsapp_mark_processed, "
                     "whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message, "
@@ -3610,6 +3615,13 @@ class KanbanTicketTool(BaseTool):
 
     # ── Send ticket to CLI ────────────────────────────────────────────────
 
+    def _action_decide_proposal(self, decision: str, ticket_id=None) -> str:
+        """Approve or decline the waiting proposal / checkpoint by voice or text from the remote app."""
+        from distr.core.initiative.approval_notice import decide_pending
+
+        out = decide_pending(decision, ticket_id=ticket_id or None, surface="remote")
+        return voice_then_reference(out["text"], out["text"])
+
     def _action_send_to_cli(self, ticket_id, *, approved: bool = False) -> str:
         """Send ONE named ticket to the project's coding backend. Returns at once; the run continues
         in the background on the ticket's Development thread, with its timer running, and reports
@@ -3713,7 +3725,10 @@ class KanbanTicketTool(BaseTool):
                     source_chat_id=source_chat_id,
                 )
                 return voice_then_reference(
-                    f"Ticket {ticket_id_val} would change code, so it waits for your approval on Telegram.",
+                    held.get("say_this") or (
+                        f"Ticket {ticket_id_val} is waiting for your approval. "
+                        "The card is in Telegram - say approve or decline here, or tap it there."
+                    ),
                     f"{AWAITING_APPROVAL_MARK} {held['message']}",
                 )
             instruction = pi_write_proposals.READ_ONLY_PREFIX + instruction

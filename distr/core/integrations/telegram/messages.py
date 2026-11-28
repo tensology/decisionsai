@@ -964,6 +964,20 @@ class TelegramMessagesMixin:
 
     def _apply_initiative_draft_decision(self, queue_obj, draft_id: str, decision: str) -> bool:
         if decision == "approve":
+            # A Telegram acceptance must not run an action whose ticket has since closed.
+            entry = queue_obj.get_by_id(draft_id) if hasattr(queue_obj, "get_by_id") else None
+            try:
+                from distr.core.initiative.approval_notice import draft_stale_reason
+
+                reason = draft_stale_reason(entry) if entry is not None else ""
+            except Exception:
+                reason = ""
+            if reason:
+                removed = queue_obj.remove(draft_id) if hasattr(queue_obj, "remove") else False
+                self.send_to_telegram(
+                    f"That Initiative action is stale ({reason}), so I did not run it."
+                    + (" Removed it from the queue." if removed else ""))
+                return True
             from distr.core.initiative.draft_execute import approve_draft_in_queue
 
             def _runner() -> None:
@@ -1018,6 +1032,12 @@ class TelegramMessagesMixin:
                 return "reject"
             return None
 
+        from distr.core.initiative.approval_notice import approve_all_preview, draft_stale_reason
+
+        def _triage_items() -> list[dict]:
+            return [{"kind": "draft", "ref": entry.id, "title": entry.description,
+                     "at": 0.0} for entry in orchestrator_entries if not draft_stale_reason(entry)]
+
         decision = _decision_word(text_lower)
         if not decision:
             if re.search(
@@ -1032,16 +1052,17 @@ class TelegramMessagesMixin:
         numbered = re.search(r"\b(?:approve|reject|yes|no|ignore|skip)\s+(\d{1,2})\b", text_lower)
         if numbered:
             idx = max(0, int(numbered.group(1)) - 1)
-        elif len(orchestrator_entries) > 1 and re.search(r"\b(all|everything)\b", text_lower):
+        elif re.search(r"\b(all|everything)\b", text_lower):
+            if decision == "approve":
+                # "approve all" is never an approval: list each item and the exact single-ticket phrase.
+                # Nothing is dispatched from here; a later "approve <id>" goes through the one-key path.
+                self.send_to_telegram(approve_all_preview(items=_triage_items())["text"])
+                return True
             acted = 0
             for entry in list(orchestrator_entries):
-                if decision == "approve":
-                    if self._approve_orchestrator_triage_entry(queue_obj, entry):
-                        acted += 1
-                elif queue_obj.remove(entry.id):
+                if queue_obj.remove(entry.id):
                     acted += 1
-            verb = "Approved" if decision == "approve" else "Rejected"
-            self.send_to_telegram(f"{verb} {_pending_items_phrase(acted)}.")
+            self.send_to_telegram(f"Rejected {_pending_items_phrase(acted)}.")
             return True
 
         if idx >= len(orchestrator_entries):

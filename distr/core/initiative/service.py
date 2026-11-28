@@ -321,6 +321,40 @@ def _clean_telegram_line(text: str, max_len: int = 260) -> str:
     return clean
 
 
+_WORKING_LANE_NAMES = {"in progress", "doing", "wip"}
+
+
+def _lane_move_done_line(context: dict[str, Any]) -> str:
+    """"Moved ticket 335, EFT banking details, to In Progress and started its timer." (single ticket only)"""
+    from distr.core.initiative.approval_notice import ticket_label
+
+    ids = context.get("ticket_ids") or []
+    if len(ids) != 1:
+        return ""
+    lane = str(context.get("target_lane") or "").strip()
+    if not lane:
+        return ""
+    timer = " and started its timer" if lane.lower() in _WORKING_LANE_NAMES else ""
+    return f"Moved {ticket_label(ids[0], context.get('ticket_title') or '', closed=True)} to {lane}{timer}."
+
+
+def _lane_move_ask(context: dict[str, Any], surface: str = "remote") -> str:
+    """The plain-words ask for a lane move that does need approval (several tickets, or finishing work)."""
+    from distr.core.initiative.approval_notice import compose_ask, ticket_label
+
+    ids = context.get("ticket_ids") or []
+    lane = str(context.get("target_lane") or "In Progress").strip()
+    board = str(context.get("board_title") or "").strip()
+    if len(ids) == 1:
+        wants = f"move {ticket_label(ids[0], context.get('ticket_title') or '', closed=True)} to {lane}"
+    elif ids:
+        wants = f"move {len(ids)} tickets" + (f" on {board}" if board else "") + f" to {lane}"
+    else:
+        wants = f"move tickets" + (f" on {board}" if board else "") + f" to {lane}"
+    return compose_ask(wants, why=("so I can start on it" if lane.lower() in _WORKING_LANE_NAMES else ""),
+                       surface=surface)[0]
+
+
 def _initiative_approval_text(
     action: ProposedAction,
     entry: DraftEntry,
@@ -331,7 +365,8 @@ def _initiative_approval_text(
     context = context or _derive_initiative_action_context(action)
     scope = _initiative_context_line(context)
     if entry.action_type == "ticket_lane_move":
-        return (
+        # Plain words: which ticket, what I want to do, how to answer. The scope line is the fallback.
+        return _lane_move_ask(context, surface="telegram") if context.get("ticket_ids") else (
             "I found a board update that needs your approval:\n"
             f"- {scope}\n\n"
             f"Goal: {description}\n\n"
@@ -1766,6 +1801,15 @@ class InitiativeService:
             self._execute_action(action, settings, tier=_Tier.NOTIFY)
             return
 
+        if action.action_type == "ticket_lane_move" and tier_override is None:
+            from distr.core.initiative.approval_notice import is_routine_lane_move
+
+            if is_routine_lane_move(action.action_type, _derive_initiative_action_context(action), settings):
+                # The orchestrator's own bookkeeping on one ticket: do it, then say so. No approval ask.
+                logger.info("InitiativeService: routine lane move runs without asking: %s", action.description)
+                self._execute_action(action, settings, tier=PermissionTier.NOTIFY)
+                return
+
         tier = (
             tier_override
             if tier_override is not None
@@ -1975,6 +2019,15 @@ class InitiativeService:
                     settings=settings,
                 )
                 logger.info("InitiativeService: executed %s result=%s", action.action_type, result)
+                if action.action_type == "ticket_lane_move" and isinstance(result, dict) and result.get("success", True):
+                    done = _lane_move_done_line(_derive_initiative_action_context(action))
+                    if done:
+                        # Report the completed routine action on the active surface.
+                        from distr.core.initiative.approval_notice import inform_after
+
+                        inform_after(done, key=f"lane:{action.description}")
+                        self._log_to_chat(done, settings, action=action)
+                        return
                 if tier != PermissionTier.SILENT:
                     message = result.get("message") if isinstance(result, dict) else action.description
                     self._log_to_chat(f"{action.action_type}: {message}", settings)
@@ -2296,6 +2349,28 @@ class InitiativeService:
         if self._recommend_oversight_only(action, settings, tier):
             return
 
+        if action.action_type == "ticket_lane_move":
+            payload = action.payload or {}
+            ids = list(dict.fromkeys(_coerce_int_list(payload.get("ticket_ids"))))
+            if len(ids) > 1:
+                from distr.core.initiative.approval_notice import ticket_label
+
+                scoped = {key: value for key, value in payload.items() if key not in (
+                    "ticket_id", "ticket_title", "goal_hint", "goal", "goal_text", "objective",
+                )}
+                for ticket_id in ids:
+                    single = dataclasses.replace(
+                        action, payload={**scoped, "ticket_ids": [ticket_id]},
+                    )
+                    context = _derive_initiative_action_context(single)
+                    label = ticket_label(ticket_id, context["ticket_title"], closed=True)
+                    lane = context["target_lane"] or "In Progress"
+                    self._draft_and_ask(
+                        dataclasses.replace(single, description=f"Move {label} to {lane}.", draft="", telegram_message=""),
+                        settings, tier=tier,
+                    )
+                return
+
         resolved_tier = tier if tier is not None else PermissionTier.APPROVE
         action_hash = _hash_initiative_payload(action.action_type, action.payload)
         for existing in self._draft_queue.get_all():
@@ -2354,6 +2429,12 @@ class InitiativeService:
                 else None
             ),
         )
+        from distr.core.initiative.approval_notice import draft_stale_reason
+
+        reason = draft_stale_reason(entry)
+        if reason:
+            logger.info("Skipping expired initiative draft %s: %s", entry.id, reason)
+            return
         if self._draft_queue.add(entry) is False:
             # Already pending, or Paul rejected this: no new card, no new ping.
             return
@@ -2416,6 +2497,12 @@ class InitiativeService:
         read to the user verbatim; it means nothing outside the engine.
         """
         description = str(getattr(action, "description", "") or "").strip()
+        if getattr(action, "action_type", "") == "ticket_lane_move":
+            ctx = _derive_initiative_action_context(action)
+            if ctx.get("ticket_ids"):
+                # "I want to move ticket 335, EFT banking details, to In Progress ... The card is waiting in
+                # Telegram - say approve or decline here, or tap it there."
+                return _lane_move_ask(ctx, surface="remote")
         tier_name = str(getattr(tier, "name", "") or "").strip()
         lead = f"Waiting on your approval ({tier_name})" if tier_name else "Waiting on your approval"
         raw = f"{lead}: {description}" if description else lead
@@ -2594,10 +2681,12 @@ class InitiativeService:
 
                 signal_manager.speak_text_directly.emit(outbound_text)
                 logger.info("InitiativeService: sent desktop notification (%s): %s", decision.route_reason, outbound_text[:100])
+                self._telegram_record_copy(text, requires_response, allow_telegram)
                 return
             if decision.channel == "remote":
                 if self._send_remote_notification(outbound_text, context=base_event_data):
                     logger.info("InitiativeService: sent remote notification (%s): %s", decision.route_reason, outbound_text[:100])
+                    self._telegram_record_copy(text, requires_response, allow_telegram)
                     return
                 if not allow_telegram:
                     return
@@ -2658,6 +2747,16 @@ class InitiativeService:
                     logger.info("InitiativeService: sent Telegram notification (%s): %s", decision.route_reason, outbound_text[:100])
         except Exception as e:
             logger.warning("InitiativeService: notification send failed: %s", e)
+
+    def _telegram_record_copy(self, text: str, requires_response: bool, allow_telegram: bool) -> None:
+        """An ask spoken on the remote app or desktop still goes to Telegram as text, so the card / record exists
+        there and can be answered by tapping."""
+        if not (requires_response and allow_telegram and self.telegram_manager is not None):
+            return
+        try:
+            self.telegram_manager.send_to_telegram(text=text)
+        except Exception:
+            logger.debug("InitiativeService: Telegram record copy failed", exc_info=True)
 
     def _record_notification_route(self, surface: str, reason: str, text: str) -> None:
         try:
@@ -3123,7 +3222,16 @@ class InitiativeService:
                         # Re-notify every ~20 minutes while a run is still
                         # waiting on a human; a single vague ping let a paused
                         # ticket stall for hours.
-                        repeat_s = float(getattr(self, "_workflow_waiting_renotify_s", 1200.0))
+                        # Nudge once on the active surface. A stuck run is not re-announced every
+                        # 20 minutes; set _workflow_waiting_renotify_s > 0 to bring reminders back.
+                        repeat_s = float(getattr(self, "_workflow_waiting_renotify_s", 0.0))
+                        from distr.core.initiative.approval_notice import primary_surface
+
+                        waiting_surface = primary_surface(
+                            self.telegram_manager, allow_telegram=bool(settings.get("initiative_allow_telegram", False))
+                        )
+                        if waiting_surface is None:
+                            continue  # Preserve the nudge until there is a reachable surface.
                         if self._notice_allowed(key, repeat_after_s=repeat_s if repeat_s > 0 else None):
                             run_data = self._packet(run.run_data)
                             waiting_kind = str(run_data.get("waiting_kind") or "")
@@ -3158,6 +3266,8 @@ class InitiativeService:
                                 why=str(needs_context.get("blockers") or needs_context.get("reason") or "") if clear_need else "",
                                 tried=str(run_data.get("self_serve_tried") or "") if clear_need else "",
                                 need=clear_need,
+                                ticket_id=run.ticket_id,
+                                surface=waiting_surface,
                             )
                             try:
                                 from distr.core.kanban.ticket_workflow_engagement import (

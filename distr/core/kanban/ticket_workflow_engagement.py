@@ -559,21 +559,30 @@ def build_workflow_waiting_nudge(
     why: str = "",
     tried: str = "",
     need: str = "",
+    ticket_id: int | str | None = None,
+    surface: str = "remote",
 ) -> tuple[str, str]:
-    """Actionable text + voice for initiative / background workflow-waiting alerts."""
+    """Actionable text + voice for initiative / background workflow-waiting alerts.
+
+    Names the ticket (number + title). Approval-type waits say what I want to do and where the card is, in plain
+    words. The response instructions match the active surface."""
+    from distr.core.initiative.approval_notice import ticket_label, workflow_wait_ask
+
     subject = (ticket_title or workflow_name or "A workflow").strip()
+    if ticket_id:
+        subject = ticket_label(ticket_id, ticket_title or workflow_name)
     project = (project_name or "").strip()
     if project and project.lower() not in subject.lower():
         subject = f"{project}: {subject}"
     step = (step_name or "").strip()
     kind = (waiting_kind or "").strip().lower()
 
-    if kind == "run_briefing":
-        text = (
-            f"{subject} is ready to start but waiting for your go-ahead. "
-            "Open Workflows → Active Runs, or tell me **go ahead** or **continue** to start."
-        )
-        voice = f"{subject} is ready to start. Say go ahead or continue to proceed."
+    ask = workflow_wait_ask(
+        waiting_kind=kind, ticket_id=ticket_id, ticket_title=ticket_title, workflow_name=workflow_name,
+        step_name=step, project_name=project, surface=surface,
+    )
+    if ask is not None:
+        text, voice = ask
     elif kind == "step_review":
         step_bit = f" after {step}" if step else ""
         text = (
@@ -581,19 +590,6 @@ def build_workflow_waiting_nudge(
             "Open Workflows → Active Runs, or tell me **continue** to proceed, **stop** to cancel."
         )
         voice = f"{subject} paused for a checkpoint. Say continue to proceed, or stop to cancel."
-    elif kind == "approval":
-        step_bit = f" ({step})" if step else ""
-        text = (
-            f"{subject} needs your approval{step_bit}. "
-            "Open Workflows → Active Runs and approve the step, or tell me **approve** or **continue**."
-        )
-        voice = f"{subject} needs your approval. Open Workflows or say approve to continue."
-    elif kind == "route_approval":
-        text = (
-            f"{subject} wants to change execution route. "
-            "Open Workflows → Active Runs to approve or reject, or tell me what to do."
-        )
-        voice = f"{subject} needs route approval. Open Workflows or tell me how to proceed."
     elif kind == "provider_preflight":
         text = (
             f"{subject} paused before model dispatch because the provider preflight needs your decision. "
@@ -889,6 +885,16 @@ def notify_ticket_workflow_progress(
             speak_text_directly_event_queue(outbound)
     except Exception:
         logger.debug("ticket workflow engagement delivery failed", exc_info=True)
+
+    if requires_response and decision.channel == "telegram":
+        # The Telegram message above is the card. If the remote app or desktop is active, tell
+        # him there too, in plain words, once. (Logged: "presence routing" / "approval ask".)
+        try:
+            from distr.core.initiative.approval_notice import ask_once
+
+            ask_once(f"workflow:{run_id}:{step_id}:{state_fingerprint}", text, spoken)
+        except Exception:
+            logger.debug("presence ask failed", exc_info=True)
 
     try:
         from distr.core.orchestration_events import emit_user_notification

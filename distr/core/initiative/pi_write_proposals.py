@@ -174,15 +174,14 @@ def _last_telegram_ids() -> tuple[Any, Any]:
 
 
 def _resolve_card(rec: dict[str, Any] | None, ticket_id: int, *, text: str,
-                  telegram_message_id: Any = None, telegram_chat_id: Any = None,
-                  edit: Callable[..., bool] | None = None) -> dict[str, Any]:
+                  telegram_message_id: Any = None, telegram_chat_id: Any = None) -> dict[str, Any]:
     """Edit the Approve / Decline card to show it is handled, and drop its buttons."""
     mid = _as_telegram_id(telegram_message_id) or _as_telegram_id((rec or {}).get("telegram_message_id"))
     cid = _as_telegram_id(telegram_chat_id) or _as_telegram_id((rec or {}).get("telegram_chat_id"))
     _remember_card(ticket_id, mid, cid)
     edited = False
     try:
-        edited = bool((edit or _default_edit_card)(text, mid, cid)) if mid else False
+        edited = bool(_default_edit_card(text, mid, cid)) if mid else False
     except Exception:
         logger.warning("pi write proposal: could not edit Telegram card for ticket %s", ticket_id, exc_info=True)
         edited = False
@@ -217,21 +216,60 @@ def _mirror_to_incoming(ticket_id: int, project_id: int, title: str, instruction
         logger.warning("pi write proposal: Tensology Incoming mirror failed for ticket %s", ticket_id, exc_info=True)
 
 
+def _wants(ticket_id: int, title: str, project_name: str, *, filed: bool, from_lane: str | None) -> str:
+    """What I want to do, in the words I say it: which ticket, which lane change, and that Pi will start on it."""
+    from distr.core.initiative.approval_notice import ticket_label
+
+    label = ticket_label(ticket_id, title, closed=True)
+    where = f" in {project_name}" if project_name else ""
+    if filed:
+        return f"file {label} in the {project_name or 'project'} Backlog, move it to In Progress and start Pi on it"
+    start = f" from {from_lane}" if from_lane and from_lane.lower() != "in progress" else ""
+    return f"move {label}{start} to In Progress and start Pi on it{where}"
+
+
+def ask_for(ticket_id: int, title: str, project_name: str, *, filed: bool = False, from_lane: str | None = None,
+            surface: str = "remote",
+            rationale: str = "so I want your okay before it changes code") -> str:
+    """The proposal request includes the ticket, proposed action, reason and response options."""
+    from distr.core.initiative.approval_notice import compose_ask
+
+    return compose_ask(_wants(ticket_id, title, project_name, filed=filed, from_lane=from_lane),
+                       why=rationale, surface=surface)[0]
+
+
+def _ticket_lane_name(ticket_id: int) -> str | None:
+    try:
+        from distr.core.db import get_session
+        from distr.core.db.kanban import KanbanLane, KanbanTicket
+
+        with get_session() as db:
+            row = (db.query(KanbanLane.name).join(KanbanTicket, KanbanTicket.lane_id == KanbanLane.id)
+                   .filter(KanbanTicket.id == int(ticket_id)).first())
+            return str(row[0]) if row else None
+    except Exception:
+        return None
+
+
 def _announce(ticket_id: int, project_id: int, project_name: str, title: str, instruction: str, *,
               source_chat_id: int | None, notify: Callable[[str, dict[str, Any]], bool] | None,
-              post_incoming: Callable[[dict[str, Any], str], dict[str, Any]] | None, sync: bool) -> bool:
-    """Record the pending proposal, send the Approve / Decline card and mirror it to Tensology Incoming."""
+              post_incoming: Callable[[dict[str, Any], str], dict[str, Any]] | None, sync: bool,
+              filed: bool = False, from_lane: str | None = None) -> bool:
+    """Record the pending proposal, send the Approve / Decline card and mirror it to Tensology Incoming.
+    The card always goes to Telegram. The request goes to the active surface once, unless the
+    chat that raised it is already answering him."""
     with _LOCK:
         state = _load()
         state[str(ticket_id)] = {"status": "pending", "project_id": int(project_id), "project": project_name,
-                                 "title": title, "source_chat_id": source_chat_id, "created": time.time()}
+                                 "title": title, "source_chat_id": source_chat_id, "created": time.time(),
+                                 "approval_key": f"pi-write-dispatch-{ticket_id}"}
         _save(state)
     markup = {"inline_keyboard": [[
         {"text": "Approve", "callback_data": f"{CALLBACK_KIND}:{ticket_id}:approve"},
         {"text": "Decline", "callback_data": f"{CALLBACK_KIND}:{ticket_id}:decline"},
     ]]}
-    card = (f"Proposal for {project_name} (ticket #{ticket_id}): {title}\n\n"
-            f"{str(instruction).strip()[:1500]}\n\nNothing has been changed. Approve to start it.")
+    ask_card = ask_for(ticket_id, title, project_name, filed=filed, from_lane=from_lane, surface="telegram")
+    card = f"{ask_card}\n\n{str(instruction).strip()[:1500]}\n\nNothing has been changed yet."
     mid = cid = None
     try:
         result = (notify or _default_notify)(card, markup)
@@ -245,6 +283,15 @@ def _announce(ticket_id: int, project_id: int, project_name: str, title: str, in
         logger.warning("pi write proposal: Telegram card failed for ticket %s", ticket_id, exc_info=True)
         sent = False
     _remember_card(ticket_id, mid, cid)
+    try:
+        from distr.core.initiative.approval_notice import ask_once
+
+        ask = ask_for(ticket_id, title, project_name, filed=filed, from_lane=from_lane)
+        # A chat turn that raised it speaks the ask itself (see the tool reply); anyone else gets it here.
+        ask_once(f"pi-write-dispatch-{ticket_id}", ask, deliver=source_chat_id is None,
+                 data={"ticket_id": ticket_id, "ticket_title": title})
+    except Exception:
+        logger.debug("pi write proposal: presence ask failed for ticket %s", ticket_id, exc_info=True)
     args = (ticket_id, project_id, title, instruction, post_incoming or _default_post_incoming)
     if sync:
         _mirror_to_incoming(*args)
@@ -260,17 +307,15 @@ def file_write_proposal(project_id: int, project_name: str, instruction: str, *,
                         source_chat_id: int | None = None,
                         notify: Callable[[str, dict[str, Any]], bool] | None = None,
                         post_incoming: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
-                        _sync: bool = False,
-                        _session_provider=None) -> dict[str, Any]:
+                        _sync: bool = False) -> dict[str, Any]:
     """File the proposal (Backlog ticket + Telegram card + Tensology Incoming). Never runs anything. Never raises."""
     try:
         from distr.core.db import get_session
         from distr.core.db.kanban import KanbanTicket
         from distr.core.kanban.lifecycle import ensure_delivery_lanes
 
-        provider = _session_provider or get_session
         title = _title(instruction)
-        with provider() as db:
+        with get_session() as db:
             board_id = _project_board_id(db, int(project_id))
             if board_id is None:
                 return {"status": "blocked", "message": (
@@ -292,12 +337,14 @@ def file_write_proposal(project_id: int, project_name: str, instruction: str, *,
             db.commit()
             ticket_id = int(ticket.id)
         sent = _announce(ticket_id, project_id, project_name, title, instruction, source_chat_id=source_chat_id,
-                         notify=notify, post_incoming=post_incoming, sync=_sync)
+                         notify=notify, post_incoming=post_incoming, sync=_sync, filed=True)
         logger.info("pi write proposal filed: ticket=%s project=%s card_sent=%s", ticket_id, project_id, sent)
-        where = "and sent you the Approve card on Telegram" if sent else "but the Telegram card did not go out"
-        return {"status": "proposed", "ticket_id": ticket_id, "card_sent": sent, "message": (
-            f"Proposal filed as ticket #{ticket_id} in {project_name} Backlog {where}. Nothing has been changed. "
-            "The work starts only when Paul approves it. Do not start it any other way.")}
+        ask = ask_for(ticket_id, title, project_name, filed=True)
+        tail = "" if sent else " (The Telegram card did not go out, so say so.)"
+        return {"status": "proposed", "ticket_id": ticket_id, "card_sent": sent, "say_this": ask, "message": (
+            f"Filed as ticket #{ticket_id} in {project_name} Backlog. Nothing has been changed. "
+            f"Tell the user this: \"{ask}\" If they say approve or decline, call kanban_ticket "
+            f"approve_proposal or decline_proposal with ticket_id {ticket_id}. Do not start it any other way.{tail}")}
     except Exception as exc:
         logger.warning("pi write proposal could not be filed", exc_info=True)
         return {"status": "failed", "message": f"Not started: the proposal could not be filed ({type(exc).__name__}). Nothing was changed."}
@@ -315,32 +362,94 @@ def request_ticket_approval(ticket_id: int, project_id: int, project_name: str, 
         existing = get(tid)
         if existing and existing.get("status") == "pending":
             return {"status": "waiting", "ticket_id": tid, "message": (
-                f"Ticket #{tid} is already waiting for Paul's approval on Telegram. Nothing was started.")}
-        sent = _announce(tid, project_id, project_name, str(title or f"Ticket #{tid}")[:120], instruction,
-                         source_chat_id=source_chat_id, notify=notify, post_incoming=post_incoming, sync=_sync)
+                f"Ticket {tid} is already waiting for approval. The card is in Telegram, and the user can say "
+                f"approve or decline here. Nothing was started. Do not ask again.")}
+        name = str(title or f"Ticket #{tid}")[:120]
+        lane = _ticket_lane_name(tid)
+        sent = _announce(tid, project_id, project_name, name, instruction, source_chat_id=source_chat_id,
+                         notify=notify, post_incoming=post_incoming, sync=_sync, from_lane=lane)
         logger.info("send_to_cli held for approval: ticket=%s project=%s card_sent=%s", tid, project_id, sent)
-        where = "I sent you the Approve card on Telegram" if sent else "the Telegram card did not go out"
-        return {"status": "proposed", "ticket_id": tid, "card_sent": sent, "message": (
-            f"Ticket #{tid} would change code, so it waits for Paul's approval; {where}. Nothing was started. "
-            "Do not start it any other way.")}
+        ask = ask_for(tid, name, project_name, from_lane=lane)
+        tail = "" if sent else " (The Telegram card did not go out, so say so.)"
+        return {"status": "proposed", "ticket_id": tid, "card_sent": sent, "say_this": ask, "message": (
+            f"Nothing was started. Tell the user this: \"{ask}\" If they say approve or decline, "
+            f"call kanban_ticket approve_proposal or decline_proposal with ticket_id {tid}. "
+            f"Do not start it any other way.{tail}")}
     except Exception as exc:
         logger.warning("send_to_cli approval request failed for ticket %s", ticket_id, exc_info=True)
         return {"status": "failed", "message": f"Not started: the approval card could not be prepared ({type(exc).__name__})."}
 
 
-def decide(ticket_id: Any, decision: str, *, start: Callable[[int], str] | None = None,
-           dismiss_incoming: Callable[[int], Any] | None = None,
-           accept_incoming: Callable[..., Any] | None = None,
-           telegram_message_id: Any = None, telegram_chat_id: Any = None,
-           edit_card: Callable[..., bool] | None = None) -> dict[str, Any]:
-    """Apply Paul's Approve / Decline (Telegram card or Tensology Incoming). Dispatch at most once."""
+def _stale_reason(rec: dict[str, Any], ticket_id: int) -> str:
+    """Why this pending proposal is stale right now (empty when it is still live)."""
+    from distr.core.initiative import approval_notice as an
+
+    created = float(rec.get("created") or 0)
+    if created and time.time() - created > an.STALE_APPROVAL_S:
+        return f"waiting more than {int(an.STALE_APPROVAL_S // 3600)}h"
+    if ticket_id in an._closed_ticket_ids():
+        return "its ticket is closed or deprecated"
+    return ""
+
+
+def _retire_expired(ticket_id: int, rec: dict[str, Any], *, edit_card: bool = True) -> None:
+    """Retire a stale proposal: close the live card (buttons gone) and dismiss the Tensology mirror.
+
+    Never sends a new ask. ``edit_card=False`` is used when the caller is already editing the card."""
+    if edit_card:
+        mid = _as_telegram_id(rec.get("telegram_message_id"))
+        cid = _as_telegram_id(rec.get("telegram_chat_id"))
+        if mid:
+            try:
+                _default_edit_card(
+                    f"Expired. Ticket #{ticket_id} is no longer waiting ({rec.get('expired_reason') or 'stale'}); "
+                    "nothing was changed. This card is closed.", mid, cid)
+            except Exception:
+                logger.warning("pi write proposal: could not retire the card for %s", ticket_id, exc_info=True)
+    if rec.get("tensology_id"):
+        try:
+            _default_dismiss_incoming(int(rec["tensology_id"]))
+        except Exception:
+            logger.warning("pi write proposal: could not retire the Tensology mirror %s", rec.get("tensology_id"), exc_info=True)
+
+
+def decide(ticket_id: Any, decision: str, *, source: str = "telegram",
+           telegram_message_id: Any = None, telegram_chat_id: Any = None) -> dict[str, Any]:
+    """Apply Approve or Decline from any surface: the Telegram card, Tensology Incoming, or voice /
+    text on the remote app (``source`` = "telegram" | "tensology" | "remote" | "desktop"). Dispatch at most once.
+    When it was settled somewhere other than where he is now, tell him there, in one line."""
+    try:
+        tid = int(ticket_id)
+    except (TypeError, ValueError):
+        return {"text": "That proposal reference is not valid. Nothing changed."}
+    _remember_card(tid, telegram_message_id, telegram_chat_id)
+    before = (get(tid) or {}).get("status")
+    result = _decide(tid, decision)
+    after = get(tid) or {}
+    if before == "pending" and after.get("status") in {"approved", "declined"}:
+        try:
+            from distr.core.initiative.approval_notice import announce_decision
+
+            announce_decision(approved=after["status"] == "approved", ticket_id=ticket_id,
+                              title=str(after.get("title") or ""), source=source,
+                              key=f"pi-write-dispatch-{ticket_id}")
+        except Exception:
+            logger.debug("pi write proposal: could not tell the other surfaces", exc_info=True)
+    return result
+
+
+def _decide(ticket_id: Any, decision: str) -> dict[str, Any]:
+    """Claim exactly one proposal.
+
+    The staleness check and the status change happen under the one store lock, so an old Telegram button,
+    a remote / desktop voice line and Tensology cannot each win, and a stale one never dispatches."""
     if decision not in {"approve", "decline"}:
         return {"text": "Choose Approve or Decline on the proposal card."}
     try:
         tid = int(ticket_id)
     except (TypeError, ValueError):
         return {"text": "That proposal reference is not valid. Nothing changed."}
-    _remember_card(tid, telegram_message_id, telegram_chat_id)
+    stale = ""
     with _LOCK:
         state = _load()
         rec = state.get(str(tid))
@@ -348,32 +457,40 @@ def decide(ticket_id: Any, decision: str, *, start: Callable[[int], str] | None 
             return {"text": "I don't have that proposal. Nothing changed."}
         if rec.get("status") != "pending":
             text = f"Handled. Ticket #{tid} was already {rec.get('status')}. This card is closed."
-            return _resolve_card(rec, tid, text=text, telegram_message_id=telegram_message_id,
-                                 telegram_chat_id=telegram_chat_id, edit=edit_card)
-        rec["status"] = "approved" if decision == "approve" else "declined"
-        rec["decided"] = time.time()
-        rec["dispatch_key"] = f"pi-write-dispatch-{tid}"
+            return _resolve_card(rec, tid, text=text)
+        stale = _stale_reason(rec, tid)
+        if stale:
+            rec["status"] = "expired"
+            rec["expired_at"] = time.time()
+            rec["expired_reason"] = stale
+        else:
+            rec["status"] = "approved" if decision == "approve" else "declined"
+            rec["decided"] = time.time()
+            rec["dispatch_key"] = f"pi-write-dispatch-{tid}"
+        state[str(tid)] = rec
         _save(state)
+    if stale:
+        # Already marked expired under the lock; close the card and retire the mirror without dispatching.
+        _retire_expired(tid, rec, edit_card=False)
+        logger.info("pi write proposal stale decision refused: ticket=%s reason=%s", tid, stale)
+        return _resolve_card(rec, tid, text=(
+            f"Expired ({stale}). Ticket #{tid} was not started and nothing was changed. This card is closed."))
     title = rec.get("title") or f"ticket #{tid}"
     if decision == "decline":
         _report(f"ticket:{tid}", "done", "declined; nothing started", title=title)
         logger.info("pi write proposal declined: ticket=%s", tid)
         if rec.get("tensology_id"):
             try:
-                (dismiss_incoming or _default_dismiss_incoming)(int(rec["tensology_id"]))
+                _default_dismiss_incoming(int(rec["tensology_id"]))
             except Exception:
                 logger.warning("pi write proposal: could not dismiss Tensology item %s", rec.get("tensology_id"), exc_info=True)
-        text = f"Declined. Ticket #{tid} was not started and nothing was changed. This card is closed."
-        return _resolve_card(rec, tid, text=text, telegram_message_id=telegram_message_id,
-                             telegram_chat_id=telegram_chat_id, edit=edit_card)
+        return _resolve_card(rec, tid, text=(
+            f"Declined. Ticket #{tid} was not started and nothing was changed. This card is closed."))
     logger.info("pi write proposal approved: ticket=%s key=pi-write-dispatch-%s", tid, tid)
     try:
-        if start is not None:
-            out = start(tid)
-        else:
-            from distr.core.agent.tools.integrations.kanban_ticket import KanbanTicketTool
+        from distr.core.agent.tools.integrations.kanban_ticket import KanbanTicketTool
 
-            out = KanbanTicketTool()._action_send_to_cli(tid, approved=True)
+        out = KanbanTicketTool()._action_send_to_cli(tid, approved=True)
     except Exception:
         logger.warning("pi write proposal: start failed for ticket %s", tid, exc_info=True)
         with _LOCK:
@@ -392,15 +509,14 @@ def decide(ticket_id: Any, decision: str, *, start: Callable[[int], str] | None 
             rec = state[str(tid)]
     if rec.get("tensology_id"):
         try:
-            (accept_incoming or _default_accept_incoming)(int(rec["tensology_id"]), tid)
+            _default_accept_incoming(int(rec["tensology_id"]), tid)
         except Exception:
             logger.warning("pi write proposal: could not mark Tensology item %s as accepted", rec.get("tensology_id"), exc_info=True)
     spoken = str(out or "").split("\n", 1)[0].strip()
     text = (f"Approved. {spoken}" if spoken else f"Approved. Ticket #{tid} has started.")
     if "This card is closed." not in text:
         text = text.rstrip(".") + ". This card is closed."
-    return _resolve_card(rec, tid, text=text, telegram_message_id=telegram_message_id,
-                         telegram_chat_id=telegram_chat_id, edit=edit_card)
+    return _resolve_card(rec, tid, text=text)
 
 
 def _ticket_for_remote_event(event: dict[str, Any]) -> int | None:
@@ -425,8 +541,7 @@ def _ticket_for_remote_event(event: dict[str, Any]) -> int | None:
     return None
 
 
-def handle_remote_decision(event: Any, *, start: Callable[[int], str] | None = None,
-                           edit_card: Callable[..., bool] | None = None) -> dict[str, Any] | None:
+def handle_remote_decision(event: Any) -> dict[str, Any] | None:
     """A Tensology Incoming decision on a Decisions-origin proposal: resolve the card and dispatch once.
 
     Approve / send marks the local proposal approved and starts the existing ticket if it has not
@@ -440,9 +555,9 @@ def handle_remote_decision(event: Any, *, start: Callable[[int], str] | None = N
             return None
         status = str(event.get("status") or "").strip().lower()
         if status == "dismissed":
-            return decide(tid, "decline", start=start, edit_card=edit_card)
+            return decide(tid, "decline", source="tensology")
         if status in {"approved", "sent_to_decisions"}:
-            return decide(tid, "approve", start=start, edit_card=edit_card)
+            return decide(tid, "approve", source="tensology")
         return None
     except Exception:
         logger.warning("pi write proposal: remote decision failed", exc_info=True)

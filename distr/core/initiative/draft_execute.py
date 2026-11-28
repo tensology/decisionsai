@@ -39,6 +39,13 @@ def approve_draft_in_queue(queue: DraftQueue, draft_id: str) -> bool:
     entry = queue.get_by_id(draft_id)
     if entry is None:
         return False
+    from distr.core.initiative.approval_notice import draft_stale_reason
+
+    reason = draft_stale_reason(entry)
+    if reason:
+        logger.info("Expiring pending initiative draft %s: %s", draft_id, reason)
+        queue.remove(draft_id)
+        return False
     payload = entry.execute_payload
     if payload:
         try:

@@ -586,5 +586,6 @@ def test_waiting_workflow_is_recorded_in_active_chat_context(monkeypatch):
     chat_id, message, hidden = notices[0]
     assert chat_id == 381
     assert "Sandbox: Paul open questions" in message
-    assert "waiting" in message.lower()
+    # Plain words rather than the raw "waiting" state: what it wants to do, and how to answer.
+    assert "approve or decline" in message.lower()
     assert hidden is True

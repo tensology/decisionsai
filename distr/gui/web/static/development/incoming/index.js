@@ -1420,6 +1420,10 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         const expired = proposalIsExpired(proposal);
         const needsProject = proposalNeedsProject(proposal);
         const reserved = proposal.merge_source_reserved === true;
+        // An expired row or a Decisions code-change request is approval-managed: Incoming must not offer
+        // Create Thread / merge for it, or those buttons become a second approval key.
+        const approvalManaged = proposal.approval_managed === true;
+        const blocked = expired || approvalManaged;
         const source = String(proposal.source_label || proposal.source || '').trim();
         const project = String(proposal.project_name || (proposal.project_id ? `Project ${proposal.project_id}` : '')).trim();
         const origin = proposal.origin === 'tensology' ? 'Synced from Tensology' : 'Detected here';
@@ -1434,14 +1438,16 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
         ].filter(Boolean).join(' · '))}</p>` : '';
         const push = retry
             ? `<button type="button" class="proposal-btn primary" data-incoming-retry-merge="${proposalId}"${incomingOperation || proposalMutations.size || dismissExpiredBusy ? ' disabled' : ''}>Retry merge</button>`
-            : reserved ? '' : !needsProject
+            : reserved ? '' : blocked
+            ? `<button type="button" class="proposal-btn primary" disabled title="${actions.escapeHtml(expired ? 'This proposal expired. It is kept for the record only.' : 'This is a Decisions code change. Approve it in Decisions; Incoming cannot start it.')}">${expired ? 'Expired' : 'Approve in Decisions'}</button>`
+            : !needsProject
             ? `<button type="button" class="proposal-btn primary" data-incoming-proposal-thread="${proposalId}"${proposal.thread_link_error ? ' disabled' : ''} title="${actions.escapeHtml(proposal.thread_link_error || (proposal.followup_thread ? 'Append this follow-up to the existing Development thread' : linkedThread ? 'Open the linked Development thread' : 'Creates the thread and hands it to Decisions, like Send to Decisions.'))}">${proposal.followup_thread ? 'Amend thread' : linkedThread ? 'Open thread' : 'Create Thread'}</button>`
             : `<button type="button" class="proposal-btn primary" data-incoming-proposal-confirm="${proposalId}">Confirm project</button>`;
         const dismiss = reserved ? '' : `<button type="button" class="proposal-btn ghost" data-incoming-proposal-dismiss="${proposalId}" title="Dismiss this proposal">Dismiss</button>`;
         const preparing = proposalReadRequest?.key === String(proposal.id);
         const read = `<button type="button" class="proposal-btn ghost${preparing ? ' is-loading' : ''}" data-incoming-proposal-read="${proposalId}" title="Read this proposal aloud"${proposalReadRequest ? ' disabled' : ''}${preparing ? ' aria-busy="true"' : ''}>${preparing ? 'Preparing...' : 'Read to me'}</button>`;
         const projectKey = actions.escapeHtml(String(proposal.project_id || ''));
-        return `<article class="proposal-card${expired ? ' proposal-expired' : ''}" data-incoming-proposal-open="${proposalId}" data-proposal-project="${needsProject ? '' : projectKey}" draggable="${!needsProject}" tabindex="0" role="button" aria-label="Open evidence for ${actions.escapeHtml(proposal.title || 'proposal')}">
+        return `<article class="proposal-card${expired ? ' proposal-expired' : ''}" data-incoming-proposal-open="${proposalId}" data-proposal-project="${needsProject ? '' : projectKey}" draggable="${!needsProject && !blocked}" tabindex="0" role="button" aria-label="Open evidence for ${actions.escapeHtml(proposal.title || 'proposal')}">
             ${expired ? '<span class="proposal-expired-ribbon">Expired</span>' : ''}
             <div class="proposal-head">
                 <p class="proposal-project${needsProject ? ' none' : ''}">${actions.escapeHtml(needsProject ? 'Confirm project' : project)}</p>
@@ -1452,7 +1458,7 @@ export function createIncoming({ context, actions, el, shared: { fileDropZoneHtm
             ${threadStatus}
             ${proposal.thread_link_error ? `<p class="proposal-desc" role="alert">${actions.escapeHtml(proposal.thread_link_error)}</p>` : ''}
             ${reserved ? `<p class="proposal-desc">${mergeReservationNotice}</p>` : ''}
-            <div class="proposal-actions">${push}${dismiss}${read}<span class="proposal-tools"><button type="button" class="proposal-copy" data-incoming-proposal-copy="${proposalId}" title="Copy title and description" aria-label="Copy title and description"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>${needsProject ? '' : '<span class="proposal-drag" title="Drag onto another proposal on the same project to merge them into one ticket" aria-hidden="true">⠿</span>'}</span></div>
+            <div class="proposal-actions">${push}${dismiss}${read}<span class="proposal-tools"><button type="button" class="proposal-copy" data-incoming-proposal-copy="${proposalId}" title="Copy title and description" aria-label="Copy title and description"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>${needsProject || blocked ? '' : '<span class="proposal-drag" title="Drag onto another proposal on the same project to merge them into one ticket" aria-hidden="true">⠿</span>'}</span></div>
         </article>`;
     }
 

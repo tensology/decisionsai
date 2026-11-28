@@ -280,12 +280,14 @@ class WorkflowOrchestrationMixin:
             ctx = {}
             step_name = ""
             waiting_kind = ""
+            run_ticket_id = None
             try:
                 from distr.core.db import get_session
                 from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep
 
                 with get_session() as db:
                     run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                    run_ticket_id = getattr(run, "ticket_id", None) if run else None
                     if run and run.run_data:
                         import json
 
@@ -305,12 +307,15 @@ class WorkflowOrchestrationMixin:
             ticket_title = str(ctx.get("ticket_title") or "")
             if waiting_kind:
                 from distr.core.kanban.ticket_workflow_engagement import build_workflow_waiting_nudge
+                from distr.core.initiative.approval_notice import primary_surface
 
                 message, voice_message = build_workflow_waiting_nudge(
                     workflow_name=str(ctx.get("workflow_name") or f"Workflow {workflow_id}"),
                     ticket_title=ticket_title,
                     step_name=step_name,
                     waiting_kind=waiting_kind,
+                    ticket_id=run_ticket_id,
+                    surface=primary_surface() or "telegram",
                 )
             else:
                 message = build_workflow_waiting_message(

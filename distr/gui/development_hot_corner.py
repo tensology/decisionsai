@@ -1311,9 +1311,10 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             item.setData(0, QtCore.Qt.ItemDataRole.UserRole, {'kind': 'proposal', 'proposal': proposal})
             section.addChild(item)
             item.setFirstColumnSpanned(True)
-            row = _ExpiredProposalCard() if proposal.get('is_expired') else QtWidgets.QWidget()
+            expired = bool(proposal.get('is_expired'))
+            row = _ExpiredProposalCard() if expired else QtWidgets.QWidget()
             box = QtWidgets.QVBoxLayout(row)
-            box.setContentsMargins(8, 8, 8, 8)
+            box.setContentsMargins(8, 8, 76 if expired else 8, 8)
             box.setSpacing(4)
             title = QtWidgets.QLabel(str(proposal.get('title') or 'Proposal'))
             title.setTextFormat(QtCore.Qt.TextFormat.PlainText)
@@ -1331,11 +1332,20 @@ class DevelopmentHotCornerPanel(QtWidgets.QWidget):
             project.setToolTip(project.text())
             controls.addWidget(project, 1)
             busy = str(proposal.get('id')) in self._proposal_busy
+            approval_managed = (proposal.get('approval_managed') is True
+                                or proposal.get('approval_ticket_id') is not None)
             button = QtWidgets.QPushButton('Starting...' if busy else 'Create thread')
             button.setObjectName('developmentProposalStart')
             button.setAccessibleName(f"Create thread for {proposal.get('title') or 'proposal'}")
-            button.setEnabled(bool(linked_project) and not self._proposal_busy)
-            if not linked_project:
+            button.setEnabled(bool(linked_project) and not self._proposal_busy
+                              and not expired and not approval_managed)
+            if expired:
+                button.setText('Expired')
+                button.setToolTip('This proposal expired. It is kept for the record only.')
+            elif approval_managed:
+                button.setText('Approve in Decisions')
+                button.setToolTip('This is a Decisions code change. Approve it in Decisions; Incoming cannot start it.')
+            elif not linked_project:
                 button.setToolTip('Assign this proposal to a project in Incoming before starting work.')
             button.setStyleSheet('QPushButton { background: #e7e9ed; color: #08090b; border: 0; border-radius: 4px; padding: 6px 8px; font-size: 12px; } QPushButton:disabled { color: #747b87; background: #292e35; }')
             button.clicked.connect(lambda _checked=False, selected=dict(proposal): self._start_proposal(selected))

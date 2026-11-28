@@ -170,6 +170,12 @@ class TelegramRemoteControlMixin:
             return
 
         if api_method == "POST" and "/send-to-agent" in api_path:
+            try:
+                from distr.core.notification_routing import record_surface_activity
+
+                record_surface_activity("remote_request")
+            except Exception:
+                pass
             body = dict(api_body) if isinstance(api_body, dict) else {}
             body["origin_surface"] = "remote"
             body["origin_request_id"] = str(request_id or "")
@@ -510,6 +516,8 @@ class TelegramRemoteControlMixin:
             from distr.core.notification_routing import record_surface_activity
 
             record_surface_activity("remote")
+            if data.get("command") in {"instruction", "voice_text_input", "voice_transcribe"}:
+                record_surface_activity("remote_request")
         except Exception:
             pass
 

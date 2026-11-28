@@ -1097,6 +1097,12 @@ class AgentSession:
 
     def _on_dictation_hotkey_pressed(self):
         try:
+            from distr.core.notification_routing import record_surface_activity
+
+            record_surface_activity("desktop", metadata={"via": "dictation_hotkey"})
+        except Exception:
+            pass
+        try:
             if self.llm_service and hasattr(self.llm_service, '_start_dictation'):
                 self.llm_service._start_dictation(one_shot=False, output_mode="context")
         except Exception as e:

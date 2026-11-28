@@ -6,16 +6,26 @@ the user is interacting, then proactive services choose the freshest surface.
 
 from __future__ import annotations
 
+import logging
 import time
 import json
+import math
+import os
 from dataclasses import dataclass
 from typing import Any
 
+
+logger = logging.getLogger(__name__)
+
+# How long an interaction counts as recent.
+DEFAULT_PRESENCE_WINDOW_S = 600.0
 
 SURFACES = {
     "desktop",
     "telegram",
     "remote",
+    # A voice / agent request from the remote app (not just the page being open).
+    "remote_request",
     "cursor",
     "codex",
     "browser",
@@ -99,8 +109,11 @@ def _read_activity() -> dict[str, float]:
 
 
 def _all_activity() -> dict[str, float]:
+    # Several processes (GUI, agent, web) record activity: the newest stamp per surface wins.
     merged = _read_activity()
-    merged.update(_activity)
+    for surface, ts in _activity.items():
+        if ts > merged.get(surface, 0.0):
+            merged[surface] = ts
     return merged
 
 
@@ -139,18 +152,22 @@ def _connected_telegram(manager: Any) -> bool:
 
 
 def _recent_remote_context(manager: Any, now: float, window_s: float) -> bool:
-    try:
-        from distr.core.integrations.telegram.remote_tts_delivery import is_remote_delivery_available
-
-        if is_remote_delivery_available(manager, now=now, window_s=window_s):
-            return True
-    except Exception:
-        pass
+    """True when the agent still owes the remote app a reply (a pending remote request)."""
     ctx = getattr(manager, "_pending_remote_agent_response", None) if manager is not None else None
-    if not isinstance(ctx, dict):
-        return False
-    created = float(ctx.get("created_at") or 0)
-    return bool(created and now - created <= window_s)
+    if isinstance(ctx, dict):
+        created = float(ctx.get("created_at") or 0)
+        if created and now - created <= window_s:
+            return True
+    return False
+
+
+def presence_window_s() -> float:
+    """Read the deployment's presence window in seconds, defaulting to 10 minutes."""
+    try:
+        value = float(os.environ.get("DECISIONS_NOTIFICATION_PRESENCE_WINDOW_S", DEFAULT_PRESENCE_WINDOW_S))
+    except ValueError:
+        return DEFAULT_PRESENCE_WINDOW_S
+    return value if math.isfinite(value) and value > 0 else DEFAULT_PRESENCE_WINDOW_S
 
 
 def choose_notification_route(
@@ -158,37 +175,60 @@ def choose_notification_route(
     telegram_manager: Any = None,
     allow_telegram: bool = False,
     now: float | None = None,
-    active_window_s: float = 300.0,
+    active_window_s: float | None = None,
+    strict_presence: bool = False,
 ) -> NotificationRoute | None:
+    """Pick the user's current surface and log the reason.
+
+    Approval asks require both remote presence and recent remote interaction.
+    Other callers can still use an open remote app or idle Telegram as a fallback.
+    """
     now = float(now if now is not None else time.time())
-
-    candidates: list[tuple[float, str, str]] = []
+    window = float(active_window_s) if active_window_s else presence_window_s()
     activity = _all_activity()
-    for surface in SURFACES:
+
+    def age(surface: str) -> float | None:
         ts = activity.get(surface)
-        if ts is not None and now - ts <= active_window_s:
-            if surface in LOCAL_ACTIVITY_SURFACES:
-                candidates.append((ts, "desktop", surface))
-            elif surface == "telegram":
-                candidates.append((ts, "telegram", surface))
-            elif surface == "remote":
-                candidates.append((ts, "remote", surface))
+        return None if ts is None else now - ts
 
-    if _recent_remote_context(telegram_manager, now, active_window_s):
-        return NotificationRoute("remote", "remote control is awaiting an agent response")
+    def recent(surface: str) -> bool:
+        a = age(surface)
+        return a is not None and a <= window
 
-    if candidates:
-        candidates.sort(reverse=True)
-        for _ts, delivery_surface, activity_surface in candidates:
-            if delivery_surface == "telegram" and not (allow_telegram and _connected_telegram(telegram_manager)):
-                continue
-            if delivery_surface == "desktop" and activity_surface != "desktop":
-                return NotificationRoute("desktop", f"{activity_surface} was the most recent active local surface")
-            return NotificationRoute(delivery_surface, f"{activity_surface} was the most recent active surface")
+    ages = {k: int(v) for k in sorted(SURFACES) if (v := age(k)) is not None and v <= window * 3}
 
+    def chosen(surface: str, reason: str) -> NotificationRoute:
+        logger.info("presence routing: surface=%s reason=%s window_s=%d ages_s=%s", surface, reason, int(window), ages)
+        return NotificationRoute(surface, reason)
+
+    remote_open = recent("remote")             # the remote app is open (page presence)
+    remote_command = recent("remote_request")  # he made a remote voice / agent request
+    awaiting_reply = _recent_remote_context(telegram_manager, now, window)
+    if strict_presence:
+        if remote_open and (remote_command or awaiting_reply):
+            return chosen("remote", "the remote app is open and recently used")
+        if recent("telegram") and allow_telegram and _connected_telegram(telegram_manager):
+            return chosen("telegram", "the user recently messaged on Telegram")
+        return chosen("desktop", "no active remote app or recent Telegram message")
+
+    if awaiting_reply:
+        return chosen("remote", "remote control is awaiting an agent response")
+    if remote_command:
+        return chosen("remote", "he made a remote request recently")
+
+    if recent("telegram") and allow_telegram and _connected_telegram(telegram_manager):
+        return chosen("telegram", "telegram was the most recent active surface")
+
+    local = [(activity[s], s) for s in LOCAL_ACTIVITY_SURFACES if recent(s)]
+    if local:
+        local.sort(reverse=True)
+        return chosen("desktop", f"{local[0][1]} was the most recent active local surface")
+
+    if remote_open:
+        return chosen("remote", "the remote app is open and nothing else is active")
     if allow_telegram and _connected_telegram(telegram_manager):
-        return NotificationRoute("telegram", "no local surface is active, using Telegram fallback")
-
+        return chosen("telegram", "no remote or local surface is active, using Telegram fallback")
+    logger.info("presence routing: no active surface (ages_s=%s)", ages)
     return None
 
 
