@@ -395,9 +395,10 @@ def record_card_message(key: str, message_id: Any, chat_id: Any = None) -> None:
 
 
 def edit_telegram(text: str, *, message_id: Any, chat_id: Any = None,
-                  reply_markup: dict | None = None, settings: dict[str, Any] | None = None) -> bool:
+                  reply_markup: dict | None = None, settings: dict[str, Any] | None = None,
+                  require_toggle: bool = True) -> bool:
     settings = load_settings() if settings is None else settings
-    if not telegram_allowed(settings):
+    if require_toggle and not telegram_allowed(settings):
         return False
     manager = _telegram_manager()
     if not manager or not hasattr(manager, "edit_telegram_message"):
@@ -2227,7 +2228,7 @@ def handle_telegram_text(text: str, *, chat_id: Any = None,
                 return {"text": "Review the proposal in your paired private Telegram chat. Nothing changed."}
             from distr.core.initiative.pi_write_proposals import decide
 
-            return decide(key, action)
+            return decide(key, action, telegram_message_id=telegram_message_id, telegram_chat_id=chat_id)
         return _handle_flow_action(key, action, telegram_message_id=telegram_message_id, telegram_chat_id=chat_id)
     claimed = handle_pending_rework(raw, chat_id=chat_id, telegram_message_id=telegram_message_id, source="text")
     if claimed:

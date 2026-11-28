@@ -278,14 +278,14 @@ def fetch_pending_work_requests(*, include_decided: bool = False, strict: bool =
 
 
 def decide_work_request(proposal_id: int, action: str, *, source: str = "", telegram_chat_id: int | str | None = None,
-                        merge_revision: str | None = None) -> dict[str, Any]:
-    """Queue, send to Decisions, or dismiss one pending Tensology proposal."""
+                        merge_revision: str | None = None, decisions_ticket_id: int | None = None) -> dict[str, Any]:
+    """Queue, send to Decisions, dismiss, or mark a Decisions-origin proposal as already accepted."""
     normalized = str(action or "").strip().lower()
     aliases = {"run": "send_to_decisions", "ticket": "queue", "queue": "queue",
                "dismiss": "dismiss", "send": "send_to_decisions", "send_to_decisions": "send_to_decisions"}
     resolved = aliases.get(normalized, normalized)
-    if resolved not in {"queue", "send_to_decisions", "dismiss"}:
-        raise TensologyApiError("Action must be run, queue, or dismiss.", code="invalid_action")
+    if resolved not in {"queue", "send_to_decisions", "dismiss", "accept_linked"}:
+        raise TensologyApiError("Action must be run, queue, dismiss, or accept_linked.", code="invalid_action")
     client = configured_tensology_client()
     body = {"action": resolved}
     if merge_revision is not None:
@@ -293,6 +293,8 @@ def decide_work_request(proposal_id: int, action: str, *, source: str = "", tele
             raise ValueError("The saved source revision is invalid. Review the merge before retrying.")
         # An older server must reject the request rather than ignore the guard.
         body = {"action": "dismiss_merge_source", "merge_revision": merge_revision}
+    if decisions_ticket_id is not None:
+        body["decisions_ticket_id"] = int(decisions_ticket_id)
     if source == "telegram":
         from distr.core.incoming.telegram_updates import _recipient_id
 

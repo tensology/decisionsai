@@ -186,6 +186,12 @@ def handle_work_request_signal(event: Any) -> None:
             record_remote_proposal_decision(event)
         except Exception:
             logger.debug("Recording remote proposal decision failed", exc_info=True)
+        try:
+            from distr.core.initiative.pi_write_proposals import handle_remote_decision
+
+            handle_remote_decision(event)
+        except Exception:
+            logger.debug("Handling Decisions-origin proposal decision failed", exc_info=True)
         return
     if kind != "proposal_created" or status != "pending":
         return

@@ -48,12 +48,18 @@ def store(monkeypatch):
 @pytest.fixture(autouse=True)
 def no_tensology(monkeypatch):
     """Never reach the real Tensology: record what would be mirrored or dismissed."""
-    calls = SimpleNamespace(posted=[], dismissed=[])
+    calls = SimpleNamespace(posted=[], dismissed=[], accepted=[], edits=[])
     monkeypatch.setattr("distr.core.initiative.pi_write_proposals._default_post_incoming",
                         lambda payload, key: calls.posted.append((payload, key)) or {"id": 9001})
     monkeypatch.setattr("distr.core.initiative.pi_write_proposals._default_dismiss_incoming",
                         lambda tid: calls.dismissed.append(tid))
-    monkeypatch.setattr("distr.core.initiative.pi_write_proposals._default_notify", lambda text, markup: True)
+    monkeypatch.setattr("distr.core.initiative.pi_write_proposals._default_accept_incoming",
+                        lambda tid, ticket=None: calls.accepted.append((tid, ticket)))
+    monkeypatch.setattr("distr.core.initiative.pi_write_proposals._default_notify",
+                        lambda text, markup: {"ok": True, "message_id": 777, "chat_id": 555})
+    monkeypatch.setattr("distr.core.initiative.pi_write_proposals._default_edit_card",
+                        lambda text, mid, cid: calls.edits.append((text, mid, cid)) or True)
+    calls.accepted, calls.edits = [], []
     return calls
 
 
@@ -306,8 +312,8 @@ def test_pi_write_proposal_files_a_backlog_ticket_and_waits_for_approval(store, 
     started = []
     reply = pw.decide(tid, "approve", start=lambda t: started.append(t) or "Ticket is running.\n\nREFERENCE:\nx")
     assert started == [tid] and reply["text"].startswith("Approved. Ticket is running.")
-    assert pw.decide(tid, "approve", start=lambda t: started.append(t))["text"].endswith("Nothing changed.")
-    assert started == [tid]
+    again = pw.decide(tid, "approve", start=lambda t: started.append(t))
+    assert "already approved" in again["text"] and started == [tid]
 
 
 def test_declined_pi_write_proposal_starts_nothing(store, monkeypatch, tmp_path):
@@ -327,9 +333,9 @@ def test_telegram_card_buttons_reach_the_pi_write_decision(monkeypatch):
 
     seen = []
     monkeypatch.setattr("distr.core.initiative.pi_write_proposals.decide",
-                        lambda key, action: seen.append((key, action)) or {"text": "ok"})
+                        lambda key, action, **k: seen.append((key, action, k.get("telegram_chat_id"))) or {"text": "ok"})
     assert outcome_flow.handle_telegram_text("pw:123:approve", chat_id=555) == {"text": "ok"}
-    assert seen == [("123", "approve")]
+    assert seen == [("123", "approve", 555)]
 
 
 def test_pi_agent_files_a_proposal_for_writes_and_runs_reads_read_only(monkeypatch):
@@ -470,3 +476,81 @@ def test_tensology_outage_does_not_stop_the_telegram_card(store, monkeypatch, tm
                                  _sync=True, _session_provider=store)
     assert out["status"] == "proposed" and out["card_sent"] is True
     assert "tensology_id" not in pw.get(out["ticket_id"])
+
+
+# Approving on Telegram marks Tensology accepted; Tensology send dispatches only once --------
+
+def test_telegram_approve_marks_the_tensology_item_accepted_and_edits_the_card(
+        store, monkeypatch, tmp_path, no_tensology):
+    from distr.core.initiative import pi_write_proposals as pw
+
+    monkeypatch.setenv("DECISIONS_DB_DIR", str(tmp_path))
+    ids = _seed(store)
+    out = pw.file_write_proposal(ids.project, "Synthetic Shop", "Swap the payment provider",
+                                 _sync=True, _session_provider=store)
+    tid = out["ticket_id"]
+    started = []
+    reply = pw.decide(tid, "approve", start=lambda t: started.append(t) or "Ticket is running.")
+    assert started == [tid]
+    assert no_tensology.accepted == [(9001, tid)]
+    assert no_tensology.dismissed == []
+    assert pw.get(tid)["dispatched"] is True
+    assert pw.get(tid)["dispatch_key"] == f"pi-write-dispatch-{tid}"
+    assert reply.get("suppress") is True and reply.get("edit_message_id") == 777
+    assert "This card is closed." in reply["text"]
+    assert no_tensology.edits and "This card is closed." in no_tensology.edits[0][0]
+    # A later Tensology "sent" event must not start it again.
+    pw.handle_remote_decision({"request_id": 9001, "status": "sent_to_decisions", "event": "proposal_decided"},
+                              start=lambda t: started.append(t))
+    assert started == [tid]
+
+
+def test_tensology_send_edits_the_card_and_dispatches_only_once(store, monkeypatch, tmp_path, no_tensology):
+    from distr.core.initiative import pi_write_proposals as pw
+
+    monkeypatch.setenv("DECISIONS_DB_DIR", str(tmp_path))
+    ids = _seed(store)
+    out = pw.file_write_proposal(ids.project, "Synthetic Shop", "Replace the card form",
+                                 _sync=True, _session_provider=store)
+    tid = out["ticket_id"]
+    started = []
+    reply = pw.handle_remote_decision(
+        {"request_id": 9001, "status": "sent_to_decisions", "event": "proposal_decided",
+         "thread_id": f"decisions:decisions-ticket-{tid}"},
+        start=lambda t: started.append(t) or "Ticket is running.",
+    )
+    assert started == [tid]
+    assert "Approved." in reply["text"] and reply.get("suppress") is True
+    assert pw.get(tid)["status"] == "approved" and pw.get(tid)["dispatched"] is True
+    again = pw.decide(tid, "approve", start=lambda t: started.append(t))
+    assert started == [tid] and "already approved" in again["text"]
+    # An unknown Tensology proposal is ignored.
+    assert pw.handle_remote_decision({"request_id": 42, "status": "sent_to_decisions",
+                                      "event": "proposal_decided"}, start=lambda t: started.append(t)) is None
+    assert started == [tid]
+
+
+def test_work_request_stream_routes_a_decisions_origin_decision(monkeypatch, tmp_path):
+    from distr.core.initiative import pi_write_proposals as pw
+    from distr.core.tensology_stream import handle_work_request_signal
+
+    monkeypatch.setenv("DECISIONS_DB_DIR", str(tmp_path))
+    seen = []
+    monkeypatch.setattr(pw, "handle_remote_decision", lambda event, **k: seen.append(event) or {"text": "ok"})
+    monkeypatch.setattr("distr.core.incoming.proposals.record_remote_proposal_decision", lambda event: None)
+    handle_work_request_signal({"request_id": 9001, "status": "sent_to_decisions", "event": "proposal_decided"})
+    assert seen and seen[0]["request_id"] == 9001
+
+
+def test_remote_dismiss_closes_the_card_without_starting(store, monkeypatch, tmp_path, no_tensology):
+    from distr.core.initiative import pi_write_proposals as pw
+
+    monkeypatch.setenv("DECISIONS_DB_DIR", str(tmp_path))
+    ids = _seed(store)
+    out = pw.file_write_proposal(ids.project, "Synthetic Shop", "Remove the old banner",
+                                 _sync=True, _session_provider=store)
+    started = []
+    reply = pw.handle_remote_decision({"request_id": 9001, "status": "dismissed", "event": "proposal_decided"},
+                                      start=lambda t: started.append(t))
+    assert started == [] and pw.get(out["ticket_id"])["status"] == "declined"
+    assert reply.get("suppress") is True and "Declined." in reply["text"]

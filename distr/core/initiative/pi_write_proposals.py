@@ -123,6 +123,76 @@ def _default_dismiss_incoming(tensology_id: int) -> Any:
     return decide_work_request(int(tensology_id), "dismiss")
 
 
+def _default_accept_incoming(tensology_id: int, decisions_ticket_id: int | None = None) -> Any:
+    from distr.core.tensology_client import decide_work_request
+
+    return decide_work_request(int(tensology_id), "accept_linked", decisions_ticket_id=decisions_ticket_id)
+
+
+def _default_edit_card(text: str, message_id: Any, chat_id: Any) -> bool:
+    if not message_id:
+        return False
+    from distr.core.initiative import outcome_flow as of
+
+    return of.edit_telegram(text, message_id=message_id, chat_id=chat_id, require_toggle=False)
+
+
+def _as_telegram_id(value: Any) -> int | None:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def _remember_card(ticket_id: int, message_id: Any = None, chat_id: Any = None) -> None:
+    mid, cid = _as_telegram_id(message_id), _as_telegram_id(chat_id)
+    if mid is None and cid is None:
+        return
+    with _LOCK:
+        state = _load()
+        rec = state.get(str(ticket_id))
+        if rec is None:
+            return
+        if mid is not None:
+            rec["telegram_message_id"] = mid
+        if cid is not None:
+            rec["telegram_chat_id"] = cid
+        _save(state)
+
+
+def _last_telegram_ids() -> tuple[Any, Any]:
+    try:
+        from distr.core.initiative import outcome_flow as of
+
+        manager = of._telegram_manager()
+        if not manager:
+            return None, None
+        return getattr(manager, "last_telegram_message_id", None), getattr(manager, "last_telegram_chat_id", None)
+    except Exception:
+        return None, None
+
+
+def _resolve_card(rec: dict[str, Any] | None, ticket_id: int, *, text: str,
+                  telegram_message_id: Any = None, telegram_chat_id: Any = None,
+                  edit: Callable[..., bool] | None = None) -> dict[str, Any]:
+    """Edit the Approve / Decline card to show it is handled, and drop its buttons."""
+    mid = _as_telegram_id(telegram_message_id) or _as_telegram_id((rec or {}).get("telegram_message_id"))
+    cid = _as_telegram_id(telegram_chat_id) or _as_telegram_id((rec or {}).get("telegram_chat_id"))
+    _remember_card(ticket_id, mid, cid)
+    edited = False
+    try:
+        edited = bool((edit or _default_edit_card)(text, mid, cid)) if mid else False
+    except Exception:
+        logger.warning("pi write proposal: could not edit Telegram card for ticket %s", ticket_id, exc_info=True)
+        edited = False
+    out: dict[str, Any] = {"text": text, "reply_markup": {"inline_keyboard": []}}
+    if edited:
+        out["suppress"] = True
+        out["edit_message_id"] = mid
+    return out
+
+
 def _mirror_to_incoming(ticket_id: int, project_id: int, title: str, instruction: str,
                         post: Callable[[dict[str, Any], str], dict[str, Any]]) -> None:
     """Put the proposal in Tensology's Incoming too (its own "decisions" item). Best effort; never raises.
@@ -162,11 +232,19 @@ def _announce(ticket_id: int, project_id: int, project_name: str, title: str, in
     ]]}
     card = (f"Proposal for {project_name} (ticket #{ticket_id}): {title}\n\n"
             f"{str(instruction).strip()[:1500]}\n\nNothing has been changed. Approve to start it.")
+    mid = cid = None
     try:
-        sent = bool((notify or _default_notify)(card, markup))
+        result = (notify or _default_notify)(card, markup)
+        if isinstance(result, dict):
+            sent = bool(result.get("ok", True))
+            mid, cid = result.get("message_id"), result.get("chat_id")
+        else:
+            sent = bool(result)
+            mid, cid = _last_telegram_ids()
     except Exception:
         logger.warning("pi write proposal: Telegram card failed for ticket %s", ticket_id, exc_info=True)
         sent = False
+    _remember_card(ticket_id, mid, cid)
     args = (ticket_id, project_id, title, instruction, post_incoming or _default_post_incoming)
     if sync:
         _mirror_to_incoming(*args)
@@ -251,23 +329,30 @@ def request_ticket_approval(ticket_id: int, project_id: int, project_name: str, 
 
 
 def decide(ticket_id: Any, decision: str, *, start: Callable[[int], str] | None = None,
-           dismiss_incoming: Callable[[int], Any] | None = None) -> dict[str, Any]:
-    """Apply Paul's Approve / Decline from the card. Approve sends the ticket to the CLI once."""
+           dismiss_incoming: Callable[[int], Any] | None = None,
+           accept_incoming: Callable[..., Any] | None = None,
+           telegram_message_id: Any = None, telegram_chat_id: Any = None,
+           edit_card: Callable[..., bool] | None = None) -> dict[str, Any]:
+    """Apply Paul's Approve / Decline (Telegram card or Tensology Incoming). Dispatch at most once."""
     if decision not in {"approve", "decline"}:
         return {"text": "Choose Approve or Decline on the proposal card."}
     try:
         tid = int(ticket_id)
     except (TypeError, ValueError):
         return {"text": "That proposal reference is not valid. Nothing changed."}
+    _remember_card(tid, telegram_message_id, telegram_chat_id)
     with _LOCK:
         state = _load()
         rec = state.get(str(tid))
         if rec is None:
             return {"text": "I don't have that proposal. Nothing changed."}
         if rec.get("status") != "pending":
-            return {"text": f"Ticket #{tid} was already {rec.get('status')}. Nothing changed."}
+            text = f"Handled. Ticket #{tid} was already {rec.get('status')}. This card is closed."
+            return _resolve_card(rec, tid, text=text, telegram_message_id=telegram_message_id,
+                                 telegram_chat_id=telegram_chat_id, edit=edit_card)
         rec["status"] = "approved" if decision == "approve" else "declined"
         rec["decided"] = time.time()
+        rec["dispatch_key"] = f"pi-write-dispatch-{tid}"
         _save(state)
     title = rec.get("title") or f"ticket #{tid}"
     if decision == "decline":
@@ -278,8 +363,10 @@ def decide(ticket_id: Any, decision: str, *, start: Callable[[int], str] | None 
                 (dismiss_incoming or _default_dismiss_incoming)(int(rec["tensology_id"]))
             except Exception:
                 logger.warning("pi write proposal: could not dismiss Tensology item %s", rec.get("tensology_id"), exc_info=True)
-        return {"text": f"Declined. Ticket #{tid} was not started and nothing was changed."}
-    logger.info("pi write proposal approved: ticket=%s", tid)
+        text = f"Declined. Ticket #{tid} was not started and nothing was changed. This card is closed."
+        return _resolve_card(rec, tid, text=text, telegram_message_id=telegram_message_id,
+                             telegram_chat_id=telegram_chat_id, edit=edit_card)
+    logger.info("pi write proposal approved: ticket=%s key=pi-write-dispatch-%s", tid, tid)
     try:
         if start is not None:
             out = start(tid)
@@ -293,7 +380,70 @@ def decide(ticket_id: Any, decision: str, *, start: Callable[[int], str] | None 
             state = _load()
             if str(tid) in state:
                 state[str(tid)]["status"] = "pending"
+                state[str(tid)].pop("dispatch_key", None)
                 _save(state)
         return {"text": f"Approved, but ticket #{tid} could not be started. It is still waiting; try Approve again."}
+    with _LOCK:
+        state = _load()
+        if str(tid) in state:
+            state[str(tid)]["dispatched"] = True
+            state[str(tid)]["dispatched_at"] = time.time()
+            _save(state)
+            rec = state[str(tid)]
+    if rec.get("tensology_id"):
+        try:
+            (accept_incoming or _default_accept_incoming)(int(rec["tensology_id"]), tid)
+        except Exception:
+            logger.warning("pi write proposal: could not mark Tensology item %s as accepted", rec.get("tensology_id"), exc_info=True)
     spoken = str(out or "").split("\n", 1)[0].strip()
-    return {"text": f"Approved. {spoken}" if spoken else f"Approved. Ticket #{tid} has started."}
+    text = (f"Approved. {spoken}" if spoken else f"Approved. Ticket #{tid} has started.")
+    if "This card is closed." not in text:
+        text = text.rstrip(".") + ". This card is closed."
+    return _resolve_card(rec, tid, text=text, telegram_message_id=telegram_message_id,
+                         telegram_chat_id=telegram_chat_id, edit=edit_card)
+
+
+def _ticket_for_remote_event(event: dict[str, Any]) -> int | None:
+    raw = event.get("request_id") if event.get("request_id") is not None else event.get("id")
+    try:
+        tensology_id = int(raw) if raw not in (None, "") else None
+    except (TypeError, ValueError):
+        tensology_id = None
+    thread = str(event.get("thread_id") or event.get("source_thread_id") or "")
+    with _LOCK:
+        state = _load()
+        if tensology_id is not None:
+            for key, rec in state.items():
+                if isinstance(rec, dict) and rec.get("tensology_id") == tensology_id:
+                    try:
+                        return int(key)
+                    except (TypeError, ValueError):
+                        return None
+        match = re.fullmatch(r"decisions:decisions-ticket-(\d+)", thread)
+        if match and match.group(1) in state:
+            return int(match.group(1))
+    return None
+
+
+def handle_remote_decision(event: Any, *, start: Callable[[int], str] | None = None,
+                           edit_card: Callable[..., bool] | None = None) -> dict[str, Any] | None:
+    """A Tensology Incoming decision on a Decisions-origin proposal: resolve the card and dispatch once.
+
+    Approve / send marks the local proposal approved and starts the existing ticket if it has not
+    already been started. Dismiss leaves it declined. Unknown events are ignored. Never raises.
+    """
+    try:
+        if not isinstance(event, dict):
+            return None
+        tid = _ticket_for_remote_event(event)
+        if tid is None:
+            return None
+        status = str(event.get("status") or "").strip().lower()
+        if status == "dismissed":
+            return decide(tid, "decline", start=start, edit_card=edit_card)
+        if status in {"approved", "sent_to_decisions"}:
+            return decide(tid, "approve", start=start, edit_card=edit_card)
+        return None
+    except Exception:
+        logger.warning("pi write proposal: remote decision failed", exc_info=True)
+        return None
