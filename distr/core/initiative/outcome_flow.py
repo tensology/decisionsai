@@ -241,6 +241,7 @@ def save_flow(key: str, *, expected_status: str | None = None, **fields: Any) ->
         flow.update(fields)
         flow["updated"] = time.time()
         flow.setdefault("created", flow["updated"])
+        flow.setdefault("key", key)
         flows[key] = flow
         _save_state(state)
         return flow
@@ -360,6 +361,9 @@ REWORK_PROMPT = "What should I change?"
 CANCELLED_REPLACED_TEXT = "Cancelled — replaced by newer card"
 SUPERSEDED_TEXT = CANCELLED_REPLACED_TEXT
 FORCE_REPLY = {"force_reply": True, "selective": True}
+# A Rework prompt waits this long for an answer. After that a message is no longer taken as the
+# answer, so an old tap cannot swallow what Paul says next.
+REWORK_TTL_S = 20 * 60
 _TERMINAL_FLOW = {"sent", "sending", "unconfirmed", "superseded", "cancelled"}
 
 
@@ -425,7 +429,7 @@ def _retire_other_cards(flow: dict[str, Any] | None, keep_id: Any, chat_id: Any 
     for other in (flow or {}).get("telegram_message_ids") or []:
         oid = _as_telegram_id(other)
         if oid and oid != keep:
-            edit_telegram(CANCELLED_REPLACED_TEXT, message_id=oid, chat_id=cid)
+            _edit_card_once(flow, oid, CANCELLED_REPLACED_TEXT, cid)
 
 
 def _reply_on_card(text: str, *, message_id: Any = None, chat_id: Any = None,
@@ -448,11 +452,29 @@ def _reply_on_card(text: str, *, message_id: Any = None, chat_id: Any = None,
     return out
 
 
+def _edit_card_once(flow: dict[str, Any] | None, mid: Any, text: str, chat_id: Any = None) -> bool:
+    """Edit a card to ``text`` unless it already shows it.
+
+    Telegram answers 400 "message is not modified" for a repeat edit, which used to
+    log four relay errors per rework and could not tell a real failure from a repeat.
+    """
+    key = (flow or {}).get("key")
+    current = (get_flow(key) if key else flow) or flow or {}
+    done = dict(current.get("edited_cards") or {})
+    if done.get(str(mid)) == text:
+        return True
+    ok = edit_telegram(text, message_id=mid, chat_id=chat_id)
+    if ok and key:
+        done[str(mid)] = text
+        save_flow(key, edited_cards=done)
+    return ok
+
+
 def _edit_flow_cards(key: str, flow: dict[str, Any] | None = None, text: str = SUPERSEDED_TEXT) -> None:
     flow = flow or get_flow(key) or {}
     chat_id = flow.get("telegram_chat_id")
     for mid in flow.get("telegram_message_ids") or []:
-        edit_telegram(text, message_id=mid, chat_id=chat_id)
+        _edit_card_once({**flow, "key": flow.get("key") or key}, mid, text, chat_id)
 
 
 def _supersede_flow(key: str, flow: dict[str, Any] | None = None, *, status: str = "superseded") -> dict[str, Any] | None:
@@ -463,7 +485,9 @@ def _supersede_flow(key: str, flow: dict[str, Any] | None = None, *, status: str
 
 def latest_awaiting_rework() -> tuple[str, dict[str, Any]] | None:
     flows = _load_state().get("flows") or {}
-    open_flows = [(k, v) for k, v in flows.items() if v.get("status") == "awaiting_rework"]
+    now = time.time()
+    open_flows = [(k, v) for k, v in flows.items()
+                  if v.get("status") == "awaiting_rework" and now - float(v.get("updated", 0)) < REWORK_TTL_S]
     if not open_flows:
         return None
     return max(open_flows, key=lambda kv: float(kv[1].get("updated", 0)))
@@ -2197,9 +2221,9 @@ def handle_telegram_text(text: str, *, chat_id: Any = None,
         if kind == "ip":
             return decide_proposal(key, action, chat_id=chat_id)
         return _handle_flow_action(key, action, telegram_message_id=telegram_message_id, telegram_chat_id=chat_id)
-    pending = latest_awaiting_rework()
-    if pending and chat_id is not None:
-        return apply_rework_instruction(pending[0], pending[1], raw)
+    claimed = handle_pending_rework(raw, chat_id=chat_id, telegram_message_id=telegram_message_id, source="text")
+    if claimed:
+        return claimed
     # Only button presses: plain "yes"/"no" stay with their existing handlers.
     if raw.lower().startswith("wi:"):
         settings = load_settings()
@@ -2275,11 +2299,16 @@ def _begin_rework(key: str, flow: dict[str, Any], status: str) -> dict[str, Any]
         return {"text": REWORK_PROMPT, "reply_markup": FORCE_REPLY}
     if not save_flow(key, expected_status=status, status="awaiting_rework"):
         return _handle_flow_action(key, "rework")
-    _edit_flow_cards(key, get_flow(key) or flow)
+    _edit_flow_cards(
+        key, get_flow(key) or flow,
+        text=(f"Reworking the message to {flow.get('client') or 'the client'}. Say what to change.\n\n"
+              f"\u201c{flow.get('body') or ''}\u201d"),
+    )
     return {"text": REWORK_PROMPT, "reply_markup": FORCE_REPLY, "interaction_token": f"{OC_CARD_PREFIX}{key}"}
 
 
-def apply_rework_instruction(key: str, flow: dict[str, Any], instruction: str) -> dict[str, Any]:
+def apply_rework_instruction(key: str, flow: dict[str, Any], instruction: str, *,
+                             dictated: str = "", newer_inbound: list[str] | None = None) -> dict[str, Any]:
     """Redraft the held client reply and send a fresh confirm card. Never sends to the client."""
     if flow.get("status") != "awaiting_rework":
         return {"text": "That draft is no longer waiting for a change. Nothing was sent."}
@@ -2287,7 +2316,10 @@ def apply_rework_instruction(key: str, flow: dict[str, Any], instruction: str) -
 
     body = str(flow.get("body") or "")
     try:
-        new_text = compose_rework_text(body, instruction, client=str(flow.get("client") or ""))
+        new_text = compose_rework_text(
+            body, f"say: {dictated}" if dictated else instruction,
+            client=str(flow.get("client") or ""), newer_inbound=newer_inbound,
+        )
     except Exception as exc:
         logger.warning("Client reply rework failed", exc_info=True)
         return {"text": f"I couldn't rework that just now: {str(exc)[:200]}. Tell me what to change."}
@@ -2329,6 +2361,188 @@ def apply_rework_instruction(key: str, flow: dict[str, Any], instruction: str) -
         return {"text": "I couldn't open a new confirm card. Tell me what to change."}
     _supersede_flow(key, flow)
     return {"suppress": True}
+
+
+_CALLBACKISH = re.compile(r"^(?:oc|ip|ac|wf|wi|wa|wv|wd|tns):\S+$")
+_SEEN_CAP = 40
+_SEEN_TTL_S = 3600
+
+
+def _seen_message(token: str) -> str:
+    """'handled' or 'released' if this message was already decided, else ''."""
+    entry = ((_load_state().get("rework_seen") or {}).get(token) or {})
+    return str(entry.get("kind") or "") if time.time() - float(entry.get("ts", 0)) < _SEEN_TTL_S else ""
+
+
+def _mark_message(token: str, kind: str) -> None:
+    """Remember the decision across a restart and after the flow it belonged to is gone."""
+    with _LOCK:
+        state = _load_state()
+        now = time.time()
+        seen = {t: e for t, e in (state.get("rework_seen") or {}).items()
+                if isinstance(e, dict) and now - float(e.get("ts", 0)) < _SEEN_TTL_S}
+        seen[token] = {"kind": kind, "ts": now}
+        state["rework_seen"] = dict(sorted(seen.items(), key=lambda kv: kv[1]["ts"])[-_SEEN_CAP:])
+        _save_state(state)
+
+
+def _run_in_background(fn) -> None:
+    """Run ``fn`` off the UI thread. Tests replace this to run inline."""
+    threading.Thread(target=fn, name="telegram-rework", daemon=True).start()
+
+
+def newer_client_messages(flow: dict[str, Any], limit: int = 3) -> list[str]:
+    """What the client said in the same thread after the message this draft answers.
+
+    A reply to a newer client message must not be mistaken for an edit to an older draft.
+    """
+    dest = flow.get("destination") if isinstance(flow.get("destination"), dict) else {}
+    jid = str(dest.get("jid") or "")
+    if not jid or flow.get("source") != "whatsapp":
+        return []
+    try:
+        from distr.core.db import WhatsAppMessage, get_session
+
+        with get_session() as db:
+            base = 0
+            for mid in dest.get("source_message_ids") or []:
+                row = db.query(WhatsAppMessage).filter(WhatsAppMessage.message_id == str(mid)).first()
+                if row is not None and row.whatsapp_timestamp:
+                    base = max(base, int(row.whatsapp_timestamp))
+            if not base:
+                return []
+            rows = (db.query(WhatsAppMessage)
+                    .filter(WhatsAppMessage.jid == jid, WhatsAppMessage.from_me.is_(False),
+                            WhatsAppMessage.whatsapp_timestamp > base)
+                    .order_by(WhatsAppMessage.whatsapp_timestamp.asc()).limit(limit).all())
+            return [f"{r.sender_push_name or 'Client'}: {str(r.text or r.caption or '').strip()[:300]}"
+                    for r in rows if str(r.text or r.caption or "").strip()]
+    except Exception:
+        logger.debug("outcome_flow: newer client messages unavailable", exc_info=True)
+        return []
+
+
+def _classify_rework(raw: str, flow: dict[str, Any], newer: list[str]) -> dict[str, str]:
+    from distr.core.incoming.telegram_reply_intent import classify_rework_reply
+
+    other = False
+    try:
+        other = _names_other_work(raw, flow)
+    except Exception:
+        logger.debug("outcome_flow: other-work check failed", exc_info=True)
+    return classify_rework_reply(
+        raw, draft=str(flow.get("body") or ""), client=str(flow.get("client") or ""),
+        answering=str(flow.get("answering") or ""), newer_inbound=newer, other_work=other,
+    )
+
+
+def handle_pending_rework(text: str, *, chat_id: Any = None, telegram_message_id: Any = None,
+                          source: str = "text") -> dict[str, Any] | None:
+    """Claim a typed or spoken message that may answer "What should I change?".
+
+    Returns None when nothing is waiting, the message is a button/callback, or it was
+    already released as unrelated. Otherwise the work moves to a background thread, because
+    a model call on the UI thread froze the app for up to a minute and dropped the relay
+    link (the 11:17 stall on 28 Nov), and this returns {"suppress": True} at once.
+    """
+    raw = str(text or "").strip()
+    if not raw or chat_id is None or _CALLBACKISH.match(raw):
+        return None
+    token = str(telegram_message_id or "") or hashlib.sha256(raw.encode()).hexdigest()[:16]
+    seen = _seen_message(token)
+    if seen:
+        return {"suppress": True}  # the same message delivered twice; the first copy was already acted on
+    pending = latest_awaiting_rework()
+    if not pending:
+        return None
+    key, flow = pending
+    _mark_message(token, "handled")
+    manager = _telegram_manager()
+    try:
+        if manager is not None and hasattr(manager, "_start_typing_loop"):
+            manager._start_typing_loop("typing")
+    except Exception:
+        logger.debug("outcome_flow: typing indicator failed", exc_info=True)
+    _run_in_background(lambda: _process_rework_reply(key, raw, token, chat_id, source))
+    return {"suppress": True}
+
+
+def _tell_paul(text: str, **kwargs: Any) -> None:
+    send_telegram(text, **kwargs)
+    manager = _telegram_manager()
+    try:
+        if manager is not None and hasattr(manager, "_stop_typing_loop"):
+            manager._stop_typing_loop()
+    except Exception:
+        logger.debug("outcome_flow: stop typing failed", exc_info=True)
+
+
+def _release_to_normal_routing(key: str, raw: str, token: str, chat_id: Any, source: str) -> None:
+    """The message is not about the draft: leave the draft waiting and hand the words on."""
+    _mark_message(token, "released")
+    try:
+        from distr.core.tensology_client import handle_proposal_decision_reply
+
+        reply = handle_proposal_decision_reply(raw, source="telegram", telegram_chat_id=chat_id)
+        if reply:
+            _tell_paul(reply)
+            return
+    except Exception:
+        logger.debug("outcome_flow: proposal reply check failed", exc_info=True)
+    try:
+        from distr.core.integrations.bus import get_integration_message_bus
+
+        get_integration_message_bus().deliver_telegram_user_input(
+            text=raw, image_path=None, telegram_chat_id=int(chat_id) if str(chat_id).lstrip("-").isdigit() else None,
+            speak=None, input_type="voice" if source == "voice" else "text",
+        )
+    except Exception:
+        logger.warning("outcome_flow: could not hand an unrelated message on", exc_info=True)
+        _tell_paul("That didn't read as a change to the draft, so I left the draft as it is. "
+                   "I couldn't pass your message on. Please send it again.")
+
+
+def _process_rework_reply(key: str, raw: str, token: str, chat_id: Any, source: str) -> None:
+    """Interpret Paul's reply to Rework, then act. Runs off the UI thread. Never sends to a client."""
+    try:
+        flow = get_flow(key) or {}
+        if flow.get("status") != "awaiting_rework":
+            _tell_paul("That draft already changed. Tap Rework on the newest card, then tell me what to change.")
+            return
+        newer = newer_client_messages(flow)
+        verdict = _classify_rework(raw, flow, newer)
+        intent = verdict.get("intent") or "unclear"
+        audit("rework_reply_interpreted", ticket_id=flow.get("ticket_id"), chat_id=flow.get("chat_id"),
+              source_channel=source, heard=raw, intent=intent, instruction=verdict.get("instruction"),
+              model=verdict.get("model"), newer_client_messages=newer, status=intent)
+        if intent == "other_topic":
+            _release_to_normal_routing(key, raw, token, chat_id, source)
+            return
+        if intent == "cancel":
+            _handle_flow_action(key, "cancel")
+            _tell_paul("Okay. I've cancelled that draft and nothing was sent.")
+            return
+        if intent == "send":
+            _tell_paul("I don't send from a message. Tap Send message to client on the card when it reads right.")
+            return
+        if intent == "unclear":
+            _tell_paul(verdict.get("question") or "Is that a change to this draft, or something else? "
+                       "Tell me what to change.")
+            return
+        result = apply_rework_instruction(
+            key, flow, verdict.get("instruction") or raw,
+            dictated=verdict.get("message") if intent == "dictated_message" else "",
+            newer_inbound=newer,
+        )
+        if result.get("suppress"):
+            manager = _telegram_manager()
+            if manager is not None and hasattr(manager, "_stop_typing_loop"):
+                manager._stop_typing_loop()
+        elif result.get("text"):
+            _tell_paul(result["text"], reply_markup=result.get("reply_markup"))
+    except Exception:
+        logger.warning("outcome_flow: rework reply failed", exc_info=True)
+        _tell_paul("I couldn't rework that just now. Nothing was sent. Tell me what to change again.")
 
 
 def _handle_flow_action(key: str, action: str, *, telegram_message_id: Any = None,

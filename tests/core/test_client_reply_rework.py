@@ -46,6 +46,15 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(of, "telegram_allowed", lambda settings=None: True)
     monkeypatch.setattr(of, "load_settings", lambda: {"initiative_allow_telegram": True})
     monkeypatch.setattr(of, "audit", lambda *a, **k: None)
+    # Rework replies normally run on a worker thread; run them inline here, and with no model
+    # reachable so the rule-based intent check decides.
+    monkeypatch.setattr(of, "_run_in_background", lambda fn: fn())
+    monkeypatch.setattr(of, "newer_client_messages", lambda flow, limit=3: [])
+
+    def _no_model(*_a, **_k):
+        raise RuntimeError("no model in tests")
+
+    monkeypatch.setattr("distr.core.incoming.telegram_reply_intent.complete_strong", _no_model)
     return SimpleNamespace(tg=tg, tmp=tmp_path, mp=monkeypatch)
 
 
@@ -206,7 +215,9 @@ def test_rework_prompt_supersedes_old_card_and_sends_new_card(env):
     prompt = of.handle_telegram_text(f"oc:{key}:rework", chat_id=1, telegram_message_id=first_id)
     assert prompt["text"] == "What should I change?"
     assert prompt["reply_markup"] == {"force_reply": True, "selective": True}
-    assert env.tg.edited and env.tg.edited[0]["text"] == of.CANCELLED_REPLACED_TEXT
+    # The tapped card keeps the draft readable while it waits; it is only cancelled once replaced.
+    assert env.tg.edited and env.tg.edited[0]["text"].startswith("Reworking the message to")
+    assert body in env.tg.edited[0]["text"]
     assert env.tg.edited[0]["message_id"] == first_id
     assert env.tg.edited[0]["reply_markup"] == {"inline_keyboard": []}
     assert of.get_flow(key)["status"] == "awaiting_rework"

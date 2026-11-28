@@ -1262,6 +1262,17 @@ class TelegramMessagesMixin:
             if input_type == "voice":
                 voice_chat_id = getattr(self, "_telegram_batch_thread_id", None)
                 try:
+                    # A spoken answer to "What should I change?" belongs to the held client draft.
+                    # Typed text already reaches this through handle_telegram_text; spoken text did not.
+                    from distr.core.initiative.outcome_flow import handle_pending_rework
+
+                    if handle_pending_rework(
+                        combined, chat_id=voice_chat_id, telegram_message_id=source_message_id, source="voice",
+                    ):
+                        return
+                except Exception as exc:
+                    logger.error("[Telegram] Voice rework routing failed: %s", exc, exc_info=True)
+                try:
                     from distr.core.kanban.whatsapp_intake_approval import (
                         handle_telegram_reply as handle_wa_intake_reply,
                     )
