@@ -12,7 +12,7 @@ def test_run_callback_starts_execution_without_jira_write(monkeypatch, tmp_path)
     monkeypatch.setattr(
         intake,
         "start_execution_for_tickets",
-        lambda ids: calls.append(list(ids)) or {"started": [{"ticket_id": i} for i in ids], "error": None},
+        lambda ids, approved=False: calls.append((list(ids), approved)) or {"started": [{"ticket_id": i} for i in ids], "error": None},
     )
     jira_calls = []
     monkeypatch.setattr(
@@ -21,7 +21,7 @@ def test_run_callback_starts_execution_without_jira_write(monkeypatch, tmp_path)
     )
     result = intake.handle_jira_intake_telegram_reply(f"ji:{batch['token']}:run", chat_id=5)
     assert result["action"] == "run"
-    assert calls == [[10, 11]]
+    assert calls == [([10, 11], True)]  # pressing Run on the intake card is the approval
     assert jira_calls == []
     with engine.connect() as conn:
         assert conn.execute(text("SELECT status FROM jira_intake_batches WHERE token=:t"), {"t": batch["token"]}).scalar_one() == "executed"

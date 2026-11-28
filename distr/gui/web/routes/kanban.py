@@ -4728,10 +4728,9 @@ def create_routes():
                 )
             except Exception:
                 logger.debug("move_ticket: chat notify failed", exc_info=True)
-            if str(notify_ctx["to_lane_name"] or "").strip().lower() == "in progress":
-                from distr.core.kanban.ticket_work_thread import ensure_ticket_work_thread
+            from distr.core.kanban.ticket_work_thread import apply_ticket_lane_time
 
-                ensure_ticket_work_thread(ticket_id)
+            apply_ticket_lane_time(ticket_id, notify_ctx["to_lane_name"])
         try:
             from distr.core.workspace_memory.lifecycle import handoff_ticket_lane_done, hook_ensure_workspace
 

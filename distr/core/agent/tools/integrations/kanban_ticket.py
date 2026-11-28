@@ -49,6 +49,9 @@ _MOVE_TICKET_TEXT_RE = re.compile(
     r"(?i)\bmove\s+(?:ticket\s+)?#?\s*(?P<id>\d+)\s+"
     r"(?:from\s+.+?\s+)?(?:to|into|onto)\s+(?P<lane>[^.,;]+)"
 )
+# Marks a send_to_cli reply that was held for the proposal card instead of starting.
+AWAITING_APPROVAL_MARK = "[Awaiting approval]"
+
 _LANE_ALIASES = {
     "qa": "QA",
     "quality": "QA",
@@ -3123,10 +3126,9 @@ class KanbanTicketTool(BaseTool):
             moved_lane_name = new_lane.name
             moved_board_name = target_board.name
         self._publish_ticket_move(ticket_id, old_board_id, target_board_id)
-        if str(moved_lane_name or "").strip().lower() == "in progress":
-            from distr.core.kanban.ticket_work_thread import ensure_ticket_work_thread
+        from distr.core.kanban.ticket_work_thread import apply_ticket_lane_time
 
-            ensure_ticket_work_thread(ticket_id)
+        apply_ticket_lane_time(ticket_id, moved_lane_name)
         return voice_then_reference(
             f"I moved that ticket to {moved_board_name}, in {moved_lane_name}.",
             (
@@ -3608,10 +3610,14 @@ class KanbanTicketTool(BaseTool):
 
     # ── Send ticket to CLI ────────────────────────────────────────────────
 
-    def _action_send_to_cli(self, ticket_id) -> str:
+    def _action_send_to_cli(self, ticket_id, *, approved: bool = False) -> str:
         """Send ONE named ticket to the project's coding backend. Returns at once; the run continues
         in the background on the ticket's Development thread, with its timer running, and reports
-        each step through job progress."""
+        each step through job progress.
+
+        Unless Paul already approved it (``approved=True``, from the proposal card), a ticket whose
+        work would change code is held for the Approve / Decline card instead of starting; other
+        tickets run read-only."""
         if not ticket_id:
             return voice_then_reference(
                 "Tell me which ticket number to send.",
@@ -3690,6 +3696,27 @@ class KanbanTicketTool(BaseTool):
                 project_folder=folder or "",
                 project_id=project_id,
             )
+
+        if not approved:
+            from distr.core.initiative import pi_write_proposals
+
+            if pi_write_proposals.is_write_instruction(f"{title}\n{description}"):
+                source_chat_id = None
+                try:
+                    from distr.core.chat_approvals import current_chat_id
+
+                    source_chat_id = current_chat_id()
+                except Exception:
+                    pass
+                held = pi_write_proposals.request_ticket_approval(
+                    ticket_id_val, int(project_id), project_name, title, f"{title}\n\n{description}".strip(),
+                    source_chat_id=source_chat_id,
+                )
+                return voice_then_reference(
+                    f"Ticket {ticket_id_val} would change code, so it waits for your approval on Telegram.",
+                    f"{AWAITING_APPROVAL_MARK} {held['message']}",
+                )
+            instruction = pi_write_proposals.READ_ONLY_PREFIX + instruction
 
         # Create audit trail
         audit_id = None

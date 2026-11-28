@@ -592,7 +592,8 @@ def handle_jira_intake_telegram_reply(
     if not claimed:
         return {"handled": True, "text": "That Jira intake batch is already being handled."}
 
-    exec_result = start_execution_for_tickets(ticket_ids)
+    # Paul pressed Run on the intake card: that is the approval for these tickets.
+    exec_result = start_execution_for_tickets(ticket_ids, approved=True)
     with engine.begin() as conn:
         conn.execute(text("""
             UPDATE jira_intake_batches SET status='executed', updated_at=:now, error=:error
@@ -615,7 +616,7 @@ def handle_jira_intake_telegram_reply(
     }
 
 
-def start_execution_for_tickets(ticket_ids: Iterable[int]) -> dict[str, Any]:
+def start_execution_for_tickets(ticket_ids: Iterable[int], *, approved: bool = False) -> dict[str, Any]:
     """Mark Jira lifecycles executing and kick workflow/CLI where linked."""
     from distr.core.db.kanban import KanbanTicket
     from distr.core.kanban import jira_work_lifecycle as jlife
@@ -643,8 +644,14 @@ def start_execution_for_tickets(ticket_ids: Iterable[int]) -> dict[str, Any]:
                     # ponytail: CLI kick uses existing tool path when available
                     from distr.core.agent.tools.integrations.kanban_ticket import KanbanTicketTool
 
-                    KanbanTicketTool()._run(action="send_to_cli", ticket_id=ticket_id)
-                    run_meta["dispatched"] = "cli"
+                    from distr.core.agent.tools.integrations.kanban_ticket import AWAITING_APPROVAL_MARK
+
+                    # Approved on the intake card: start it. Otherwise (a chat "run") the tool's send_to_cli
+                    # holds a code-changing ticket for the approval card.
+                    tool = KanbanTicketTool()
+                    out = (tool._action_send_to_cli(ticket_id, approved=True) if approved
+                           else tool._run(action="send_to_cli", ticket_id=ticket_id))
+                    run_meta["dispatched"] = "awaiting_approval" if AWAITING_APPROVAL_MARK in str(out) else "cli"
                 elif ticket.linked_workflow_id:
                     from distr.core.workflow.dispatcher import start_workflow_ticket_group
 

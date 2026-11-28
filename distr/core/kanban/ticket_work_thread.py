@@ -128,3 +128,52 @@ def finish_ticket_run_time(chat_id: Any, *, finished_at: datetime | None = None,
     except Exception:
         logger.warning("Could not pause the timer for Development thread %s", chat_id, exc_info=True)
         return False
+
+
+# Lanes where the ticket is being worked: entering one starts the thread timer.
+WORKING_LANES = frozenset({"in progress"})
+
+
+def _existing_ticket_thread(ticket_id: int, _session_provider=None) -> int | None:
+    from distr.core.db import get_session
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.workflow.development_threads import is_development_thread, ticket_development_thread_ids
+
+    with (_session_provider or get_session)() as db:
+        ticket = db.get(KanbanTicket, int(ticket_id))
+        if ticket is None:
+            return None
+        owners = ticket_development_thread_ids(db, ticket.id, None)
+        if owners:
+            return int(owners[0])
+        if ticket.source_chat_id is not None and is_development_thread(db, int(ticket.source_chat_id)):
+            return int(ticket.source_chat_id)
+    return None
+
+
+def apply_ticket_lane_time(ticket_id: Any, lane_name: Any, *, _session_provider=None) -> str:
+    """Keep the ticket's thread timer in step with its board lane after a move.
+
+    Into In Progress: create or link the Development thread and start its timer.
+    Out of In Progress (Done, Complete, QA, back to Backlog, ...): pause the timer and record the
+    segment, unless a worker run still holds the thread (the run's end pauses it then).
+    There is one timer per thread, so lane time and worker-run time never count twice. The usual
+    idle auto-pause still applies. Returns "started", "paused" or "unchanged". Never raises.
+    """
+    try:
+        tid = int(ticket_id)
+        lane = str(lane_name or "").strip().lower()
+        if lane in WORKING_LANES:
+            thread_id = ensure_ticket_work_thread(tid, _session_provider=_session_provider)
+            if thread_id and start_ticket_run_time(thread_id, _session_provider=_session_provider):
+                logger.info("Ticket %s moved to %s: timer running on thread %s", tid, lane_name, thread_id)
+                return "started"
+            return "unchanged"
+        thread_id = _existing_ticket_thread(tid, _session_provider)
+        if thread_id and finish_ticket_run_time(thread_id, _session_provider=_session_provider):
+            logger.info("Ticket %s moved to %s: timer paused on thread %s", tid, lane_name, thread_id)
+            return "paused"
+        return "unchanged"
+    except Exception:
+        logger.warning("Could not update the timer for ticket %s after a move", ticket_id, exc_info=True)
+        return "unchanged"

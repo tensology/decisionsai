@@ -109,6 +109,7 @@ def work_run(ticket_ids: Iterable[int]) -> dict[str, Any]:
     cli = sum(1 for row in started if row.get("dispatched") == "cli")
     wf = sum(1 for row in started if row.get("dispatched") == "workflow")
     none = sum(1 for row in started if row.get("dispatched") == "none")
+    held = sum(1 for row in started if row.get("dispatched") == "awaiting_approval")
     bits = []
     if cli:
         bits.append(f"{cli} via project CLI")
@@ -116,6 +117,8 @@ def work_run(ticket_ids: Iterable[int]) -> dict[str, Any]:
         bits.append(f"{wf} via workflow")
     if none:
         bits.append(f"{none} waiting for a linked project or workflow")
+    if held:
+        bits.append(f"{held} waiting for your approval on Telegram (they would change code)")
     spoken = "Started " + (", ".join(bits) if bits else "nothing") + ". I'll ask on Telegram before any client send."
     return {
         "success": not result.get("error"),
