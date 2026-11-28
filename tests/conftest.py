@@ -835,3 +835,14 @@ if _sync_playwright is not None:
         if pytestconfig.getoption("--video") in ["on", "retain-on-failure"]:
             context_args["record_video_dir"] = _pw_artifacts_folder.name
         return context_args
+
+
+@pytest.fixture(autouse=True)
+def _fresh_telegram_seen_callbacks():
+    """Callback ids are remembered on disk; tests reuse small ids, so start each clean."""
+    from pathlib import Path
+
+    base = os.environ.get("DECISIONS_DB_DIR")
+    if base:
+        (Path(base) / "telegram_seen_callbacks.json").unlink(missing_ok=True)
+    yield

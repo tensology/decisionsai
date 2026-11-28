@@ -93,6 +93,15 @@ class TelegramMessagesMixin:
             f"📥 Telegram message received - msg_id: {msg_id}, chat_id: {chat_id_raw}, has_text: {bool(inner_data.get('text'))}, has_media: {bool(inner_data.get('media'))}"
         )
 
+        # 0. A button tap (callback query id) is acted on once, even across a relay
+        # replay or an app restart.
+        if is_callback and msg_id:
+            from distr.core.integrations.telegram.seen_callbacks import claim_callback
+
+            if not claim_callback(msg_id):
+                logger.info("Skipping duplicate Telegram button tap: %s", msg_id)
+                return
+
         # 1. ID Deduplication
         message_key = (str(chat_id_raw), str(msg_id))
         if not is_callback and msg_id and message_key in self._processed_message_ids:
