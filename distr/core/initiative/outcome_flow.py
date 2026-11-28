@@ -2545,6 +2545,42 @@ def _process_rework_reply(key: str, raw: str, token: str, chat_id: Any, source: 
         _tell_paul("I couldn't rework that just now. Nothing was sent. Tell me what to change again.")
 
 
+def _handle_client_issue_action(key: str, flow: dict[str, Any], action: str, status: str, *,
+                                telegram_message_id: Any = None, telegram_chat_id: Any = None) -> dict[str, Any]:
+    """Taps on a client-issue card raised by the mail watch. Nothing here contacts the client."""
+    chat = telegram_chat_id or flow.get("telegram_chat_id")
+
+    def reply(text: str) -> dict[str, Any]:
+        return _reply_on_card(text, message_id=telegram_message_id, chat_id=chat, flow=flow)
+
+    if status in {"started", "starting", "dismissed"}:
+        return reply("Already started." if status != "dismissed" else "Set aside. Nothing was sent.")
+    if action == "cancel":
+        save_flow(key, expected_status=status, status="dismissed")
+        audit("client_issue_dismissed", message_id=flow.get("message_id"), status="dismissed")
+        return reply("Set aside. Nothing was sent.")
+    if action != "start":
+        return reply("Use Start the fix or Not now on this one.")
+    if not save_flow(key, expected_status=status, status="starting"):
+        return _handle_flow_action(key, action, telegram_message_id=telegram_message_id, telegram_chat_id=telegram_chat_id)
+    try:
+        from distr.core.initiative.client_mail_watch import start_fix
+
+        result = start_fix(flow)
+    except Exception:
+        logger.warning("client issue fix could not start", exc_info=True)
+        save_flow(key, expected_status="starting", status=status)
+        return reply("I couldn't open the ticket just now. The card is still here, tap Start the fix to try again.")
+    started = bool(result.get("ticket_id"))
+    save_flow(key, expected_status="starting", status="started" if started else status, ticket_id=result.get("ticket_id"))
+    audit("client_issue_started", message_id=flow.get("message_id"), ticket_id=result.get("ticket_id"),
+          status="started" if started else "needs_info")
+    if started:
+        return reply("On it. I've opened a ticket and started on the fix. Nothing has gone to the client.")
+    ask = humanize(result.get("response_text") or "", max_len=300)
+    return reply(ask or "I need to know which project this belongs to before I can start.")
+
+
 def _handle_flow_action(key: str, action: str, *, telegram_message_id: Any = None,
                         telegram_chat_id: Any = None) -> dict[str, Any]:
     if telegram_message_id:
@@ -2568,6 +2604,9 @@ def _handle_flow_action(key: str, action: str, *, telegram_message_id: Any = Non
             chat_id=telegram_chat_id or flow.get("telegram_chat_id"),
             flow=flow,
         )
+    if flow.get("kind") == "client_issue":
+        return _handle_client_issue_action(key, flow, action, status, telegram_message_id=telegram_message_id,
+                                           telegram_chat_id=telegram_chat_id)
     if status == "awaiting_rework" and action not in {"rework"}:
         if action in {"confirm", "send"}:
             return _reply_on_card(

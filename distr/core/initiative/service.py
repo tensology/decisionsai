@@ -898,6 +898,12 @@ class InitiativeService:
             maybe_send_recommendations(settings)
         except Exception:
             logger.debug("daily recommendations round-up skipped", exc_info=True)
+        try:
+            from distr.core.initiative.client_mail_watch import maybe_run as watch_client_mail
+
+            watch_client_mail(settings)
+        except Exception:
+            logger.debug("client mail watch skipped", exc_info=True)
         # Ambient suggestions from desktop awareness: observe -> assess -> speak.
         # Only runs when the master switch is on and the level permits.
         try:
