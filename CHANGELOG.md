@@ -30,8 +30,10 @@ You can [download or clone the repository](https://github.com/tensology/decision
 - Harness wiring for Claude Code, Codex, Cursor, Kilo (stdio forwarder) and Pi (skill). It applies only to installed harnesses, backs up configs, is idempotent and removable.
 - Frustration capture (Laya with regex fallback, redaction on by default) and a nightly review every second night that queues proposals for approval and never applies them automatically. Reviewer order: codex, then claude, then Decisions LLM (OpenRouter `minimax/minimax-m3.1-flash`, then free `thinkingmachines/inkling-small:free`).
 - Off switches: the `frustration_capture` setting, `DECISIONS_FRUSTRATION_CAPTURE`, `DECISIONS_MEMPALACE_HUB` and `DECISIONS_MEMPALACE_HARNESS_WIRING`.
+- In developer debug mode, a daily self-review can flag recurring issues from recent activity and suggest improvements for review. It does not edit project files.
 ### Changed
 - The MemPalace bootstrap prefers the installed package over the reference clone. Seed mining is skipped while the hub owns the palace.
+- Planning can reuse a saved local test session to capture pages behind sign-in and attach a captured page to a route with a variable path.
 
 ## [2.9.6] - 2026-11-24
 
@@ -42,6 +44,30 @@ Ask for a change in Agents and DecisionsAI can create a ticket, carry it into De
 ### Keep the whole job in Development
 
 Incoming requests can be linked to a project, and Planning now has a page designer for shaping an interface before the build. The Development sidebar keeps boards, threads, and workflows close at hand, with mark-as-read controls where the lists start to pile up. When a tool runs or files change, the thread gives you a place to pick up the work and see what happened.
+
+### A plan you can build from
+
+Planning can turn an existing project into a map of its pages and the paths between them. Scans recognise more server-rendered pages and React routes, skip bundled code, and reuse results when the source is unchanged. The map shows page thumbnails and keeps the positions you set. The Data view brings the schema diagram and project files together.
+
+Page stencils now capture more of the rendered layout, including columns, spacing, and sidebars. The plan shows how controls connect to page logic and what each page inherits from the shared template. You can render a trial page for comparison without writing into the project. Agents can use the same blueprint to preview a build ticket and explain what a page still needs before work can start.
+
+### Tickets follow the work through review
+
+A ticket moved to In Progress gets a linked Development thread. Approved CLI work runs in the background on that thread, and the timer follows active work and pauses while the ticket waits for review. Review-ready changes move to QA. A rejected review sends the ticket back to In Progress, and final completion still takes a person. DecisionsAI flags tickets that have been sitting in In Progress or QA.
+
+When a worker gets stuck, DecisionsAI can check the project information it already has and retry once before asking for input. A model fallback keeps the run open while the next provider takes over. Read-only runs can inspect the project while edits stay blocked, and a request to keep production read-only can still leave local work in scope.
+
+### See what you are approving
+
+When you ask from chat to run code-changing CLI work, DecisionsAI asks you to approve the specific ticket. The approval shows the ticket and what the run would do, and it can reach you in the active Remote app, Telegram, or the desktop. When the same request appears in Telegram and Incoming, a decision on either side updates the other and approving starts the ticket once. Declined suggestions stay dismissed, and stale or already-settled proposals are cleared from the queue.
+
+### Turn a client email into a reviewed fix
+
+For connected Mailshot inboxes, DecisionsAI can flag an issue, investigate it read-only, and prepare an Incoming proposal with a fix plan and draft reply. Supported fixes can be tried on a copy first. Supported live changes need approval and are checked against the current record before applying and verified afterward. You can ask to rework a reply by typing or speaking feedback on the draft.
+
+### Fewer interruptions while work runs
+
+Follow progress in one Telegram message that updates as the job moves, or in the Remote app’s live status line. Telegram can hold messages and taps through a short desktop disconnect and process them when it returns. On the desktop, the agent can read selected text or clipboard contents aloud when asked. Project tools now block credential files and redact recognised credential values in tool and chat output.
 
 ### Voice takes turns again
 
@@ -57,7 +83,9 @@ The redesigned Computer view now streams your desktop over WebRTC by default. Th
 
 On a phone, move one finger to steer the pointer, tap to click, and double-tap to double-click. Tap with two fingers to right-click, move two fingers together to scroll, and pinch to zoom. To drag an item, press and hold or double-tap and keep your finger down, then move it.
 
-When you hold to talk or dictate, the slide-to-cancel strip stays aligned with the button. Text-to-speech replies now stream as audio is generated, so playback can start with the first chunk. You can stop a reply or interrupt it by speaking.
+When you hold to talk or dictate, the slide-to-cancel strip stays aligned with the button. Text-to-speech replies now stream as audio is generated, so playback can start with the first chunk. You can stop a reply or interrupt it by speaking. Playback stays on the page that requested it when more than one Remote page is open.
+
+The screen feed reconnects after a brief drop without hiding the controls. Boards shows work in motion, Incoming and Boards show counts in the App view, and the voice button follows the agent for the thread you have open.
 
 ## [2.9.5] - 2026-11-07
 

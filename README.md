@@ -70,7 +70,7 @@ Telegram can send text, voice notes, screenshots, documents, approvals, and corr
 
 WhatsApp can feed selected contacts or groups into project intake. DecisionsAI can collect the relevant text and media, prepare a ticket, and wait for approval before work starts. Outbound replies remain drafts until you approve them.
 
-<img src="assets/readme/mobile.webp" alt="DecisionsAI Remote on a phone with a connected desktop and remote controls" width="330" />
+<img src="assets/readme/mobile.webp" alt="DecisionsAI Remote showing a sample desktop with the keyboard collapsed and the monitor selector visible" width="330" />
 
 ## How it fits together
 
