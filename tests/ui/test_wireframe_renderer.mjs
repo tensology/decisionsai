@@ -225,12 +225,12 @@ test('diagnostic protocol and fail-closed invalid source', () => {
 });
 
 test('bounded source, nodes, template expansion, nesting and layout', () => {
-    assert.equal(errors(parseWireframe('x'.repeat(100001)))[0].code, 'SOURCE_LIMIT');
+    assert.equal(errors(parseWireframe('x'.repeat(200001)))[0].code, 'SOURCE_LIMIT');
     assert.equal(errors(parseWireframe(null))[0].code, 'SOURCE_LIMIT');
-    assert.ok(errors(parseWireframe('screen X\n' + '  text X\n'.repeat(1001))).some(d => d.code === 'NODE_LIMIT'));
+    assert.ok(errors(parseWireframe('screen X\n' + '  text X\n'.repeat(5001))).some(d => d.code === 'NODE_LIMIT'));
     const deep = Array.from({ length: 35 }, (_, i) => '  '.repeat(i) + (i ? 'stack' : 'screen X')).join('\n');
     assert.ok(errors(parseWireframe(deep)).some(d => d.code === 'INDENTATION'));
-    const big = 'template A\n' + '  text X\n'.repeat(200) + Array.from({ length: 15 }, (_, i) => `screen S${i} uses=A`).join('\n');
+    const big = 'template A\n' + '  text X\n'.repeat(200) + Array.from({ length: 60 }, (_, i) => `screen S${i} uses=A`).join('\n');
     assert.ok(errors(parseWireframe(big)).some(d => d.code === 'EXPANSION_LIMIT'));
     assert.ok(errors(renderWireframe('screen X\n' + '  spacer height=20000\n'.repeat(20))).some(d => d.code === 'LAYOUT_LIMIT'));
 });

@@ -15,7 +15,7 @@ class PlanReferenceError(PlanValidationError):
 
 
 def _inspect_wireframe(source, *, page_id=None):
-    if not isinstance(source, str) or len(source) > 100_000:
+    if not isinstance(source, str) or len(source) > 200_000:
         raise ValueError("Wireframe source exceeds the supported limit.")
     node = shutil.which("node")
     if not node:

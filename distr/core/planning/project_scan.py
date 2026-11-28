@@ -122,7 +122,7 @@ _AUTH_FIELD_TOKENS = {"email", "password", "username", "firstname", "lastname", 
 _AUTH_ENTITY_HINTS = {"user", "profile", "account", "customer", "buyer", "seller", "member"}
 _MAX_DEEP_SCREENS = 36
 _MAX_ERD_CHARS = 95_000
-_MAX_WIRE_CHARS = 95_000
+_MAX_WIRE_CHARS = 190_000
 _SUBMIT_LITERAL = re.compile(
     r"""type=["']submit["'][\s\S]{0,240}?['\"]([A-Za-z][^'\"]{1,40})['\"]""",
     re.IGNORECASE,
@@ -1384,10 +1384,16 @@ def build_flows(
     project_name: str,
     models: list[dict[str, Any]] | None = None,
     cues: dict[str, dict[str, Any]] | None = None,
+    layouts: dict[str, dict[str, list[str]]] | None = None,
 ) -> str:
-    """Wire DSL: overview map plus one screen per route from that route's cues."""
+    """Wire DSL: overview map plus one screen per route.
+
+    A route with a captured layout is drawn from it (layout v2: the real page's regions,
+    columns, gaps and widths); any other route is drawn from its cues.
+    """
     models = models or []
     cues = cues or {}
+    layouts = layouts or {}
     if not routes:
         return (
             'screen "No routes found" device=desktop layer=guidance\n'
@@ -1418,14 +1424,33 @@ def build_flows(
     for index, row in enumerate(primary, start=1):
         fr_by_url[row["url"]] = f"FR-{index:03d}"
 
-    for row in routes[:55]:
-        screen = _screen_lines(
-            row,
-            models=models,
-            cues=cues,
-            fr_id=fr_by_url.get(row["url"]),
-        )
-        chunks.append("\n".join(screen))
+    head_chunks = list(chunks)
+
+    def _chunks_for(tier: str | None, limit_layouts: int) -> list[str]:
+        out = list(head_chunks)
+        used = 0
+        for row in routes[:55]:
+            captured = (layouts.get(_normalize_route(row["url"])) or {}) if tier is not None and used < limit_layouts else {}
+            lines = None
+            if captured:
+                choices = [t for t in sorted(captured, key=int, reverse=True) if int(t) <= int(tier)]
+                lines = captured[choices[0]] if choices else None
+            if lines:
+                used += 1
+                screen = _layout_screen_lines(row, lines, models=models, fr_id=fr_by_url.get(row["url"]))
+            else:
+                screen = _screen_lines(row, models=models, cues=cues, fr_id=fr_by_url.get(row["url"]))
+            out.append("\n".join(screen))
+        return out
+
+    # The wire is one document with a size limit: use the richest layout tier that fits.
+    chunks = _chunks_for(None, 0)
+    if layouts:
+        for tier, limit in (("300", 999), ("150", 999), ("80", 999), ("40", 999), ("20", 999), ("20", 40), ("20", 20), ("20", 10), ("20", 0)):
+            candidate = _chunks_for(tier, limit)
+            chunks = candidate
+            if len("\n\n".join(candidate) + "\n") <= _MAX_WIRE_CHARS:
+                break
     text_out = "\n\n".join(chunks) + "\n"
     if len(text_out) > _MAX_WIRE_CHARS:
         # ponytail: drop trailing screens first if wire DSL nears validator limit
@@ -1461,6 +1486,7 @@ def render_artifacts(context: dict[str, Any]) -> dict[str, str]:
             project_name=context["project_name"],
             models=context["models"],
             cues=cues,
+            layouts=context.get("layouts"),
         ),
     }
     for kind in ('brief', 'prd'):
@@ -1622,6 +1648,7 @@ def build_plan(
     }
     context["widen"] = widen_routes_with_sitemap(root, context["routes"], context)
     context["captured_cues"] = _apply_captured_cues(root, context)
+    context["layouts"] = _captured_page_layouts(root)
     # If the operator has said where the app is served, read the pages whose
     # source describes them poorly (i18n, client-rendered). Off unless configured.
     try:
@@ -2705,6 +2732,55 @@ def _captured_page_cues(project_root: Path) -> dict[str, dict[str, Any]]:
                 from distr.core.planning.dom_cues import clean_cue
                 out.setdefault(route, clean_cue(data["cues"]))
     return out
+
+
+def _captured_page_layouts(project_root: Path) -> dict[str, dict[str, list[str]]]:
+    """Stencil layouts (DSL lines per node budget) saved beside page screenshots, keyed by route."""
+    from urllib.parse import urlparse
+
+    from distr.core.planning.layout_probe import sanitize_lines
+
+    out: dict[str, dict[str, list[str]]] = {}
+    for directory in (project_root / "planning", project_root / ".planning"):
+        if not directory.is_dir() or directory.is_symlink():
+            continue
+        for meta in sorted(directory.glob("*.json")):
+            try:
+                data = json.loads(meta.read_text(encoding="utf-8"))
+            except (OSError, ValueError, UnicodeError):
+                continue
+            if not isinstance(data, dict) or not isinstance(data.get("layouts"), dict) or not data.get("url"):
+                continue
+            tiers = {str(k): lines for k, v in data["layouts"].items() if str(k).isdigit() and (lines := sanitize_lines(v))}
+            if tiers:
+                out.setdefault(_normalize_route(urlparse(str(data["url"])).path or "/"), tiers)
+    return out
+
+
+def _layout_screen_lines(
+    row: dict[str, str],
+    tier_lines: list[str],
+    *,
+    models: list[dict[str, Any]],
+    fr_id: str | None,
+) -> list[str]:
+    """A route's captured layout as wire lines, with the same bindings the schematic stencil carries."""
+    title = _quote(row["title"])
+    route = _wire_route(row["url"])
+    head_tail = tier_lines[0].split(" layout=v2", 1)[1]
+    screen = [f'screen "{title}" device=desktop' + (f' route="{_quote(route)}"' if route else "") + " layout=v2" + head_tail]
+    first_button = True
+    for line in tier_lines[1:]:
+        match = re.match(r'^(\s*)(input|select|textarea) "((?:[^"\\]|\\.)*)"', line)
+        if match:
+            bind = _bind_field(match.group(3).replace('\\"', '"'), models, route_name=row["name"])
+            if bind:
+                line += f" bind={bind}"
+        elif first_button and re.match(r'^\s*button "', line):
+            first_button = False
+            line += " variant=primary" + (f" requirement={fr_id}" if fr_id else "")
+        screen.append(line)
+    return screen
 
 
 def _apply_captured_cues(root: Path, context: dict[str, Any]) -> int:

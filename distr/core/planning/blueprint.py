@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+_LAYOUT_WIRE_CHARS = 24_000
+
 
 _ASSET_SUFFIXES = {
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico",
@@ -259,6 +261,8 @@ def _wire_cues(items: list[dict]) -> dict[str, dict]:
     sections: list[str] = []
     buttons: list[str] = []
     links: list[dict[str, str]] = []
+    block: list[str] = []
+    layout_meta: dict[str, Any] = {}
 
     def flush():
         if current_route:
@@ -269,12 +273,22 @@ def _wire_cues(items: list[dict]) -> dict[str, dict]:
                 "buttons": buttons[:],
                 "links": links[:],
             }
+            if layout_meta:
+                # The page's layout rules, so Build can regenerate this page from the stencil alone.
+                cues[current_route]["layout"] = {**layout_meta, "wire": "\n".join(block)[:_LAYOUT_WIRE_CHARS]}
 
     for line in text.splitlines():
         raw = line.strip()
         if raw.startswith("screen "):
             flush()
             fields, sections, buttons, links = [], [], [], []
+            block, layout_meta = [line], {}
+            if " layout=v2" in raw:
+                layout_meta = {"version": "v2"}
+                for key in ("vw", "ph"):
+                    found = re.search(rf"\b{key}=(\d+)", raw)
+                    if found:
+                        layout_meta[key] = int(found.group(1))
             current_route, current_label = "", ""
             if raw.startswith('screen "') and raw.count('"') >= 2:
                 current_label = raw.split('"', 2)[1]
@@ -283,6 +297,8 @@ def _wire_cues(items: list[dict]) -> dict[str, dict]:
             if current_label in {current_route, current_route + "/", ""}:
                 current_label = current_route
             continue
+        if block and raw and not raw.startswith("#"):
+            block.append(line)
         if raw.startswith(("input ", "field ")):
             name, attrs = parse_wire_item(raw)
             if name:
@@ -399,6 +415,7 @@ def plan_blueprint(workspace_id: int) -> dict[str, Any]:
             "sections": cue["sections"],
             "buttons": cue["buttons"],
             "links": cue["links"],
+            "layout": raw_cue.get("layout"),
             "shot": _shot_payload(shot, route),
         })
     known = {p["route"] for p in pages}
@@ -423,6 +440,7 @@ def plan_blueprint(workspace_id: int) -> dict[str, Any]:
             "sections": cue.get("sections") or [],
             "buttons": cue.get("buttons") or [],
             "links": cue.get("links") or [],
+            "layout": cue.get("layout"),
             "shot": _shot_payload(shot, route),
         })
     links = []
@@ -517,6 +535,12 @@ def page_ticket_draft(workspace_id: int, route: str) -> dict[str, Any]:
         lines.append("Links: " + ", ".join(_link_line(link) for link in links))
     if not stencil_ready:
         lines.append("No fields or sections are recorded for this page yet. Recapture or rescan before building.")
+    layout = page.get("layout") or {}
+    if layout.get("wire"):
+        lines += ["", "## Layout (build to these rules)",
+                  f"Layout rules read from the real page at {layout.get('vw') or 1440}px wide, with phone overrides in `at768`. "
+                  "Containers carry flow, columns, gaps, widths and alignment; text and images are grey blocks, so the "
+                  "base template supplies colours and typography.", "", "```", layout["wire"][:6000], "```"]
     if page.get("shot"):
         lines += ["", f"Screenshot: {page['shot'].get('name') or ''} captured {page['shot'].get('captured_at') or 'unknown'}."]
     if table_count:

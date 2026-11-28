@@ -7,13 +7,13 @@
  * Errors are fail-closed at render time. Templates use named slot/content nodes;
  * overriding content replaces a slot's default children, including in inheritance.
  */
-const LIMIT = { source: 100000, nodes: 1000, depth: 32, expanded: 2000, label: 2048, height: 200000 };
-const containers = new Set('screen template slot content main nav sidebar header hero footer section stack row grid card form list item table menu tabs tab modal dialog alert toast draglist'.split(' '));
+const LIMIT = { source: 200000, nodes: 5000, depth: 32, expanded: 10000, label: 2048, height: 200000 };
+const containers = new Set('screen template slot content main nav sidebar header hero footer section stack row grid card form list item table menu tabs tab modal dialog alert toast draglist box'.split(' '));
 const leaves = 'field input textarea select dropdown option checkbox radio toggle slider date calendar button link column badge avatar image divider spacer chart progress text heading'.split(' ');
 const types = new Set([...containers, ...leaves]);
-const common = 'id label width height gap padding bind binding requirement disabled'.split(' ');
+const common = 'id label width height gap padding bind binding requirement disabled w h grow span maxw minh ratio mar pad flow columns tracks rgap cgap wrap justify align self pos top left fill line radius shadow lines tw fs lh bold ta tone approx clip rep show at768'.split(' ');
 const attributes = {
-    screen: 'device uses route layer method', template: 'uses', slot: 'name', content: 'name',
+    screen: 'device uses route layer method layout vw ph bg note', template: 'uses', slot: 'name', content: 'name',
     grid: 'columns', row: '', sidebar: '', header: '', hero: '', footer: '', section: '', input: 'type name value placeholder required min max step',
     field: 'type name value placeholder required min max step', textarea: 'name value placeholder required rows',
     select: 'name value placeholder required options', dropdown: 'name value placeholder required options',
@@ -24,8 +24,8 @@ const attributes = {
     image: 'alt src asset', avatar: 'initials', progress: 'value max', chart: 'kind source',
     draglist: 'source', list: 'source', dialog: 'open', modal: 'open', alert: 'variant', toast: 'variant'
 };
-const booleanAttrs = new Set('disabled required checked selected primary active open'.split(' '));
-const numberBounds = { width: [80, 1600], height: [0, 20000], gap: [0, 80], padding: [0, 80], columns: [1, 12], rows: [1, 40] };
+const booleanAttrs = new Set('disabled required checked selected primary active open wrap shadow bold approx clip'.split(' '));
+const numberBounds = { width: [80, 1600], height: [0, 20000], gap: [0, 400], padding: [0, 80], columns: [1, 12], rows: [1, 40] };
 const inputTypes = new Set('text email password number tel url search time datetime-local month week color'.split(' '));
 const esc = value => String(value ?? '').replace(/[\u0000-\u0008\u000b-\u001f\u007f\ud800-\udfff\ufffe\uffff]/gu, '\ufffd').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const shown = node => node.label || node.attrs.label || '';
@@ -105,6 +105,7 @@ function validate(node, diagnostics) {
         if (!date || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value) diagnostic(diagnostics, node, 'INVALID_DATE', `${key} must be a real ISO date (YYYY-MM-DD).`);
     }
     if (node.type === 'date' && node.attrs.min && node.attrs.max && node.attrs.min > node.attrs.max) diagnostic(diagnostics, node, 'INVALID_RANGE', 'Date min must not follow max.');
+    validateLayout(node, diagnostics);
 }
 
 // Labels scanned from JSX or templates can carry HTML entities (You&apos;re, &times;).
@@ -562,6 +563,272 @@ const PREVIEW_ROUTE_BRIDGE = `document.addEventListener('click', event => {
 });`;
 const PREVIEW_ROUTE_HASH = 'sha256-Rw4JOvKRX8OTjSnFYUTAK7NOPRcP3lf/c3nafkfNne8=';
 
+// ---------------------------------------------------------------------------
+// Layout rules (DSL v2). A screen with layout=v2 is a layout-faithful stencil of a real
+// page: containers carry flow/columns/tracks/gap/align rules, nodes carry widths, margins,
+// positions and repeat counts, and text and images are grey blocks. The browser lays it out
+// with real flex/grid, so it matches the page it was read from. Colours and typography are not
+// here; the base template owns them.
+//   at768="key:value;..." overrides a node at phone width (key:- unsets it);
+//   show=desktop|mobile|auth|guest records when a node is visible.
+// Every value is checked against a strict grammar before it reaches CSS.
+const LAYOUT_ATTRS = 'w h grow span maxw minh ratio mar pad flow columns tracks gap rgap cgap wrap justify align self pos top left fill line radius shadow lines tw fs lh bold ta tone approx clip rep show at768'.split(' ');
+const LAYOUT_BREAKPOINT = 768;
+const LAYOUT_FILLS = { none: 'transparent', white: '#ffffff', light: '#f1f3f7', mid: '#e0e4ec', dark: '#5c6574', accent: '#98a2b3', image: '#d9dee6' };
+const LAYOUT_BARS = { '': '#bcc3cf', muted: '#d5dae2', light: 'rgba(255,255,255,.8)', 'muted-light': 'rgba(255,255,255,.5)' };
+const LAYOUT_ENUM = {
+    flow: ['block', 'col', 'row', 'grid'], justify: ['start', 'center', 'end', 'between', 'around', 'evenly'],
+    align: ['start', 'center', 'end', 'stretch', 'baseline'], self: ['start', 'center', 'end', 'stretch', 'baseline'],
+    pos: ['static', 'abs', 'fixed', 'sticky'], fill: Object.keys(LAYOUT_FILLS), ta: ['left', 'center', 'right'],
+    tone: ['dark', 'muted', 'light'], show: ['any', 'auth', 'guest', 'desktop', 'mobile']
+};
+const LAYOUT_LEN = /^-?\d{1,5}(?:\.\d{1,2})?$/;
+const LAYOUT_PCT = /^\d{1,3}(?:\.\d{1,2})?%$/;
+const lengthOK = (value, { fill = false, negative = false, percent = true } = {}) =>
+    (fill && value === 'fill') || (LAYOUT_LEN.test(value) && (negative || !value.startsWith('-')) && Math.abs(Number(value)) <= 20000) ||
+    (percent && LAYOUT_PCT.test(value) && Number(value.slice(0, -1)) <= 100);
+const spacingOK = (value, allowAuto) => { const parts = value.split(' '); return parts.length >= 1 && parts.length <= 4 && parts.every(part => (allowAuto && part === 'auto') || (/^-?\d{1,4}(?:\.\d)?$/.test(part) && (allowAuto || !part.startsWith('-')))); };
+const tracksOK = value => { const parts = value.split(','); return parts.length >= 1 && parts.length <= 12 && parts.every(part => /^(?:\d{1,2}(?:\.\d{1,2})?fr|\d{1,5}(?:\.\d{1,2})?(?:px|%)?|auto)$/.test(part)); };
+
+// Returns an error message, or '' when the value is fine.
+function layoutValueError(key, value) {
+    const bad = `${key}=${value} is not a valid layout value.`;
+    switch (key) {
+        case 'w': return lengthOK(value, { fill: true }) ? '' : bad;
+        case 'h': case 'minh': case 'maxw': return lengthOK(value) ? '' : bad;
+        case 'top': case 'left': return lengthOK(value, { negative: true, percent: false }) ? '' : bad;
+        case 'grow': return /^\d{1,2}(?:\.\d{1,2})?$/.test(value) ? '' : bad;
+        case 'span': return /^(?:[1-9]|1[0-2])$/.test(value) ? '' : bad;
+        case 'ratio': return /^\d{1,2}(?:\.\d{1,3})?$/.test(value) && Number(value) >= .05 && Number(value) <= 50 ? '' : bad;
+        case 'mar': return spacingOK(value, true) ? '' : bad;
+        case 'pad': return spacingOK(value, false) ? '' : bad;
+        case 'columns': return /^(?:[1-9]|1[0-2])$/.test(value) ? '' : bad;
+        case 'tracks': return tracksOK(value) ? '' : bad;
+        case 'rgap': case 'cgap': case 'gap': return /^\d{1,3}(?:\.\d)?$/.test(value) && Number(value) <= 400 ? '' : bad;
+        case 'radius': return /^\d{1,2}$/.test(value) ? '' : bad;
+        case 'lines': return /^(?:[1-9]|[1-5]\d|60)$/.test(value) ? '' : bad;
+        case 'tw': return /^\d{1,3}(?:\.\d)?$/.test(value) && Number(value) >= 1 && Number(value) <= 100 ? '' : bad;
+        case 'fs': case 'lh': return /^\d{1,3}$/.test(value) && Number(value) >= 6 && Number(value) <= 200 ? '' : bad;
+        case 'rep': return /^[1-9]\d{0,2}$/.test(value) && Number(value) <= 200 ? '' : bad;
+        case 'line': return /^(?!.*(.).*\1)[trbl]{1,4}$/.test(value) ? '' : bad;
+        case 'wrap': case 'shadow': case 'bold': case 'approx': case 'clip': return ['true', 'false'].includes(value) ? '' : bad;
+        default: return LAYOUT_ENUM[key]?.includes(value) ? '' : bad;
+    }
+}
+
+function parseOverrides(text) {
+    const out = {};
+    for (const part of String(text || '').split(';')) {
+        const at = part.indexOf(':');
+        if (at < 1) continue;
+        out[part.slice(0, at).trim()] = part.slice(at + 1).trim();
+    }
+    return out;
+}
+
+function validateLayout(node, diagnostics) {
+    for (const key of LAYOUT_ATTRS) {
+        const value = node.attrs[key];
+        if (value === undefined || key === 'at768') continue;
+        const message = layoutValueError(key, value);
+        if (message) diagnostic(diagnostics, node, 'INVALID_LAYOUT', message);
+    }
+    if (node.attrs.at768 !== undefined) {
+        const overrides = parseOverrides(node.attrs.at768);
+        if (!Object.keys(overrides).length) diagnostic(diagnostics, node, 'INVALID_LAYOUT', 'at768 needs key:value pairs separated by ;.');
+        for (const [key, value] of Object.entries(overrides)) {
+            if (!LAYOUT_ATTRS.includes(key) || ['at768', 'rep', 'show', 'approx'].includes(key)) diagnostic(diagnostics, node, 'INVALID_LAYOUT', `at768 cannot set "${key}".`);
+            else if (value !== '-') { const message = layoutValueError(key, value); if (message) diagnostic(diagnostics, node, 'INVALID_LAYOUT', `at768 ${message}`); }
+        }
+    }
+    if (node.type === 'screen') {
+        if (node.attrs.layout !== undefined && node.attrs.layout !== 'v2') diagnostic(diagnostics, node, 'INVALID_LAYOUT', 'layout must be v2.');
+        if (node.attrs.vw !== undefined && !(/^\d{3,4}$/.test(node.attrs.vw) && Number(node.attrs.vw) >= 240 && Number(node.attrs.vw) <= 4000)) diagnostic(diagnostics, node, 'INVALID_LAYOUT', 'vw must be 240 to 4000.');
+        if (node.attrs.ph !== undefined && !(/^\d{3,5}$/.test(node.attrs.ph) && Number(node.attrs.ph) >= 100 && Number(node.attrs.ph) <= 60000)) diagnostic(diagnostics, node, 'INVALID_LAYOUT', 'ph must be 100 to 60000.');
+        if (node.attrs.note !== undefined && (node.attrs.note.length > 160 || /[\u0000-\u001f\u007f]/.test(node.attrs.note))) diagnostic(diagnostics, node, 'INVALID_LAYOUT', 'note must be plain text of at most 160 characters.');
+        if (node.attrs.bg !== undefined && !Object.hasOwn(LAYOUT_FILLS, node.attrs.bg)) diagnostic(diagnostics, node, 'INVALID_LAYOUT', 'bg must be a fill name.');
+    }
+}
+
+const lenCSS = value => value === 'fill' ? '100%' : /%$/.test(value) ? value : `${value}px`;
+const spaceCSS = value => value.split(' ').map(part => part === 'auto' ? 'auto' : `${part}px`).join(' ');
+const JUSTIFY_CSS = { start: 'flex-start', center: 'center', end: 'flex-end', between: 'space-between', around: 'space-around', evenly: 'space-evenly' };
+const ALIGN_CSS = { start: 'flex-start', center: 'center', end: 'flex-end', stretch: 'stretch', baseline: 'baseline' };
+const LAYOUT_RESET = { display: 'block', width: 'auto', height: 'auto', 'max-width': 'none', 'min-height': '0', margin: '0', padding: '0', flex: '0 1 auto', 'grid-column': 'auto', position: 'relative', 'aspect-ratio': 'auto' };
+const SEMANTIC_OUTLINE = new Set(['header', 'nav', 'main', 'sidebar', 'footer', 'section', 'form', 'hero', 'card', 'dialog']);
+
+// Declarations for one node, from its (possibly overridden) attributes.
+function layoutDeclarations(node, props, parentFlow, leaf) {
+    const d = {};
+    const type = node.type;
+    const flow = props.flow || (type === 'row' ? 'row' : type === 'grid' ? 'grid' : 'block');
+    d['box-sizing'] = 'border-box';
+    d.position = 'relative';
+    d['min-width'] = '0';
+    const pos = props.pos;
+    if (pos === 'abs' || pos === 'fixed') {
+        d.position = 'absolute'; d.top = `${props.top || 0}px`; d.left = `${props.left || 0}px`;
+        if (props.w && props.w !== 'fill') d.width = lenCSS(props.w);
+        if (props.h) d.height = lenCSS(props.h);
+    } else {
+        if (pos === 'sticky') { d.position = 'sticky'; d.top = `${props.top || 0}px`; d['z-index'] = '2'; }
+        if (props.w) d.width = lenCSS(props.w);
+        if (props.w && props.w !== 'fill') d['max-width'] = '100%';
+        if (props.grow) { d.flex = `${props.grow} 1 0%`; }
+        else if (parentFlow === 'row' && !props.w) d.flex = '0 1 auto';
+        if (props.span && parentFlow === 'grid') d['grid-column'] = `span ${props.span}`;
+        if (props.h) d.height = lenCSS(props.h);
+        if (props.mar) d.margin = spaceCSS(props.mar);
+        if (props.self) d['align-self'] = ALIGN_CSS[props.self];
+    }
+    if (props.maxw) d['max-width'] = lenCSS(props.maxw);
+    if (props.minh) d['min-height'] = lenCSS(props.minh);
+    if (props.clip === 'true') { d.overflow = 'hidden'; d['min-height'] = '0'; d['flex-shrink'] = '0'; }
+    if (props.ratio) d['aspect-ratio'] = props.ratio;
+    if (props.pad) d.padding = spaceCSS(props.pad);
+    if (props.fill) d.background = LAYOUT_FILLS[props.fill];
+    if (props.line) {
+        const sides = { t: 'top', r: 'right', b: 'bottom', l: 'left' };
+        for (const letter of props.line) d[`border-${sides[letter]}`] = '1px solid #cdd3de';
+    }
+    if (props.radius) d['border-radius'] = `${props.radius}px`;
+    if (props.shadow === 'true') d['box-shadow'] = '0 2px 8px rgba(24,34,48,.12)';
+    if (!leaf) {
+        if (flow === 'block') d.display = 'flow-root';
+        else if (flow === 'grid') {
+            d.display = 'grid';
+            d['grid-template-columns'] = props.tracks ? props.tracks.split(',').map(t => /^\d+(?:\.\d+)?$/.test(t) ? `${t}px` : t === 'auto' ? 'auto' : t).map(t => /fr$/.test(t) ? `minmax(0,${t})` : t).join(' ') : `repeat(${props.columns || 2},minmax(0,1fr))`;
+        } else {
+            d.display = 'flex'; d['flex-direction'] = flow === 'col' ? 'column' : 'row';
+            if (props.wrap === 'true') d['flex-wrap'] = 'wrap';
+        }
+        const rowGap = props.rgap ?? props.gap, colGap = props.cgap ?? props.gap;
+        if (flow !== 'block') {
+            if (rowGap) d['row-gap'] = `${rowGap}px`;
+            if (colGap) d['column-gap'] = `${colGap}px`;
+            if (props.justify) d['justify-content'] = JUSTIFY_CSS[props.justify];
+            if (props.align) d['align-items'] = ALIGN_CSS[props.align];
+        }
+    } else d.display = 'block';
+    return d;
+}
+
+function leafInner(node, props, surface = '') {
+    const type = node.type;
+    const fs = Number(props.fs || 14), lh = Number(props.lh || Math.round(fs * 1.4));
+    const bar = Math.max(4, Math.round(fs * (type === 'heading' || props.bold === 'true' ? .62 : .5)));
+    const gap = Math.max(0, Math.round((lh - bar) / 2));
+    // Bars read against the surface they sit on: light on a dark or accent fill, grey elsewhere.
+    const onDark = surface === 'dark' || surface === 'accent';
+    const tone = onDark ? (props.tone === 'muted' ? 'muted-light' : 'light') : (props.tone === 'light' ? '' : props.tone || '');
+    const color = type === 'heading' && !tone ? '#9aa3b2' : LAYOUT_BARS[tone];
+    if (['text', 'heading', 'link'].includes(type)) {
+        const lines = Number(props.lines || 1);
+        const width = props.tw ? `${props.tw}%` : '100%';
+        const auto = props.ta === 'center' ? 'margin-inline:auto;' : props.ta === 'right' ? 'margin-left:auto;' : '';
+        const rule = `repeating-linear-gradient(to bottom,transparent 0,transparent ${gap}px,${color} ${gap}px,${color} ${gap + bar}px,transparent ${gap + bar}px,transparent ${lh}px)`;
+        return { style: props.h ? 'display:flex;align-items:center;' : '', inner: `<i style="display:block;flex:none;width:${width};height:${lines * lh}px;background:${rule};border-radius:2px;${auto}"></i>` };
+    }
+    if (type === 'button') {
+        const tw = props.tw || 50;
+        return { style: `display:flex!important;align-items:center;justify-content:center;${props.fill ? '' : 'background:#fff;border:1px solid #cdd3de;'}border-radius:${props.radius ? props.radius : 6}px;`,
+            inner: `<i style="display:block;width:${tw}%;height:${bar}px;border-radius:2px;background:${props.fill === 'dark' || props.fill === 'accent' ? LAYOUT_BARS.light : LAYOUT_BARS['']}"></i>` };
+    }
+    if (['input', 'textarea', 'select'].includes(type)) {
+        const tail = type === 'select' ? '<i style="position:absolute;right:12px;top:50%;width:8px;height:8px;margin-top:-5px;border-right:2px solid #bcc3cf;border-bottom:2px solid #bcc3cf;transform:rotate(45deg)"></i>' : '';
+        return { style: `background:#fff;border:1px solid #cdd3de;border-radius:${props.radius || 4}px;`, inner: `<i style="position:absolute;left:12px;top:${type === 'textarea' ? 14 : '50%'};${type === 'textarea' ? '' : 'margin-top:-' + Math.round(bar / 2) + 'px;'}width:38%;height:${bar}px;border-radius:2px;background:#d5dae2"></i>${tail}` };
+    }
+    if (['checkbox', 'radio'].includes(type)) return { style: `width:${props.w && props.w !== 'fill' ? '' : '18px;'}height:${props.h || 18}px;border:1px solid #bcc3cf;border-radius:${type === 'radio' ? '50%' : '3px'};background:#fff;`, inner: '' };
+    if (type === 'image') {
+        const cross = 'linear-gradient(to top right,transparent calc(50% - .6px),#c3cad6 50%,transparent calc(50% + .6px)),linear-gradient(to bottom right,transparent calc(50% - .6px),#c3cad6 50%,transparent calc(50% + .6px))';
+        return { style: `background-color:${props.fill ? LAYOUT_FILLS[props.fill] : '#e4e8ee'};background-image:${cross};`, inner: '' };
+    }
+    if (type === 'divider') return { style: 'height:1px;background:#cdd3de;', inner: '' };
+    return { style: props.approx === 'true' ? 'outline:1px dashed #cdd3de;outline-offset:-1px;' : '', inner: '' };
+}
+
+const LAYOUT_LEAVES = new Set(['text', 'heading', 'link', 'button', 'input', 'textarea', 'select', 'checkbox', 'radio', 'image', 'divider', 'badge', 'avatar', 'field', 'date', 'slider', 'progress', 'chart', 'toggle', 'calendar', 'column', 'option', 'spacer']);
+const LAYOUT_NODE_LIMIT = 4000;
+
+function layoutRender(page, { responsive, prefix }) {
+    const rules = [];
+    let counter = 0, emitted = 0;
+    const cls = n => `${prefix}${n}`;
+    const declText = map => Object.entries(map).map(([k, v]) => `${k}:${v}`).join(';');
+    function walk(node, parentFlow, isRoot, surface = '') {
+        if (++emitted > LAYOUT_NODE_LIMIT) throw new Error('Layout has too many nodes to draw.');
+        const base = { ...node.attrs };
+        const show = base.show;
+        const leaf = !node.children.length && (LAYOUT_LEAVES.has(node.type) || node.type === 'box');
+        if (!responsive && show === 'mobile') return '';
+        const over = responsive && base.at768 ? parseOverrides(base.at768) : null;
+        const merged = over ? { ...base } : null;
+        if (over) for (const [key, value] of Object.entries(over)) { if (value === '-') delete merged[key]; else merged[key] = value; }
+        const id = counter++;
+        const name = cls(id);
+        const flow = base.flow || (node.type === 'row' ? 'row' : node.type === 'grid' ? 'grid' : 'block');
+        const decls = layoutDeclarations(node, isRoot ? { ...base, w: undefined, mar: undefined, pos: undefined } : base, parentFlow, leaf);
+        const here = base.fill && base.fill !== 'none' ? base.fill : surface;
+        const extra = leaf ? leafInner(node, base, here) : { style: '', inner: '' };
+        const outline = SEMANTIC_OUTLINE.has(node.type) && !base.fill && !base.line && !isRoot ? 'outline:1px dashed #e3e7ee;outline-offset:-1px;' : '';
+        let css = `.${name}{${declText(decls)};${extra.style}${outline}}`;
+        if (over) {
+            const next = layoutDeclarations(node, isRoot ? { ...merged, w: undefined, mar: undefined, pos: undefined } : merged, parentFlow, leaf);
+            const delta = {};
+            for (const key of new Set([...Object.keys(decls), ...Object.keys(next)])) {
+                if (decls[key] !== next[key]) delta[key] = next[key] ?? LAYOUT_RESET[key] ?? 'initial';
+            }
+            if (Object.keys(delta).length) css += `@media(max-width:${LAYOUT_BREAKPOINT}px){.${name}{${declText(delta)}}}`;
+            if (leaf && (merged.lines !== base.lines || merged.tw !== base.tw)) {
+                // Text bars are drawn from lines/tw, so redraw them for phone width too.
+                const phone = leafInner(node, merged, here);
+                css += `@media(max-width:${LAYOUT_BREAKPOINT}px){.${name}{${phone.style}}.${name}>i{${phone.inner.match(/style="([^"]*)"/)?.[1] || ''}}}`;
+            }
+        }
+        if (responsive && show === 'desktop') css += `@media(max-width:${LAYOUT_BREAKPOINT}px){.${name}{display:none!important}}`;
+        if (responsive && show === 'mobile') css += `@media(min-width:${LAYOUT_BREAKPOINT + 1}px){.${name}{display:none!important}}`;
+        rules.push(css);
+        const kids = leaf ? '' : node.children.map(child => walk(child, flow, false, here)).join('');
+        const copies = Math.max(1, Number(base.rep || 1));
+        const tag = { header: 'header', nav: 'nav', main: 'main', sidebar: 'aside', footer: 'footer', form: 'div' }[node.type] || 'div';
+        const label = shown(node);
+        const attrs = ` class="${name}"${show && show !== 'any' ? ` data-show="${esc(show)}"` : ''} data-type="${esc(node.type)}"${label && leaf ? ` data-label="${esc(label.slice(0, 80))}"` : ''}${node.attrs.route && leaf ? ` data-route="${esc(node.attrs.route)}"` : ''}`;
+        const one = `<${tag}${attrs}>${extra.inner}${kids}</${tag}>`;
+        if (copies === 1) return one;
+        // Repeated items share one rule set; each copy is its own element.
+        return one.repeat(copies);
+    }
+    const root = walk(page, 'block', true);
+    return { css: rules.join(''), html: root };
+}
+
+let layoutRenderCount = 0;
+function renderLayoutScreen(page, title, { standalone, interactive, baseCss }) {
+    const diagnostics = [];
+    const vw = Number(page.attrs.vw || 1440), ph = Number(page.attrs.ph || 900);
+    const bg = LAYOUT_FILLS[page.attrs.bg || 'white'];
+    const safeTitle = String(page.label || title || 'Wireframe').slice(0, LIMIT.label);
+    let drawn, mobile;
+    try {
+        drawn = layoutRender(page, { responsive: false, prefix: `wfl${++layoutRenderCount}-` });
+        mobile = layoutRender(page, { responsive: true, prefix: 'wfl-' });
+    } catch (error) { diagnostic(diagnostics, page, 'LAYOUT_LIMIT', error.message); }
+    if (!drawn) return { diagnostics };
+    const root = `.wfl-0{background:${bg};}`;
+    // An honest state: say why the page has no captured layout.
+    const note = page.attrs.note ? `<div style="margin:12px;padding:10px 14px;border:1px dashed #98a2b3;border-radius:8px;background:#f8fafc;color:#475467;font:13px/1.4 system-ui,sans-serif">${esc(String(page.attrs.note).slice(0, 160))}</div>` : '';
+    drawn.html = note + drawn.html; mobile.html = note + mobile.html;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vw} ${ph}" width="${vw}" height="${ph}" role="img" aria-label="${esc(safeTitle)}"><title>${esc(safeTitle)}</title><foreignObject x="0" y="0" width="${vw}" height="${ph}"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${vw}px;height:${ph}px;overflow:hidden;background:${bg}"><style>${drawn.css}</style>${drawn.html}</div></foreignObject></svg>`;
+    const imagePolicy = standalone ? 'data:' : "'none'";
+    const hasBridge = interactive && !standalone;
+    const scriptPolicy = hasBridge ? `'${PREVIEW_ROUTE_HASH}'` : "'none'";
+    const bridge = hasBridge ? `<script>${PREVIEW_ROUTE_BRIDGE}</script>` : '';
+    const basePolicy = standalone ? "'none'" : 'about:';
+    const base = standalone ? '' : '<base href="about:srcdoc">';
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src ${scriptPolicy}; img-src ${imagePolicy}; connect-src 'none'; form-action 'none'; base-uri ${basePolicy}">${base}<meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(safeTitle)}</title><style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:${bg}}body{min-height:${ph}px}${baseCss}${mobile.css}${root}</style></head><body>${mobile.html}${bridge}</body></html>`;
+    return { svg, html, diagnostics, explanation: explainWireframeDiagnostics(diagnostics) };
+}
+
 export function renderWireframe(source, title = 'Wireframe', pageId, assets = [], { interactive = false, standalone = false, baseCss = '' } = {}) {
     // Only the host supplies this manifest. DSL source can name an ID, never a URL.
     // Restrict even host-provided URLs to the exact project attachment endpoint.
@@ -583,6 +850,10 @@ export function renderWireframe(source, title = 'Wireframe', pageId, assets = []
     const ast = parseWireframe(source), diagnostics = [...ast.diagnostics];
     const page = pageId === undefined ? ast.screens[0] : ast.screens.find(screen => screen.attrs.id === pageId || screen.id === pageId || screen.label === pageId);
     if (!page && !diagnostics.some(d => d.severity === 'error')) diagnostic(diagnostics, null, 'UNKNOWN_PAGE', `Unknown page "${pageId}".`);
+    if (page?.attrs.layout === 'v2' && !diagnostics.some(d => d.severity === 'error')) {
+        const drawn = renderLayoutScreen(page, title, { standalone, interactive, baseCss });
+        return { ...drawn, diagnostics: [...diagnostics, ...drawn.diagnostics], explanation: explainWireframeDiagnostics([...diagnostics, ...drawn.diagnostics]) };
+    }
     let box;
     if (!diagnostics.some(d => d.severity === 'error')) {
         try { box = measure(page, numeric(page, 'width', { mobile: 390, tablet: 768, desktop: 920 }[page.attrs.device] || 920), diagnostics); }

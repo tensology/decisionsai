@@ -671,6 +671,19 @@ def _grab(url: str, dest: Path, allowed_hosts: set[str]) -> dict:
                 except Exception:
                     logger.debug("Interface shot: rendered cues not read", exc_info=True)
                     cue = {}
+                try:
+                    # After the screenshot: the layout read resizes the page to phone width and back.
+                    from distr.core.planning import layout_probe
+
+                    raw = layout_probe.read_page(page)
+                    layouts = layout_probe.stored_layouts(
+                        raw, route=urlparse(url).path or "/", origin=_origin(url))
+                    if layouts:
+                        cue = {**cue, "_layouts": layouts,
+                               "_layout_meta": {"vw": raw["desktop"].get("vw"), "ph": raw["desktop"].get("ph"),
+                                                "phone": bool(raw.get("mobile", {}).get("records"))}}
+                except Exception:
+                    logger.debug("Interface shot: layout not read", exc_info=True)
                 last_error = None
                 break
             except Exception as exc:
@@ -777,6 +790,11 @@ def capture_interface_shot(workspace_id: int, *, screen_id: str, route: str, lan
         "wire_hash": expected or "",
     }
     if cue:
+        layouts = cue.pop("_layouts", None)
+        layout_meta = cue.pop("_layout_meta", None)
+        if layouts:
+            payload["layouts"] = layouts
+            payload["layout"] = {**(layout_meta or {}), "captured_at": stamp}
         payload["cues"] = cue
     _write_meta(dest, payload)
     return {"image": image, "reason": "", "captured_at": stamp, "current": True}
