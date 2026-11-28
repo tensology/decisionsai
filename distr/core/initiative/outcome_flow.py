@@ -2287,7 +2287,7 @@ def apply_rework_instruction(key: str, flow: dict[str, Any], instruction: str) -
 
     body = str(flow.get("body") or "")
     try:
-        new_text = compose_rework_text(body, instruction)
+        new_text = compose_rework_text(body, instruction, client=str(flow.get("client") or ""))
     except Exception as exc:
         logger.warning("Client reply rework failed", exc_info=True)
         return {"text": f"I couldn't rework that just now: {str(exc)[:200]}. Tell me what to change."}

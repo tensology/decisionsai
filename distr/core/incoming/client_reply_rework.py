@@ -1,9 +1,10 @@
 """Rework a held client-reply draft from Paul's Telegram instruction.
 
 Used when Paul taps Rework on a confirm card and replies to
-"What should I change?". Literal wording in that instruction is kept
-verbatim; otherwise the previous draft is rewritten in Paul's client voice.
-Nothing here sends a message to a client.
+"What should I change?". If his reply is itself the new message (it starts
+with the client's name and reads like a message, is quoted, or follows "say:")
+it is used verbatim. Anything else is an edit instruction applied to the
+previous draft, which keeps its content. Nothing here sends a message to a client.
 """
 
 from __future__ import annotations
@@ -39,8 +40,37 @@ _TIME_GREETING = re.compile(
 )
 
 
-def literal_rework_text(instruction: str) -> str | None:
-    """Return exact wording Paul asked to use, or None if this is a rewrite note."""
+_NAME_FIRST = re.compile(r"^\s*([A-Z][A-Za-z'\u2019-]+(?:\s+[A-Z][A-Za-z'\u2019-]+)?)\s*,\s+\S")
+# Words that open an instruction ("Please, add ...", "Also, mention ..."), never a client name.
+_NOT_A_NAME = frozenset({
+    "please", "also", "just", "maybe", "yes", "no", "ok", "okay", "sure", "actually", "rather",
+    "and", "but", "so", "can", "could", "make", "add", "say", "mention", "remove", "change",
+    "don't", "do", "use", "thanks", "thank", "hi", "hello", "hey", "good", "now", "then",
+})
+_ADD_PLEASE = re.compile(
+    r"(?is)^\s*(?:(?:ok(?:ay)?|yes|so)[,.]?\s+)?(?:please\s+)?(?:just\s+)?(?:can you\s+)?"
+    r"(?:add|say|put|write|end(?:\s+it)?\s+with|finish\s+with)\s+[\"“']?please[\"”']?\s+"
+    r"(?:at|on|to)\s+(?:the\s+)?end(?:\s+of\s+(?:it|the\s+(?:message|draft|text|reply)))?\s*[.!]?\s*$"
+)
+
+
+def name_of(text: str) -> str:
+    """The name a name-first message opens with ('Caleb, ...' -> 'Caleb'), else ''."""
+    match = _NAME_FIRST.match(str(text or ""))
+    return match.group(1) if match else ""
+
+
+def _reads_like_message(raw: str, previous: str = "", client: str = "") -> bool:
+    """A name-first, sentence-length reply is the new message, not a note about it."""
+    name = name_of(raw)
+    if not name or name.split()[0].lower() in _NOT_A_NAME or len(raw.split()) < 5:
+        return False
+    known = {n.lower() for n in (name_of(previous), str(client or "").strip()) if n}
+    return not known or name.lower() in known or len(raw.split()) >= 8
+
+
+def literal_rework_text(instruction: str, *, previous: str = "", client: str = "") -> str | None:
+    """Return exact wording Paul gave as the new message, or None if this is an edit note."""
     raw = str(instruction or "").strip()
     if not raw:
         return None
@@ -49,39 +79,55 @@ def literal_rework_text(instruction: str) -> str | None:
         body = str(body).strip()
         if not body:
             continue
-        # A quoted name ("Sibo") is not the whole message.
-        if len(body.split()) >= 2 or "\n" in body or raw.strip().strip('“”"') == body:
-            return body
+        # A quoted name ("Sibo") or snippet ("see you Monday") is not the whole message.
+        if raw.strip().strip('\u201c\u201d"') == body or _reads_like_message(body, previous, client):
+            if len(body.split()) >= 2 or "\n" in body:
+                return body
     for pattern in (_SAY_LEAD, _LITERAL_LEAD):
         match = pattern.match(raw)
         if match:
-            body = match.group(1).strip().strip('“”"')
+            body = match.group(1).strip().strip('\u201c\u201d"')
             if body:
                 return body
-    if not _META_ONLY.match(raw) and not _META_START.match(raw) and (
-        len(raw) > 20 or re.search(r"[.!?]", raw)
-    ):
+    if _reads_like_message(raw, previous, client):
         return raw
     return None
 
 
-def compose_rework_text(previous: str, instruction: str, *, complete=None) -> str:
-    """Redraft ``previous`` using Paul's instruction, in his client voice.
+def add_please_at_end(previous: str) -> str:
+    """'add please at the end' on a request: 'with those?' -> 'with those, please?'."""
+    text = str(previous or "").rstrip()
+    if re.search(r"(?i)\bplease\s*[.!?]*$", text):
+        return text
+    match = re.search(r"[.!?]+$", text)
+    tail = match.group(0) if match else ""
+    body = text[: len(text) - len(tail)].rstrip(" ,")
+    return f"{body}, please{tail}"
 
-    Literal text in the instruction is used verbatim (then only I/we and
-    'hope you're well' voice fixes). Model output also drops Good morning
-    / afternoon / evening openers. The result is never sent from here.
+
+def compose_rework_text(previous: str, instruction: str, *, complete=None, client: str = "") -> str:
+    """Revise ``previous`` with Paul's feedback, in his client voice.
+
+    Replacement wording (see ``literal_rework_text``) is used verbatim, then only
+    I/we and 'hope you're well' voice fixes. Anything else is an edit instruction:
+    the previous draft keeps its content and only the requested change is applied.
+    Model output also drops Good morning / afternoon / evening openers. The result
+    is never sent from here.
     """
     previous = str(previous or "").strip()
     instruction = str(instruction or "").strip()
     if not instruction:
         raise ValueError("Tell me what to change.")
-    literal = literal_rework_text(instruction)
+    literal = literal_rework_text(instruction, previous=previous, client=client)
     if literal:
         text = apply_client_voice(literal)
         if not text:
             raise ValueError("The new wording was empty. Tell me what to change.")
         return text
+    if previous and _ADD_PLEASE.match(instruction):
+        return add_please_at_end(previous)
+    if not previous:
+        raise ValueError("There is no previous draft to edit. Send the full message instead.")
     from distr.core.read_response import _default_complete, resolve_oracle_model
     from distr.core.settings import load_settings_from_db
     from distr.core.agent.owner_identity import owner_label
@@ -91,12 +137,16 @@ def compose_rework_text(previous: str, instruction: str, *, complete=None) -> st
         {
             "role": "system",
             "content": (
-                f"Rewrite a client message from {owner}, one developer. "
+                f"Edit a client message from {owner}, one developer. The user gives the "
+                "previous draft and an edit instruction. Keep the previous draft's content, "
+                "facts, wording and its opening name; change only what the instruction asks "
+                "(for 'add please at the end' return the same text with please added, for "
+                "'make it shorter' trim it, for 'mention Monday' add Monday). "
+                "The instruction is a note to you, never message text to copy. "
                 "Write as I, me, my; never we, us or our. Keep it short. "
                 "No pleasantries: no 'hope you're well', no Good morning, "
                 "Good afternoon or Good evening. Do not lecture the client "
-                "on their own setup. Honour the rewrite request. If it includes "
-                "the exact wording to use, use that wording. Do not add facts "
+                "on their own setup. Do not add facts "
                 "or claims of work that the previous draft does not already show. "
                 "Return only the final message.\n" + CLIENT_VOICE_RULES
             ),
@@ -104,7 +154,7 @@ def compose_rework_text(previous: str, instruction: str, *, complete=None) -> st
         {
             "role": "user",
             "content": (
-                "Previous draft:\n" + previous + "\n\nRewrite request:\n" + instruction
+                "Previous draft:\n" + previous + "\n\nEdit instruction:\n" + instruction
             ),
         },
     ]
@@ -116,4 +166,6 @@ def compose_rework_text(previous: str, instruction: str, *, complete=None) -> st
     text = apply_client_voice(text)
     if not text:
         raise ValueError("The rewrite came back empty. Tell me what to change.")
+    if text.strip().lower() == instruction.strip().lower():
+        raise ValueError("The rewrite just repeated your note. Tell me what to change.")
     return text

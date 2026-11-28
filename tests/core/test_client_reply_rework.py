@@ -105,6 +105,75 @@ def test_card_uses_contact_display_name_not_whatsapp_label(env):
     assert "Snuza Dev (WhatsApp group)" in env.tg.sent[1]["text"]
 
 
+CALEB = (
+    "Caleb, Yoco support (Iesa) is tracing the stuck C6828W payment (R1,300.46, 26 Nov) and needs the "
+    "Yoco account email and the account holder's ID number before he'll help. "
+    "Can you reply to his email on Monday with those?"
+)
+
+
+def _model_that_edits(expected_note, edited):
+    calls = []
+
+    def complete(_provider, _model, prompt, _settings):
+        calls.append(prompt)
+        # The model always sees the previous draft and the note as an edit instruction.
+        assert CALEB in prompt[1]["content"]
+        assert expected_note in prompt[1]["content"]
+        assert "Edit instruction:" in prompt[1]["content"]
+        return edited
+
+    return complete, calls
+
+
+def test_add_please_at_the_end_keeps_the_draft_and_adds_please():
+    expected = CALEB.replace("with those?", "with those, please?")
+    for note in ("add please at the end", "Just say please at the end", "please add please at the end.",
+                 'Can you add "please" to the end'):
+        assert literal_rework_text(note, previous=CALEB, client="Caleb") is None
+        assert compose_rework_text(CALEB, note, client="Caleb") == expected
+    # Already polite: unchanged, not doubled.
+    assert compose_rework_text(expected, "add please at the end") == expected
+
+
+def test_instruction_edits_go_to_the_model_with_the_previous_draft():
+    shorter = "Caleb, Yoco support (Iesa) needs the Yoco account email and holder's ID for C6828W. Reply on Monday?"
+    complete, calls = _model_that_edits("make it shorter", shorter)
+    assert compose_rework_text(CALEB, "make it shorter", complete=complete, client="Caleb") == shorter
+    assert len(calls) == 1 and "Keep the previous draft's content" in calls[0][0]["content"]
+
+    monday = CALEB.replace("on Monday", "by Monday")
+    complete, _ = _model_that_edits("mention Monday", monday)
+    assert compose_rework_text(CALEB, "mention Monday", complete=complete, client="Caleb") == monday
+
+
+def test_notes_are_not_mistaken_for_replacement_text():
+    for note in ("Just say please at the end", "make it shorter", "mention Monday", "Add please at the end of it",
+                 "Say it more politely and keep the amounts", 'mention "see you Monday" at the end',
+                 "Please can you make it sound friendlier", "Also mention that the payment is from 26 Nov"):
+        assert literal_rework_text(note, previous=CALEB, client="Caleb") is None, note
+
+
+def test_a_model_that_echoes_the_note_is_rejected():
+    def echo(_provider, _model, _prompt, _settings):
+        return "Just say please at the end of the message to him"
+
+    with pytest.raises(ValueError):
+        compose_rework_text(CALEB, "Just say please at the end of the message to him", complete=echo, client="Caleb")
+
+
+def test_replacement_message_is_used_verbatim():
+    replacement = "Caleb, Yoco support still needs the account email. Can you send it Monday morning?"
+    assert compose_rework_text(CALEB, replacement, client="Caleb") == replacement
+    assert compose_rework_text(CALEB, f'say: {replacement}', client="Caleb") == replacement
+    assert compose_rework_text(CALEB, f'"{replacement}"', client="Caleb") == replacement
+    assert compose_rework_text(CALEB, f"Rather update the message to say {replacement}") == replacement
+    # Replacement text still gets Paul's voice rules, never a greeting or "we".
+    assert compose_rework_text(CALEB, "Caleb, we've asked Yoco and we'll chase it on Monday.") == (
+        "Caleb, I've asked Yoco and I'll chase it on Monday."
+    )
+
+
 def test_rework_prompt_supersedes_old_card_and_sends_new_card(env):
     cancelled = []
 
@@ -164,6 +233,30 @@ def test_rework_prompt_supersedes_old_card_and_sends_new_card(env):
     assert new_key != key
     assert of.get_flow(new_key)["status"] == "awaiting_decision"
     assert of.get_flow(new_key)["draft_id"] == "d2"
+
+
+def test_rework_note_edits_the_held_draft_on_the_new_card(env):
+    seen = {}
+
+    def create_draft(chat_id, response_id, source_key, **kwargs):
+        seen.update(kwargs)
+        new = {"id": "d2", "text": kwargs["preset_text"], "response_id": response_id, "source_key": source_key,
+               "target": {"channel": "whatsapp", "recipient_names": ["Caleb"], "jid": "222@lid"}}
+        of.hold_thread_reply(chat_id, new, answering="Yoco payment", label="Caleb")
+        return new
+
+    env.mp.setattr("distr.core.incoming.source_reply.create_draft", create_draft)
+    old = {"id": "d1", "text": CALEB, "response_id": 9, "source_key": "whatsapp:222@lid",
+           "target": {"channel": "whatsapp", "recipient_names": ["Caleb"], "jid": "222@lid"}}
+    key = of.hold_thread_reply(42, old, answering="Yoco payment", label="Caleb")
+    of.handle_telegram_text(f"oc:{key}:rework", chat_id=1, telegram_message_id=env.tg.sent[0]["message_id"])
+    assert of.handle_telegram_text("Just say please at the end", chat_id=1) == {"suppress": True}
+
+    expected = CALEB.replace("with those?", "with those, please?")
+    assert seen["preset_text"] == expected and seen["replaces"] == "d1"
+    assert of.get_flow(key)["status"] == "superseded"
+    assert expected in env.tg.sent[-1]["text"]
+    assert _labels(env.tg.sent[-1]["reply_markup"]) == ["Send message to client", "Rework", "Not yet"]
 
 
 def test_cancel_edits_card_to_superseded_and_blocks_send(env):
