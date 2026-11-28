@@ -32,11 +32,12 @@ class PiAgentTool(BaseTool):
         "- Run tests, linting, or builds in a project\n"
         "- Query a project for information (file counts, configs, stats)\n"
         "- Perform git operations on a project\n"
-        "- Deploy or manage a project's codebase\n"
         "- Any development task that should happen in the project folder\n\n"
         "Pi is an AI coding agent that works directly on the codebase with read/write/bash tools.\n"
         "You are the orchestrator — Pi is the specialist.\n\n"
-        "The tool will wait for Pi to complete and return the result directly.\n"
+        "Read-only instructions (inspect, find, report, run tests) go to Pi straight away.\n"
+        "An instruction that would change code, data or a server is NOT run: it is filed as a proposal "
+        "(a Backlog ticket plus an Approve card on Telegram) and starts only when the user approves it.\n"
         "If no project_name is given, uses the currently active project."
     )
     args_schema: type[BaseModel] = PiAgentInput
@@ -93,6 +94,25 @@ class PiAgentTool(BaseTool):
             # For the system prompt, include a condensed version
             condensed = self._condense_context_for_system_prompt(project_context)
             system_prompt_for_pi += f"\n{condensed}"
+
+        # Changes wait for Paul: file a proposal instead of editing code (pi_write_proposals).
+        from distr.core.initiative import pi_write_proposals
+
+        if pi_write_proposals.is_write_instruction(instruction):
+            if not project_id:
+                return "Not started: no project to file the proposal on. Nothing was changed."
+            source_chat_id = None
+            try:
+                from distr.core.chat_approvals import current_chat_id
+
+                source_chat_id = current_chat_id()
+            except Exception:
+                pass
+            filed = pi_write_proposals.file_write_proposal(
+                int(project_id), resolved_name, instruction, source_chat_id=source_chat_id,
+            )
+            return f"[Pi — {resolved_name}] {filed['message']}"
+        enriched_instruction = pi_write_proposals.READ_ONLY_PREFIX + enriched_instruction
 
         # Acknowledge immediately so the user isn't left in silence
         from distr.core.signals import speak_text_directly_event_queue

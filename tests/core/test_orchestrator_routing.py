@@ -227,51 +227,89 @@ def test_resolve_execution_route_falls_back_when_backend_unavailable(
     assert decision.source == "fallback"
 
 
-@patch("distr.core.settings.load_settings_from_db", return_value={})
-@patch(
-    "distr.core.project_cli_backends.model_policy._free_eligible_model",
-    return_value={"backend": "pi", "model": "kilo-auto/free", "provider": "kilocode"},
-)
+def _certification_for(blocked: set[tuple[str, str]], status: str):
+    from distr.core.qualification import CertificationStatus
+
+    def _get(provider, model, _kind):
+        bad = (str(provider), str(model)) in blocked
+        return SimpleNamespace(
+            status=CertificationStatus(status if bad else "unknown"),
+            provider=provider,
+            model=model,
+        )
+
+    return _get
+
+
+@patch("distr.core.project_cli_backends.model_policy._free_eligible_model")
+@patch("distr.core.qualification.ProviderCertificationStore.blocking_unavailable", return_value=None)
 @patch("distr.core.qualification.ProviderCertificationStore.get")
 @patch("distr.core.orchestrator_routing._call_orchestrator_llm", return_value=None)
 @patch("distr.core.project_cli_backends.get_backend")
 @patch("distr.core.kanban.ticket_policy.resolve_ticket_cli_route")
 @pytest.mark.parametrize("certification_status", ["limited", "unavailable"])
-def test_direct_route_replaces_model_that_failed_real_execution(
+def test_certified_bad_pin_uses_the_configured_fallback_not_a_free_or_local_model(
     mock_resolve,
     mock_get_backend,
     _mock_llm,
     mock_certification,
-    _mock_free_route,
-    _mock_settings,
+    _mock_blocking,
+    mock_free_route,
     certification_status,
 ):
-    from distr.core.qualification import CertificationStatus
+    from distr.core.orchestrator_routing import resolve_execution_route
+
+    mock_resolve.return_value = {
+        "backend": "pi",
+        "model": "synthetic/worker-pin",
+        "model_provider": "openrouter",
+        "fallback_backend": "pi",
+        "fallback_model": "synthetic-worker:cloud",
+        "fallback_model_provider": "ollama",
+        "complexity": "medium",
+    }
+    mock_get_backend.side_effect = lambda bid: _backend_ready(bid)
+    mock_certification.side_effect = _certification_for({("openrouter", "synthetic/worker-pin")}, certification_status)
+
+    decision = resolve_execution_route(project=_project(), ticket=_ticket(), board=None, emit_event=False)
+
+    assert decision.backend_id == "pi"
+    assert decision.model == "synthetic-worker:cloud"
+    assert decision.model_provider == "ollama"
+    assert decision.source == "fallback"
+    mock_free_route.assert_not_called()
+
+
+@patch("distr.core.project_cli_backends.model_policy._free_eligible_model")
+@patch("distr.core.qualification.ProviderCertificationStore.blocking_unavailable", return_value=None)
+@patch("distr.core.qualification.ProviderCertificationStore.get")
+@patch("distr.core.orchestrator_routing._call_orchestrator_llm", return_value=None)
+@patch("distr.core.project_cli_backends.get_backend")
+@patch("distr.core.kanban.ticket_policy.resolve_ticket_cli_route")
+def test_certified_bad_pin_without_usable_fallback_keeps_the_configured_model(
+    mock_resolve,
+    mock_get_backend,
+    _mock_llm,
+    mock_certification,
+    _mock_blocking,
+    mock_free_route,
+):
     from distr.core.orchestrator_routing import resolve_execution_route
 
     mock_resolve.return_value = {
         "backend": "codex",
-        "model": "gpt-5.3-codex",
+        "model": "synthetic-codex-pin",
         "complexity": "medium",
     }
     mock_get_backend.side_effect = lambda bid: _backend_ready(bid)
-    mock_certification.return_value = SimpleNamespace(
-        status=CertificationStatus(certification_status),
-        provider="openai",
-        model="gpt-5.3-codex",
-    )
+    mock_certification.side_effect = _certification_for({("openai", "synthetic-codex-pin"), ("codex", "synthetic-codex-pin")}, "unavailable")
 
-    decision = resolve_execution_route(
-        project=_project(),
-        ticket=_ticket(),
-        board=None,
-        emit_event=False,
-    )
+    decision = resolve_execution_route(project=_project(), ticket=_ticket(), board=None, emit_event=False)
 
-    assert decision.backend_id == "pi"
-    assert decision.model == "kilo-auto/free"
-    assert decision.model_provider == "kilocode"
-    assert decision.source == "fallback"
+    assert decision.backend_id == "codex"
+    assert decision.model == "synthetic-codex-pin"
+    assert "kept configured model" in decision.rationale
+    mock_free_route.assert_not_called()
 
 
 @patch("distr.core.orchestrator.emit_event")

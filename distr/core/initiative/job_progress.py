@@ -408,9 +408,14 @@ def flush(key: str) -> str | None:
         _flush_times.append(now)
         token, message_id, chat_id = j.token, j.message_id, j.chat_id
         awaiting, sent_at, sent_text = j.awaiting_ack, j.sent_at, j.sent_text
+        state, n_lines = j.state, len(j.lines)
     try:
-        if _remote_active() and _remote_push(payload):
+        remote_live = _remote_active()
+        if remote_live and _remote_push(payload):
+            logger.info("job_progress: delivered job=%s route=remote state=%s lines=%d", key, state, n_lines)
             return "remote"
+        if remote_live:
+            logger.info("job_progress: remote push failed job=%s; falling back to Telegram", key)
         if text == sent_text:
             return None
         if message_id:
@@ -439,17 +444,23 @@ def flush(key: str) -> str | None:
                 if j3 is not None:
                     j3.sent_text = text
                     j3.failures = 0
+            logger.info("job_progress: delivered job=%s route=telegram %s state=%s lines=%d", key,
+                        f"edit message_id={message_id}" if message_id else "new message", state, n_lines)
             return "telegram"
         with _LOCK:
             j4 = _jobs.get(key)
             retry = False
+            failures = 0
             if j4 is not None:
                 j4.failures += 1
+                failures = j4.failures
                 retry = j4.failures < MAX_DELIVERY_FAILURES
+        logger.info("job_progress: delivery failed job=%s route=telegram failures=%d %s", key, failures,
+                    "will retry" if retry else "dropped")
         if retry:
             _mark_dirty(key)
     except Exception:
-        logger.debug("job_progress.flush failed", exc_info=True)
+        logger.info("job_progress: delivery error job=%s", key, exc_info=True)
     return None
 
 

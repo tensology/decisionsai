@@ -489,47 +489,48 @@ def resolve_execution_route(
 
     # CLI availability does not prove that a pinned model is usable. A real
     # failed project execution certifies that exact provider/model route as
-    # unavailable; Auto may then select a healthy free/local worker instead of
-    # repeatedly launching an obsolete Codex model or another known-bad pin.
+    # unavailable. The worker stays on the CONFIGURED models: the policy route's
+    # own fallback when the pin is certified bad, otherwise the pin itself. Auto
+    # never swaps in a small local or free model on its own (ticket 290 ran on a
+    # 9B local model that way).
     try:
         from distr.core.qualification import CertificationStatus, ProviderCertificationStore
 
         certification_store = ProviderCertificationStore()
-        certification = certification_store.get(
-            model_provider,
-            model or "auto",
-            "project_execution",
-        )
-        blocking = certification_store.blocking_unavailable(
-            model_provider,
-            model or "auto",
-            "project_execution",
-        )
-        if blocking is not None:
-            certification = blocking
-        if certification.status in {
-            CertificationStatus.LIMITED,
-            CertificationStatus.UNAVAILABLE,
-        }:
-            from distr.core.project_cli_backends.model_policy import _free_eligible_model
-            from distr.core.settings import load_settings_from_db
 
-            fallback = _free_eligible_model(
-                load_settings_from_db(),
-                complexity=level,
-                prefer_local=level in {"low", "medium"},
-                avoid_proven_limited=True,
-            )
-            backend_id = normalize_backend_id(fallback.get("backend") or "pi")
-            model = str(fallback.get("model") or "auto").strip()
-            model_provider = str(
-                fallback.get("provider") or fallback.get("model_provider") or backend_id
-            ).strip().lower()
-            source_hint = "fallback"
-            rationale = (
-                f"{rationale} (fallback: {certification.provider}/{certification.model} "
-                f"is certified {certification.status.value})"
-            )
+        def _route_blocked(provider: str, model_name: str) -> Any:
+            cert = certification_store.get(provider, model_name or "auto", "project_execution")
+            blocking = certification_store.blocking_unavailable(provider, model_name or "auto", "project_execution")
+            cert = blocking if blocking is not None else cert
+            if cert.status in {CertificationStatus.LIMITED, CertificationStatus.UNAVAILABLE}:
+                return cert
+            return None
+
+        certification = _route_blocked(model_provider, model)
+        if certification is not None:
+            configured_model = str(baseline.get("fallback_model") or "").strip()
+            configured_backend = normalize_backend_id(baseline.get("fallback_backend") or backend_id)
+            configured_provider = str(baseline.get("fallback_model_provider") or "").strip().lower()
+            if configured_model and (configured_provider, configured_model) != (model_provider, model) \
+                    and _route_blocked(configured_provider or configured_backend, configured_model) is None:
+                backend_id = configured_backend
+                model = configured_model
+                model_provider = configured_provider or configured_backend
+                source_hint = "fallback"
+                rationale = (
+                    f"{rationale} (configured fallback: {certification.provider}/{certification.model} "
+                    f"is certified {certification.status.value})"
+                )
+            else:
+                logger.warning(
+                    "Worker route %s/%s is certified %s and no usable configured fallback exists; "
+                    "keeping the configured model instead of an automatic local/free pick",
+                    model_provider, model, certification.status.value,
+                )
+                rationale = (
+                    f"{rationale} (kept configured model: {certification.provider}/{certification.model} "
+                    f"is certified {certification.status.value}, no configured fallback)"
+                )
     except Exception:
         logger.debug("Could not apply provider certification to direct route", exc_info=True)
 

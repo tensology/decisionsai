@@ -4728,6 +4728,10 @@ def create_routes():
                 )
             except Exception:
                 logger.debug("move_ticket: chat notify failed", exc_info=True)
+            if str(notify_ctx["to_lane_name"] or "").strip().lower() == "in progress":
+                from distr.core.kanban.ticket_work_thread import ensure_ticket_work_thread
+
+                ensure_ticket_work_thread(ticket_id)
         try:
             from distr.core.workspace_memory.lifecycle import handoff_ticket_lane_done, hook_ensure_workspace
 
@@ -6730,31 +6734,47 @@ source: kanban_ticket_{t.id}
 
                 move_ticket_to_delivery_lane(s, tid, "In Progress")
                 s.commit()
-            with get_session() as s:
-                project = orm_get_by_id(s, Project, project_id)
-                if not project:
-                    raise HTTPException(400, "Project no longer exists")
-                result = await run_project_task(
-                    project,
-                    instruction,
-                    audit_id=audit_id,
-                    workflow_id=audit_id,
-                    run_id=run_id,
-                    step_id=step_id,
-                    ticket_id=tid,
-                    ticket_complexity=complexity,
-                    origin="kanban_ticket",
-                    backend_id_override=backend_override,
-                    model_override=model_override,
-                    codex_reasoning_effort_override=codex_reasoning_effort,
-                    codex_service_tier_override=codex_service_tier,
-                    adapter_options={
-                        "model_provider": route.get("model_provider") or "",
-                        "required_capabilities": ["code", "files"],
-                        "task_intent": (route.get("task_profile") or {}).get("intent") or "implementation",
-                        "skills": list(route.get("skills") or []),
-                    },
-                )
+            # The ticket's Development thread owns this run: the run carries its chat id and the
+            # thread timer counts it, pausing (with a time entry) when the run ends.
+            from distr.core.kanban.ticket_work_thread import (
+                ensure_ticket_work_thread,
+                finish_ticket_run_time,
+                start_ticket_run_time,
+            )
+
+            thread_id = ensure_ticket_work_thread(tid)
+            if thread_id:
+                start_ticket_run_time(thread_id)
+            try:
+                with get_session() as s:
+                    project = orm_get_by_id(s, Project, project_id)
+                    if not project:
+                        raise HTTPException(400, "Project no longer exists")
+                    result = await run_project_task(
+                        project,
+                        instruction,
+                        chat_id=int(thread_id) if thread_id else None,
+                        audit_id=audit_id,
+                        workflow_id=audit_id,
+                        run_id=run_id,
+                        step_id=step_id,
+                        ticket_id=tid,
+                        ticket_complexity=complexity,
+                        origin="kanban_ticket",
+                        backend_id_override=backend_override,
+                        model_override=model_override,
+                        codex_reasoning_effort_override=codex_reasoning_effort,
+                        codex_service_tier_override=codex_service_tier,
+                        adapter_options={
+                            "model_provider": route.get("model_provider") or "",
+                            "required_capabilities": ["code", "files"],
+                            "task_intent": (route.get("task_profile") or {}).get("intent") or "implementation",
+                            "skills": list(route.get("skills") or []),
+                        },
+                    )
+            finally:
+                if thread_id:
+                    finish_ticket_run_time(thread_id)
             if result.success:
                 try:
                     with get_session() as s:

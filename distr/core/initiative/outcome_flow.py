@@ -2189,7 +2189,7 @@ def maybe_send_recommendations(settings: dict[str, Any], *, now: datetime | None
 # Telegram entry point (private chat)
 # ---------------------------------------------------------------------------
 
-_CALLBACK_RE = re.compile(r"^(oc|ip):([A-Za-z0-9]+):([a-z_]+)$")
+_CALLBACK_RE = re.compile(r"^(oc|ip|pw):([A-Za-z0-9]+):([a-z_]+)$")
 _ASK_CALLBACK_RE = re.compile(r"^ac:([0-9a-f]{12}):(in_app|telegram|spoken)$")
 
 
@@ -2220,6 +2220,14 @@ def handle_telegram_text(text: str, *, chat_id: Any = None,
         kind, key, action = callback.groups()
         if kind == "ip":
             return decide_proposal(key, action, chat_id=chat_id)
+        if kind == "pw":  # a Pi write proposal from chat (pi_write_proposals)
+            from distr.core.incoming.telegram_updates import _recipient_id
+
+            if chat_id is not None and _recipient_id(chat_id) is None:
+                return {"text": "Review the proposal in your paired private Telegram chat. Nothing changed."}
+            from distr.core.initiative.pi_write_proposals import decide
+
+            return decide(key, action)
         return _handle_flow_action(key, action, telegram_message_id=telegram_message_id, telegram_chat_id=chat_id)
     claimed = handle_pending_rework(raw, chat_id=chat_id, telegram_message_id=telegram_message_id, source="text")
     if claimed:

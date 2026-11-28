@@ -1672,7 +1672,9 @@ class KanbanTicketTool(BaseTool):
                     text=text,
                 )
             elif action in ("send_to_cli", "push_to_cli", "run_cli"):
-                return self._action_send_to_cli(ticket_id or self._last_ticket_id)
+                # Explicit ticket only: a remembered or "first on the board" ticket once sent the
+                # wrong work (ticket 290 instead of 335) to a worker.
+                return self._action_send_to_cli(ticket_id)
             elif action in ("workflow_overview", "board_overview"):
                 return self._action_workflow_overview()
             elif action in ("whatsapp_sync", "wa_sync", "sync_whatsapp"):
@@ -3121,6 +3123,10 @@ class KanbanTicketTool(BaseTool):
             moved_lane_name = new_lane.name
             moved_board_name = target_board.name
         self._publish_ticket_move(ticket_id, old_board_id, target_board_id)
+        if str(moved_lane_name or "").strip().lower() == "in progress":
+            from distr.core.kanban.ticket_work_thread import ensure_ticket_work_thread
+
+            ensure_ticket_work_thread(ticket_id)
         return voice_then_reference(
             f"I moved that ticket to {moved_board_name}, in {moved_lane_name}.",
             (
@@ -3603,26 +3609,14 @@ class KanbanTicketTool(BaseTool):
     # ── Send ticket to CLI ────────────────────────────────────────────────
 
     def _action_send_to_cli(self, ticket_id) -> str:
-        """Send a ticket's instruction to pi coding agent for the linked project. Creates an audit trail."""
+        """Send ONE named ticket to the project's coding backend. Returns at once; the run continues
+        in the background on the ticket's Development thread, with its timer running, and reports
+        each step through job progress."""
         if not ticket_id:
-            # Try to find the most recent ticket from the in_use board
-            try:
-                from distr.core.db.kanban import KanbanTicket, KanbanBoard as KB
-                with self._get_session() as s:
-                    board = s.query(KB).filter(KB.in_use == True).first()
-                    if board:
-                        for lane in sorted(board.lanes, key=lambda l: l.position):
-                            tickets = sorted(lane.tickets, key=lambda t: t.position)
-                            if tickets:
-                                ticket_id = tickets[0].id
-                                break
-            except Exception:
-                pass
-            if not ticket_id:
-                return voice_then_reference(
-                    "I need a ticket, and the active board has none to pick from.",
-                    "No ticket ID provided and no tickets found on the active board.",
-                )
+            return voice_then_reference(
+                "Tell me which ticket number to send.",
+                "send_to_cli needs an explicit ticket_id. Nothing was sent.",
+            )
 
         from distr.core.db.kanban import KanbanTicket, KanbanBoard as KB
         from distr.core.db.projects import Project
@@ -3728,131 +3722,183 @@ class KanbanTicketTool(BaseTool):
             except Exception:
                 pass
 
-        if project_id and folder:
+        if not (project_id and folder):
+            return voice_then_reference(
+                "That ticket has no project folder to run in.",
+                f"Ticket #{ticket_id_val}: no project folder. Nothing was sent.",
+            )
+        try:
             try:
-                import asyncio
-                import concurrent.futures
-                import time
-                from distr.core.project_cli_backends import run_project_task
+                from distr.core.kanban.whatsapp_work_lifecycle import mark_execution_started
+                mark_execution_started(ticket_id=ticket_id_val, execution_kind="cli", run_id=audit_id)
+            except Exception:
+                logger.debug("No WhatsApp lifecycle to mark for CLI ticket", exc_info=True)
 
-                cli_started_at = time.monotonic()
-                try:
-                    from distr.core.kanban.whatsapp_work_lifecycle import mark_execution_started
-                    mark_execution_started(ticket_id=ticket_id_val, execution_kind="cli", run_id=audit_id)
-                except Exception:
-                    logger.debug("No WhatsApp lifecycle to mark for CLI ticket", exc_info=True)
+            with self._get_session() as s:
+                from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
 
+                move_ticket_to_delivery_lane(s, ticket_id_val, "In Progress")
+                s.commit()
+        except Exception as exc:
+            self._mark_jira_execution_failed(ticket_id_val, f"CLI dispatch failed: {exc}", audit_id)
+            return voice_then_reference(
+                "The project CLI run failed before it could start.",
+                f"Project CLI dispatch failed: {exc}",
+            )
+
+        from distr.core.kanban.ticket_work_thread import ensure_ticket_work_thread, start_ticket_run_time
+
+        thread_id = ensure_ticket_work_thread(ticket_id_val)
+        if thread_id:
+            start_ticket_run_time(thread_id)
+        job = f"ticket:{ticket_id_val}"
+        self._job_report(job, "picked_up", f"ticket #{ticket_id_val} sent to {route['backend']} "
+                         f"({route['model'] or 'default model'}) in {project_name}", title=title)
+
+        import threading
+
+        threading.Thread(
+            target=self._run_cli_ticket_job,
+            kwargs=dict(
+                ticket_id_val=ticket_id_val, project_id=project_id, project_name=project_name,
+                instruction=instruction, route=route, audit_id=audit_id, step_id=step_id,
+                thread_id=thread_id, title=title,
+            ),
+            name=f"ticket-cli-{ticket_id_val}",
+            daemon=True,
+        ).start()
+        thread_note = f" on Development thread #{thread_id}" if thread_id else " (no Development thread: the ticket has no project)"
+        return voice_then_reference(
+            f"Ticket {ticket_id_val} is running in {project_name}. I'll post each step as it goes.",
+            (
+                f"[{route['backend']} — {project_name}] Ticket #{ticket_id_val} started{thread_note}.\n"
+                f"Complexity: {route['complexity']}\nModel: {route['model'] or 'default'}\n"
+                "The run continues in the background; progress is reported as job status. Do not send it again."
+            ),
+        )
+
+    @staticmethod
+    def _job_report(job: str, kind: str, text: str, *, title: str | None = None) -> None:
+        try:
+            from distr.core.initiative.job_progress import report
+
+            report(job, kind, text, title=title)
+        except Exception:
+            logger.debug("job progress report skipped", exc_info=True)
+
+    def _run_cli_ticket_job(self, *, ticket_id_val: int, project_id: int, project_name: str, instruction: str,
+                            route: dict, audit_id: Any, step_id: Any, thread_id: Any, title: str) -> str:
+        """The CLI run itself (background thread). Never raises; returns the outcome line."""
+        import asyncio
+        import time
+
+        from distr.core.db.kanban import KanbanTicket
+        from distr.core.db.projects import Project
+        from distr.core.kanban.ticket_work_thread import finish_ticket_run_time
+        from distr.core.project_cli_backends import run_project_task
+
+        job = f"ticket:{ticket_id_val}"
+        cli_started_at = time.monotonic()
+        outcome = ""
+        try:
+            async def _run_task():
                 with self._get_session() as s:
-                    from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
-
-                    move_ticket_to_delivery_lane(s, ticket_id_val, "In Progress")
-                    s.commit()
-
-                async def _run_task():
-                    with self._get_session() as s:
-                        project = orm_get_by_id(s, Project, project_id)
-                        if not project:
-                            raise ValueError(f"Project #{project_id} not found")
-                        return await run_project_task(
-                            project,
-                            instruction,
-                            audit_id=step_id or audit_id,
-                            origin="ticket",
-                            ticket_id=ticket_id_val,
-                            ticket_complexity=route["complexity"],
-                            backend_id_override=route["backend"],
-                            model_override=route["model"],
-                            codex_reasoning_effort_override=route.get("codex_reasoning_effort"),
-                            codex_service_tier_override=route.get("codex_service_tier"),
-                            adapter_options={
-                                "model_provider": route.get("model_provider") or "",
-                                "required_capabilities": ["code", "files"],
-                                "task_intent": (route.get("task_profile") or {}).get("intent") or "implementation",
-                                "skills": list(route.get("skills") or []),
-                            },
-                        )
-
-                try:
-                    result = asyncio.run(_run_task())
-                except RuntimeError:
-                    def _thread_runner():
-                        return asyncio.run(_run_task())
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                        result = pool.submit(_thread_runner).result(timeout=900)
-                if result.success:
-                    try:
-                        with self._get_session() as s:
-                            from distr.core.kanban.ticket_time_tracking import add_time_spent_seconds
-                            from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
-
-                            tracked_ticket = orm_get_by_id(s, KanbanTicket, ticket_id_val)
-                            if tracked_ticket:
-                                tracked_ticket.time_spent = add_time_spent_seconds(
-                                    tracked_ticket.time_spent,
-                                    max(1, int(time.monotonic() - cli_started_at)),
-                                )
-                            move_ticket_to_delivery_lane(s, ticket_id_val, "QA")
-                            s.commit()
-                    except ValueError:
-                        logger.info(
-                            "Ticket %s changed lanes during direct CLI execution",
-                            ticket_id_val,
-                        )
-                    try:
-                        from distr.core.kanban.whatsapp_work_lifecycle import notify_post_completion
-                        notify_post_completion(
-                            ticket_id=ticket_id_val,
-                            run_id=int(audit_id or 0),
-                            status="completed",
-                            result_summary=str(result.output or "")[:1200],
-                        )
-                    except Exception:
-                        logger.exception("Could not prepare WhatsApp CLI completion draft")
-                    try:
-                        from distr.core.kanban.jira_work_lifecycle import (
-                            notify_telegram_jira_review,
-                            prepare_completed_jira_review,
-                        )
-                        jira_review = prepare_completed_jira_review(
-                            ticket_id=ticket_id_val,
-                            run_id=int(audit_id or 0),
-                            status="completed",
-                            result_summary=str(result.output or "")[:1200],
-                        )
-                        if jira_review:
-                            notify_telegram_jira_review(jira_review)
-                    except Exception:
-                        logger.exception("Could not prepare Jira CLI completion review")
-                    return voice_then_reference(
-                        f"The work has finished and is ready for your review in {project_name}.",
-                        (
-                            f"[{route['backend']} — {project_name}] Ticket #{ticket_id_val} sent to project CLI.\n"
-                            f"Complexity: {route['complexity']}\nModel: {route['model'] or 'default'}"
-                        ),
+                    project = orm_get_by_id(s, Project, project_id)
+                    if not project:
+                        raise ValueError(f"Project #{project_id} not found")
+                    return await run_project_task(
+                        project,
+                        instruction,
+                        chat_id=int(thread_id) if thread_id else None,
+                        audit_id=step_id or audit_id,
+                        origin="ticket",
+                        ticket_id=ticket_id_val,
+                        ticket_complexity=route["complexity"],
+                        backend_id_override=route["backend"],
+                        model_override=route["model"],
+                        codex_reasoning_effort_override=route.get("codex_reasoning_effort"),
+                        codex_service_tier_override=route.get("codex_service_tier"),
+                        adapter_options={
+                            "model_provider": route.get("model_provider") or "",
+                            "required_capabilities": ["code", "files"],
+                            "task_intent": (route.get("task_profile") or {}).get("intent") or "implementation",
+                            "skills": list(route.get("skills") or []),
+                        },
                     )
+
+            result = asyncio.run(_run_task())
+            if result.success:
                 try:
-                    from distr.core.kanban.whatsapp_work_lifecycle import prepare_completed_reply
-                    prepare_completed_reply(
+                    with self._get_session() as s:
+                        from distr.core.kanban.ticket_time_tracking import add_time_spent_seconds
+                        from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
+
+                        tracked_ticket = orm_get_by_id(s, KanbanTicket, ticket_id_val)
+                        if tracked_ticket and not thread_id:
+                            # With a thread, the thread timer owns the ticket's time.
+                            tracked_ticket.time_spent = add_time_spent_seconds(
+                                tracked_ticket.time_spent,
+                                max(1, int(time.monotonic() - cli_started_at)),
+                            )
+                        move_ticket_to_delivery_lane(s, ticket_id_val, "QA")
+                        s.commit()
+                except ValueError:
+                    logger.info("Ticket %s changed lanes during direct CLI execution", ticket_id_val)
+                try:
+                    from distr.core.kanban.whatsapp_work_lifecycle import notify_post_completion
+                    notify_post_completion(
                         ticket_id=ticket_id_val,
                         run_id=int(audit_id or 0),
-                        status="failed",
-                        result_summary=str(result.error or result.output or "")[:1200],
+                        status="completed",
+                        result_summary=str(result.output or "")[:1200],
                     )
                 except Exception:
-                    logger.debug("Could not record WhatsApp CLI failure", exc_info=True)
-                self._mark_jira_execution_failed(
-                    ticket_id_val, str(result.error or result.output or "CLI run failed"), audit_id
+                    logger.exception("Could not prepare WhatsApp CLI completion draft")
+                try:
+                    from distr.core.kanban.jira_work_lifecycle import (
+                        notify_telegram_jira_review,
+                        prepare_completed_jira_review,
+                    )
+                    jira_review = prepare_completed_jira_review(
+                        ticket_id=ticket_id_val,
+                        run_id=int(audit_id or 0),
+                        status="completed",
+                        result_summary=str(result.output or "")[:1200],
+                    )
+                    if jira_review:
+                        notify_telegram_jira_review(jira_review)
+                except Exception:
+                    logger.exception("Could not prepare Jira CLI completion review")
+                outcome = "completed"
+                self._job_report(job, "done", f"ticket #{ticket_id_val} finished; ready for review in QA", title=title)
+                return outcome
+            try:
+                from distr.core.kanban.whatsapp_work_lifecycle import prepare_completed_reply
+                prepare_completed_reply(
+                    ticket_id=ticket_id_val,
+                    run_id=int(audit_id or 0),
+                    status="failed",
+                    result_summary=str(result.error or result.output or "")[:1200],
                 )
-                return voice_then_reference(
-                    "The project CLI did not accept that run; the error detail is below.",
-                    f"[{route['backend']} — {project_name}] Ticket #{ticket_id_val} failed: {result.error or result.output}",
-                )
-            except Exception as exc:
-                self._mark_jira_execution_failed(ticket_id_val, f"CLI dispatch failed: {exc}", audit_id)
-                return voice_then_reference(
-                    "The project CLI run failed before it could start.",
-                    f"Project CLI dispatch failed: {exc}",
-                )
+            except Exception:
+                logger.debug("Could not record WhatsApp CLI failure", exc_info=True)
+            self._mark_jira_execution_failed(
+                ticket_id_val, str(result.error or result.output or "CLI run failed"), audit_id
+            )
+            outcome = "failed"
+            self._job_report(job, "failed", f"ticket #{ticket_id_val}: {str(result.error or result.output or 'run failed')[:120]}",
+                             title=title)
+            return outcome
+        except Exception as exc:
+            logger.warning("Ticket %s CLI run failed", ticket_id_val, exc_info=True)
+            self._mark_jira_execution_failed(ticket_id_val, f"CLI dispatch failed: {exc}", audit_id)
+            outcome = "failed"
+            self._job_report(job, "failed", f"ticket #{ticket_id_val}: the run failed before it finished", title=title)
+            return outcome
+        finally:
+            if thread_id:
+                finish_ticket_run_time(thread_id)
+            logger.info("Ticket %s CLI run ended: %s (thread %s)", ticket_id_val, outcome or "error", thread_id)
 
     @staticmethod
     def _mark_jira_execution_failed(ticket_id: Any, error: str, run_id: Any = None) -> None:
