@@ -217,7 +217,44 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                            "parent_key, depends_on, source_item_ids, acceptance_criteria citing FR keys, skills, complexity, role).",
                            "parameters": {"type": "object", "properties": {"tasks": {"type": "array", "items": {"type": "object"}}},
                                           "required": ["tasks"]}},
+    "plan_blueprint": {"description": "Return a machine-readable plan of this project: every page with its route, access, "
+                       "stencil fields and sections, screenshot, links, the real ERD, and project assets (images, CSV, and so on). "
+                       "Use this to build a ticket or a page from the plan.",
+                       "parameters": {"type": "object", "properties": {"reason": _REASON}, "required": ["reason"]}},
+    "plan_page_ticket": {"description": "Draft an actionable Backlog ticket for one page from its stencil (fields, sections, "
+                         "access, links, screenshot). Does not create the ticket; pass the draft to plan_build_tickets to create it.",
+                         "parameters": {"type": "object", "properties": {"route": {"type": "string"}, "reason": _REASON},
+                                        "required": ["route", "reason"]}},
 }
+
+
+def plan_blueprint(*, project_folder: Optional[str] = None, **_: Any) -> dict[str, Any]:
+    """Return the machine-readable plan: pages with stencils, links, ERD and assets."""
+    from distr.core.planning.blueprint import plan_blueprint as build
+    try:
+        workspace_id = resolve_workspace(project_folder)
+        data = build(workspace_id)
+    except LookupError as exc:
+        return _fail("plan_blueprint", str(exc))
+    cov = data.get("coverage") or {}
+    return _ok("plan_blueprint",
+               f"Plan #{workspace_id}: {cov.get('page_count', 0)} pages, {cov.get('table_count', 0)} tables, "
+               f"{cov.get('asset_count', 0)} assets, coverage {cov.get('state')}.",
+               **data)
+
+
+def plan_page_ticket(route: str, *, project_folder: Optional[str] = None, **_: Any) -> dict[str, Any]:
+    """Draft an actionable ticket for one page from its stencil. Does not create the ticket."""
+    from distr.core.planning.blueprint import page_ticket_draft
+    if not str(route or "").strip():
+        return _fail("plan_page_ticket", "Provide a page route such as /shop/checkout.")
+    try:
+        workspace_id = resolve_workspace(project_folder)
+        data = page_ticket_draft(workspace_id, route)
+    except LookupError as exc:
+        return _fail("plan_page_ticket", str(exc))
+    return _ok("plan_page_ticket", f"Draft ticket for {data['route']}: {data['title']}.", **data)
+
 
 DISPATCH = {
     "plan_snapshot": plan_snapshot,
@@ -226,4 +263,6 @@ DISPATCH = {
     "plan_derive_from_design": plan_derive_from_design,
     "plan_requirements_pack": plan_requirements_pack,
     "plan_build_tickets": plan_build_tickets,
+    "plan_blueprint": plan_blueprint,
+    "plan_page_ticket": plan_page_ticket,
 }

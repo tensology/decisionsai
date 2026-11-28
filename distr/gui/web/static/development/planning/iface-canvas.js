@@ -56,16 +56,22 @@ export function createIfaceCanvas(opts) {
     nodesEl.innerHTML = orderedNodes.map((n) => {
         const part = n.lane === 'ajax' || n.kind === 'endpoint';
         const comment = n.note && n.kind !== 'endpoint' ? `<small class="iface-note" title="${esc(n.note)}">${esc(n.note)}</small>` : '';
-        const thumb = part || n.quiet || n.lane === 'guidance' ? '' : (n.shot?.image ? `<img class="iface-shot" alt="" decoding="async" loading="lazy" draggable="false" src="${esc(n.shot.image)}">`
+        const thumb = part || n.quiet || n.lane === 'guidance' ? '' : (n.shot?.image ? `<img class="iface-shot" alt="" decoding="async" loading="lazy" draggable="false" src="${esc(n.shot.image)}"${n.shot?.captured_at ? ` title="Captured ${esc(n.shot.captured_at)}"` : ''}>`
             : `<div class="iface-card-content">${n.summary?.length ? n.summary.map(value => `<span>${esc(value)}</span>`).join('') : `<span>${n.screenId ? 'Page stencil' : 'Outline needed'}</span>`}</div>`);
         const method = part && n.method ? `<span class="iface-part-method">${esc(n.method)}</span>` : '';
         const route = esc(n.route || (n.lane === 'guidance' ? 'guidance' : 'no route'));
         const endpoint = n.kind === 'endpoint';
         const kind = part ? (n.kind === 'endpoint' ? 'Endpoint' : 'Part') : (SHAPE_KIND[n.shape] || 'Page');
-        return `<div class="erd-table iface-node${part ? ' iface-part' : ''}${n.kind === 'endpoint' ? ' iface-endpoint' : ''}${n.quiet ? ' iface-node-quiet' : ''}${n.key === selectedKey ? ' selected' : ''}${n.pinned ? ' iface-pinned' : ''}" role="listitem" tabindex="${layout.large && n.key !== activeKey ? -1 : 0}" data-node="${esc(n.key)}" data-shape="${esc(n.shape)}" data-shape-source="${n.shapeSource}" data-lane="${esc(n.lane)}" data-kind="${esc(n.kind || '')}" data-screen-key="${esc(n.screenKey || '')}" data-outline="${n.screenId ? 'yes' : 'no'}" data-page-state="${esc(n.state || 'normal')}"
-            aria-label="${esc(`${n.label}${n.method ? `, ${n.method}` : ''}${n.route ? `, ${n.route}` : ''}${n.note ? `. ${n.note}` : ''}. ${kind}${n.screenId ? '' : ', no page outline yet'}. Enter opens.`)}"
+        const access = n.access || 'public';
+        const accessOpen = access === 'public';
+        const accessMark = `<span class="plan-sitemap-access" data-open="${accessOpen ? 'true' : 'false'}" title="${esc(accessOpen ? 'Open' : 'Needs a login')}">${accessOpen
+            ? '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.25" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>'
+            : '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.25" y="7" width="9.5" height="6.25" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 7V5.1a2.5 2.5 0 0 1 5 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>'}</span>`;
+        const shotTitle = n.shot?.captured_at ? ` title="Captured ${esc(n.shot.captured_at)}"` : '';
+        return `<div class="erd-table iface-node${part ? ' iface-part' : ''}${n.kind === 'endpoint' ? ' iface-endpoint' : ''}${n.quiet ? ' iface-node-quiet' : ''}${n.key === selectedKey ? ' selected' : ''}${n.pinned ? ' iface-pinned' : ''}" role="listitem" tabindex="${layout.large && n.key !== activeKey ? -1 : 0}" data-node="${esc(n.key)}" data-shape="${esc(n.shape)}" data-shape-source="${n.shapeSource}" data-lane="${esc(n.lane)}" data-kind="${esc(n.kind || '')}" data-screen-key="${esc(n.screenKey || '')}" data-access="${esc(access)}" data-outline="${n.screenId ? 'yes' : 'no'}" data-page-state="${esc(n.state || 'normal')}"
+            aria-label="${esc(`${n.label}${n.method ? `, ${n.method}` : ''}${n.route ? `, ${n.route}` : ''}${n.note ? `. ${n.note}` : ''}. ${kind}${accessOpen ? ', open' : ', needs a login'}${n.screenId ? '' : ', no page outline yet'}. Enter opens.`)}"
             style="transform: translate(${n.x}px, ${n.y}px); width: ${n.w}px; height: ${n.h}px">
-            <header class="erd-table-head iface-node-head"><span class="iface-glyph" title="${esc(kind)}${n.shapeSource === 'default' ? ' (default)' : ''}">${shapeGlyph(n.shape)}</span><strong title="${esc(n.label)}">${esc(n.label)}</strong></header>
+            <header class="erd-table-head iface-node-head"><span class="iface-glyph" title="${esc(kind)}${n.shapeSource === 'default' ? ' (default)' : ''}">${shapeGlyph(n.shape)}</span><strong title="${esc(n.label)}">${esc(n.label)}</strong>${accessMark}</header>
             ${endpoint ? '' : method}${thumb}${comment}<small class="iface-route" title="${esc(n.route)}">${endpoint ? `${method}<span class="iface-endpoint-path">${route}</span>` : route}</small>
             ${opts.onConnect && n.screenId ? `<button type="button" class="iface-port" data-wire-source aria-label="Connect from ${esc(n.label)}" title="Drag to another card to connect"></button>` : ''}
         </div>`;

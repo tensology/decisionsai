@@ -612,8 +612,9 @@ def test_html_sitemap_resolves_template_view_and_url(tmp_path):
     catalog = next(node for node in model["nodes"] if node["kind"] == "page_template" and node["template"] == "catalog.html")
     child = pages["/products"]["id"]
     assert any(edge["kind"] == "parent" and edge["from"] == catalog["id"] and edge["to"] == child for edge in model["edges"])
-    about = next(node for node in model["nodes"] if node["kind"] == "page_template" and node["template"] == "about.html")
-    assert about["status"] == "incomplete"
+    assert not any(node.get("template") == "about.html" for node in model["nodes"])
+    unused = next(item for item in model["scaffolding"] if item["template"] == "about.html")
+    assert unused["kind"] == "unused_template"
     assert "/from-react" not in pages
     assert all(node["status"] in {"verified", "inferred", "incomplete", "missing"} for node in model["nodes"])
 
@@ -664,7 +665,7 @@ def test_html_sitemap_excludes_base_templates_from_nodes(tmp_path):
     scaffolding = {item["template"] for item in model["scaffolding"]}
     assert "base.html" in scaffolding
     assert "header.html" in scaffolding
-    assert all(item["kind"] == "base_template" for item in model["scaffolding"])
+    assert {item["kind"] for item in model["scaffolding"]} <= {"base_template", "unused_template"}
     assert all(node["kind"] in {"page", "page_template"} for node in model["nodes"])
 
 

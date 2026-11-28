@@ -416,6 +416,7 @@ class _Inventory:
         env = _Env(parent=function.env)
         templates, dynamic, kinds = set(), False, set()
         conditional_assignments = set()
+        choices: dict[str, list[str]] = {}
         for parent in self.direct_nodes(function.node.body):
             if isinstance(parent, (ast.If, ast.For, ast.While, ast.Try, ast.Match)):
                 for child in self.direct_nodes([parent]):
@@ -425,9 +426,14 @@ class _Inventory:
             if isinstance(node, (ast.Assign, ast.AnnAssign)):
                 # Handler analysis only resolves literal expressions, never calls helpers.
                 value = _UNKNOWN if id(node) in conditional_assignments else self.literal(node.value, env)
+                choice = self.literal_choices(node.value, env) if id(node) not in conditional_assignments else None
                 for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
                     if isinstance(target, ast.Name):
                         env.values[target.id] = value
+                        if choice:
+                            choices[target.id] = choice
+                        else:
+                            choices.pop(target.id, None)
             if not isinstance(node, ast.Return):
                 continue
             value = node.value
@@ -446,8 +452,13 @@ class _Inventory:
                     if template_node is None and value.args:
                         template_node = value.args[0] if isinstance(self.literal(value.args[0], env), str) else value.args[1] if len(value.args) > 1 else None
                     template = self.literal(template_node, env)
+                    picked = self.literal_choices(template_node, env) or (choices.get(template_node.id) if isinstance(template_node, ast.Name) else None)
                     if isinstance(template, str):
                         templates.add(template)
+                    elif picked:
+                        # `a.html if cond else b.html`: still dynamic, but both literal candidates are listed.
+                        templates.update(picked)
+                        dynamic = True
                     else:
                         dynamic = True
                 elif name in {"RedirectResponse", "Redirect"}:
@@ -461,6 +472,14 @@ class _Inventory:
             elif response_html and isinstance(self.literal(value, env), str):
                 kinds.add("html")
         return templates, dynamic, kinds
+
+    def literal_choices(self, node, env):
+        """Both branches of a conditional expression when each is a literal string."""
+        if isinstance(node, ast.IfExp):
+            a, b = self.literal(node.body, env), self.literal(node.orelse, env)
+            if isinstance(a, str) and isinstance(b, str):
+                return sorted({a, b})
+        return None
 
     def literal(self, node, env, depth=0):
         if depth >= 64:

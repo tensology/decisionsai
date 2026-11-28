@@ -92,6 +92,29 @@ _JS_READ = """() => {
 }"""
 
 
+# Material/Google icon ligatures (arrow_forward, chevron_right) leak into innerText.
+_ICON_WORD = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$")
+
+
+def strip_icon_words(text: Any) -> str:
+    words = " ".join(str(text or "").split()).split(" ")
+    kept = [word for word in words if word and not _ICON_WORD.fullmatch(word)]
+    return " ".join(kept) or " ".join(words).strip()
+
+
+def clean_cue(cue: Any) -> Any:
+    """Drop icon ligature words from a saved cue's labels."""
+    if not isinstance(cue, dict):
+        return cue
+    out = dict(cue)
+    for key in ("buttons", "headings", "sections"):
+        if isinstance(out.get(key), list):
+            out[key] = [strip_icon_words(v) if isinstance(v, str) else v for v in out[key]]
+    if isinstance(out.get("links"), list):
+        out["links"] = [{**v, "label": strip_icon_words(v.get("label"))} if isinstance(v, dict) else v for v in out["links"]]
+    return out
+
+
 def _normalise(raw: Any) -> dict[str, Any]:
     """Shape a browser result into a cue, or {} when it is unusable."""
     if not isinstance(raw, dict):
@@ -100,7 +123,7 @@ def _normalise(raw: Any) -> dict[str, Any]:
         values = raw.get(key) if isinstance(raw.get(key), list) else []
         out: list[str] = []
         for value in values:
-            text = " ".join(str(value or "").split())[:80]
+            text = (" ".join(str(value or "").split()) if key == "fields" else strip_icon_words(value))[:80]
             if len(text) >= minimum and text not in out:
                 out.append(text)
         return out[:limit]
@@ -109,7 +132,7 @@ def _normalise(raw: Any) -> dict[str, Any]:
     for entry in (raw.get("links") or [])[:4]:
         if not isinstance(entry, dict):
             continue
-        label = " ".join(str(entry.get("label") or "").split())[:80]
+        label = strip_icon_words(entry.get("label"))[:80]
         route = str(entry.get("route") or "").strip()
         if label and route.startswith("/"):
             links.append({"label": label, "route": route})

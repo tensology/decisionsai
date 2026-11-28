@@ -1776,6 +1776,7 @@ export function createPlanConversation(host, root) {
             // Data tab ERD: visual canvas is the only editing surface (DSL stays background, read-only Advanced).
             preview.classList.add('plan-erd');
             mountErdItem({ preview, item, session, api, toast: (m, t) => host.toast?.(m, t), isBlocked: () => blocked(session), reloadLatest: (mine) => reloadLatest(session, item, mine), onSchemaApplied: (updated) => schemaApplied(session, updated) });
+            mountProjectAssets(preview, session);
         } else if (item.content_format === 'mermaid') {
             // The Mermaid DSL is a background representation (agents, rebuild, tickets): show the rendered
             // diagram read-only, plus a collapsed, read-only "Advanced" source view (never remembered open).
@@ -2166,8 +2167,12 @@ export function createPlanConversation(host, root) {
             if (from === node.key) outgoing.add(to);
             if (to === node.key) incoming.add(from);
         }
+        const stencilBits = (node.summary || []).slice(0, 12);
+        const shotSrc = node.shot?.thumb || (node.shot?.image ? `${node.shot.image}${String(node.shot.image).includes('?') ? '&' : '?'}thumb=1` : '');
         return `<h4 tabindex="-1">${esc(node.label)}</h4>
             ${node.route ? `<p class="iface-selected-route">${esc(node.route)}</p>` : ''}
+            ${shotSrc ? `<img class="iface-panel-shot" alt="Screenshot of ${esc(node.label)}" src="${esc(shotSrc)}">` : ''}
+            ${stencilBits.length ? `<section class="iface-panel-stencil"><h5>Stencil</h5><ul>${stencilBits.map((value) => `<li>${esc(value)}</li>`).join('')}</ul></section>` : ''}
             ${hasOutlineItem || fromPicker || node.kind === 'endpoint' || outgoing.size || incoming.size ? `<div class="erd-panel-actions iface-panel-actions">
                 ${outgoing.size || incoming.size ? '<button type="button" class="header-button" data-iface-journey>Focus journey</button>' : ''}
                 ${node.kind === 'endpoint' ? '<button type="button" class="header-button primary" data-iface-open>Open endpoint</button>' : ''}
@@ -2180,7 +2185,6 @@ export function createPlanConversation(host, root) {
             ${ifaceLinks(model, 'Links both ways', [...outgoing].filter(key => incoming.has(key)))}
             ${ifaceLinks(model, 'Links to', [...outgoing].filter(key => !incoming.has(key)))}
             ${ifaceLinks(model, 'Linked from', [...incoming].filter(key => !outgoing.has(key)))}
-            ${node.shot?.image ? `<img class="iface-panel-shot" alt="Screenshot of ${esc(node.label)}" src="${esc(node.shot.image)}">` : ''}
             <dl class="iface-facts">${row('Section', lane)}
                 ${row('Shape', `${SHAPE_KIND[node.shape] || node.shape}${node.shapeSource === 'default' ? ' (default for this page type)' : ''}`)}
                 ${row('Page outline', node.screenId ? (node.screenKey ? `yes · id ${node.screenKey}` : 'yes') : 'not yet')}
@@ -3052,10 +3056,21 @@ export function createPlanConversation(host, root) {
         const matchSavedShot = (status, node) => {
             const saved = new Set(status.saved || []);
             const shots = status.shots && typeof status.shots === 'object' ? status.shots : {};
-            const route = String(node.route || '').split(/[?#]/)[0].replace(/\/+$/, '');
-            const candidates = [node.screenKey, shotSlug(node.label), shotSlug(route), route.replace(/^\/+/, '').replace(/\//g, '-')].filter(Boolean);
+            const route = String(node.route || '').split(/[?#]/)[0].replace(/\/+$/, '') || '/';
+            const candidates = [
+                node.screenKey,
+                node.screenKey && String(node.screenKey).replace(/^page-/, ''),
+                shotSlug(node.label),
+                shotSlug(route),
+                route.replace(/^\/+/, '').replace(/\//g, '-'),
+            ].filter(Boolean);
             for (const name of candidates) {
                 if (shots[name] || ['.png', '.jpg', '.jpeg', '.webp'].some((ext) => saved.has(`${name}${ext}`))) return name;
+            }
+            const norm = (value) => String(value || '').split(/[?#]/)[0].replace(/\/+$/, '') || '/';
+            for (const [name, meta] of Object.entries(shots)) {
+                const shotRoute = norm(meta?.route || meta?.url || '');
+                if (shotRoute === route || shotRoute === route.replace(/\/:[^/]+$/g, '')) return name;
             }
             return '';
         };
@@ -3119,7 +3134,7 @@ export function createPlanConversation(host, root) {
                     const name = matchSavedShot(status, node);
                     if (!name) { skipped += 1; continue; }
                     const meta = shots[name];
-                    const href = imageUrl(name);
+                    const href = (meta && meta.thumb) || `${imageUrl(name)}?thumb=1`;
                     if (canvas.el.isConnected) {
                         canvas.setShot(node.key, {
                             image: href,
@@ -3185,6 +3200,22 @@ export function createPlanConversation(host, root) {
                 else if (result.reason) canvas.setShot(node.key, { reason: result.reason });
             } catch { /* leave the card placeholder */ }
         }
+    }
+
+    function mountProjectAssets(preview, session) {
+        const assets = session.workspace?.project_assets || [];
+        if (!preview || !assets.length) return;
+        preview.querySelector('.plan-erd-assets')?.remove();
+        const counts = {};
+        for (const asset of assets) {
+            const kind = asset.kind || 'file';
+            counts[kind] = (counts[kind] || 0) + 1;
+        }
+        const parts = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([kind, n]) => `${n} ${kind}${n === 1 ? '' : 's'}`);
+        const panel = document.createElement('section');
+        panel.className = 'plan-erd-assets';
+        panel.innerHTML = `<p>Project files · ${assets.length} (${parts.join(', ')}). Full list is in the plan blueprint.</p>`;
+        preview.append(panel);
     }
 
     function requireSavedPlan(session, action) {

@@ -45,7 +45,8 @@ def test_fastapi_pages_and_sqlalchemy_models_flow_into_saved_plan_candidates(tmp
     assert 'Project {' in result['artifacts']['architecture']
     assert 'route="/development"' in result['artifacts']['flows']
     assert '/api/projects' not in result['artifacts']['flows']
-    assert result['summary']['coverage'] == 'partial'
+    # Every page has a view, URL and template, so the source map is complete.
+    assert result['summary']['coverage'] == 'complete'
     assert result['summary']['python_http_route_count'] == 2
     assert result['summary']['python_page_count'] == 1
     assert result['summary']['sqlalchemy_model_count'] == 1
@@ -135,8 +136,11 @@ def test_real_pages_take_priority_over_unwired_templates_at_node_limit(tmp_path)
     model=scan.build_html_sitemap(tmp_path)
     assert any(row.get('route')=='/development' for row in model['nodes'])
     assert len(model['nodes']) <= scan._MAX_SITEMAP_NODES
-    assert model['omitted_node_count'] > 0
-    assert model['coverage']=='incomplete'
+    # Unwired templates are scaffolding, not missing pages: they do not crowd out
+    # real pages or make the map look partial.
+    assert model['omitted_node_count'] == 0
+    assert len(model['scaffolding']) >= 220
+    assert model['coverage']=='verified'
 
 
 def test_malformed_current_cache_is_rebuilt_instead_of_returned_to_ui(tmp_path):

@@ -350,7 +350,7 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         same_origin_frame = _allows_same_origin_framing(path)
         development_origins = (
-            " http://localhost:* https://localhost:* http://127.0.0.1:* https://127.0.0.1:* http://[::1]:* https://[::1]:*"
+            " http://localhost:* https://localhost:* http://127.0.0.1:* https://127.0.0.1:*"
             if path.rstrip("/") in {"/development", "/workflows"} or path.startswith("/development/") else ""
         )
         response.headers["X-Content-Type-Options"] = "nosniff"

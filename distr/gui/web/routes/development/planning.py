@@ -294,16 +294,17 @@ def register_routes(router, templates):
         return await _plan_call(save_interface_layout, workspace_id, nodes=data.nodes)
 
     @router.get("/workflows/studio/plan-workspaces/{workspace_id}/interface-shots/{screen_id}")
-    async def plan_interface_shot_file(workspace_id: int, screen_id: str):
+    async def plan_interface_shot_file(workspace_id: int, screen_id: str, thumb: bool = False):
         from distr.core.planning.iface_shots import interface_shot_file
         try:
-            path, media = await asyncio.to_thread(interface_shot_file, workspace_id, screen_id)
+            path, media = await asyncio.to_thread(interface_shot_file, workspace_id, screen_id, thumb=thumb)
         except LookupError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=404)
         except ValueError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=409)
+        cache = "private, max-age=86400" if thumb else "private, max-age=3600"
         return FileResponse(path, media_type=media, content_disposition_type="inline",
-                            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+                            headers={"Cache-Control": cache, "X-Content-Type-Options": "nosniff"})
 
     @router.post("/workflows/studio/plan-workspaces/{workspace_id}/attachments")
     async def plan_attach(workspace_id: int, file: UploadFile = File(...)):
@@ -386,6 +387,22 @@ def register_routes(router, templates):
         try:
             from distr.core.planning.service import ticket_preview
             return JSONResponse(await asyncio.to_thread(ticket_preview, workspace_id))
+        except LookupError as e:
+            return JSONResponse({"detail": str(e)}, status_code=404)
+
+    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/blueprint")
+    async def workflow_studio_plan_blueprint(workspace_id: int):
+        try:
+            from distr.core.planning.blueprint import plan_blueprint
+            return JSONResponse(await asyncio.to_thread(plan_blueprint, workspace_id))
+        except LookupError as e:
+            return JSONResponse({"detail": str(e)}, status_code=404)
+
+    @router.get("/workflows/studio/plan-workspaces/{workspace_id}/ticket-preview/{route:path}")
+    async def workflow_studio_plan_page_ticket_preview(workspace_id: int, route: str):
+        try:
+            from distr.core.planning.blueprint import page_ticket_draft
+            return JSONResponse(await asyncio.to_thread(page_ticket_draft, workspace_id, "/" + route if not str(route).startswith("/") else route))
         except LookupError as e:
             return JSONResponse({"detail": str(e)}, status_code=404)
 

@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -331,7 +332,13 @@ def _shot_records(folder: str, root_path: str = "", hashes: dict[str, str] | Non
             wire_hash = str(meta.get("wire_hash") or "")
             expected = hashes.get(path.stem)
             current = bool(captured) and (not expected or not wire_hash or wire_hash == expected)
-            records[path.stem] = {"captured_at": captured, "current": current, "name": path.name}
+            url = str(meta.get("url") or "")
+            from urllib.parse import urlparse
+            route = urlparse(url).path or ""
+            records[path.stem] = {
+                "captured_at": captured, "current": current, "name": path.name,
+                "url": url, "route": route,
+            }
     return records
 
 
@@ -425,21 +432,76 @@ def interface_shot_status(workspace_id: int) -> dict:
     targets = _targets_for(project)
     root_path = str(workspace.get("root_path") or "")
     hashes = _wire_hashes(workspace)
+    shots = _shot_records(project.folder_location or "", root_path, hashes)
+    for name, row in shots.items():
+        row["image"] = _image_url(int(workspace_id), name)
+        row["thumb"] = row["image"] + "?thumb=1"
     return {
         **targets,
         "saved": _saved_names(project.folder_location or "", root_path),
-        "shots": _shot_records(project.folder_location or "", root_path, hashes),
+        "shots": shots,
     }
 
 
-def interface_shot_file(workspace_id: int, screen_id: str) -> tuple[Path, str]:
+def _thumbnail_for(path: Path) -> Path:
+    """A small JPEG beside the original capture, rebuilt when the capture is newer."""
+    thumb = path.with_name(f"{path.stem}.thumb.jpg")
+    try:
+        if thumb.is_file() and thumb.stat().st_mtime >= path.stat().st_mtime and thumb.stat().st_size > 0:
+            return thumb
+    except OSError:
+        pass
+    from PIL import Image
+    with Image.open(path) as image:
+        rgb = image.convert("RGB")
+        rgb.thumbnail((480, 300), Image.Resampling.LANCZOS)
+        tmp = thumb.with_suffix(".tmp.jpg")
+        rgb.save(tmp, "JPEG", quality=72, optimize=True)
+        tmp.replace(thumb)
+    return thumb
+
+
+_DIR_CACHE: dict[int, tuple[str, str, float]] = {}
+_DIR_CACHE_TTL = 120.0
+_dir_lock = threading.Lock()
+
+
+def _workspace_dirs(workspace_id: int) -> tuple[str, str]:
+    """Project folder + planning dir, without loading the full workspace (thumbs must stay cheap)."""
+    wid = int(workspace_id)
+    now = time.time()
+    with _dir_lock:
+        hit = _DIR_CACHE.get(wid)
+        if hit and now - hit[2] < _DIR_CACHE_TTL:
+            return hit[0], hit[1]
+    from distr.core.db import get_session
+    from distr.core.db.projects import Project
+    from distr.core.db.workflow import PlanWorkspace
+
+    with get_session() as session:
+        row = session.get(PlanWorkspace, wid)
+        if row is None:
+            raise LookupError("Plan workspace not found.")
+        folder = ""
+        if row.project_id:
+            project = session.get(Project, int(row.project_id))
+            folder = str(project.folder_location or "") if project is not None else ""
+        root = str(row.root_path or "")
+    with _dir_lock:
+        _DIR_CACHE[wid] = (folder, root, now)
+    return folder, root
+
+
+def interface_shot_file(workspace_id: int, screen_id: str, *, thumb: bool = False) -> tuple[Path, str]:
     """One image already saved for this screen id. No directory walk past planning/."""
     if not _SCREEN.fullmatch(str(screen_id or "")):
         raise ValueError("Invalid page id.")
-    workspace, project = _load(workspace_id)
-    path = _find_saved(project.folder_location or "", screen_id, str(workspace.get("root_path") or ""))
+    folder, root_path = _workspace_dirs(workspace_id)
+    path = _find_saved(folder, screen_id, root_path)
     if path is None:
         raise LookupError("No screenshot for that page.")
+    if thumb:
+        return _thumbnail_for(path), "image/jpeg"
     return path, _IMAGE[path.suffix.lower()]
 
 
@@ -746,8 +808,8 @@ def _clean_layout(nodes) -> dict[str, dict]:
 
 def interface_layout(workspace_id: int) -> dict:
     """Pinned card positions stored in planning/iface-layout.json."""
-    workspace, project = _load(workspace_id)
-    path = _layout_path(workspace, project)
+    folder, root_path = _workspace_dirs(workspace_id)
+    path = _planning_dir(folder, root_path) / _LAYOUT_FILE
     if not path.is_file():
         return {"nodes": {}}
     try:
@@ -760,9 +822,9 @@ def interface_layout(workspace_id: int) -> dict:
 
 def save_interface_layout(workspace_id: int, nodes: dict) -> dict:
     """Replace the pinned-position file. Does not rewrite plan documents."""
-    workspace, project = _load(workspace_id)
+    folder, root_path = _workspace_dirs(workspace_id)
     clean = _clean_layout(nodes)
-    path = _layout_path(workspace, project)
+    path = _planning_dir(folder, root_path) / _LAYOUT_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps({"v": 1, "nodes": clean}, indent=2, sort_keys=True) + "\n"
     staged = None

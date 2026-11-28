@@ -840,6 +840,26 @@ def get_workspace(workspace_id: int, include_data_model: bool = False) -> dict[s
                 model = erd_read_view(item["content"])
                 if model is not None:
                     item["data_model"] = model
+    folder = ""
+    if payload.get("project_id"):
+        with get_session() as db:
+            project = db.get(Project, int(payload["project_id"]))
+            folder = str(project.folder_location or "") if project is not None else ""
+    payload["project_folder"] = folder
+    try:
+        from distr.core.planning import iface_shots
+        shots = iface_shots._shot_records(folder, payload.get("root_path") or "")
+        for name, row in shots.items():
+            row["image"] = iface_shots._image_url(int(workspace_id), name)
+            row["thumb"] = row["image"] + "?thumb=1"
+        payload["interface_shots"] = shots
+    except Exception:
+        payload["interface_shots"] = {}
+    try:
+        from distr.core.planning.blueprint import project_file_assets
+        payload["project_assets"] = project_file_assets(folder or payload.get("root_path") or "")
+    except Exception:
+        payload["project_assets"] = []
     return payload
 
 

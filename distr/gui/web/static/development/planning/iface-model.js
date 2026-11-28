@@ -4,7 +4,7 @@
 // `button` routes. A page with many outgoing links sits at the center of the whole map and the other
 // pages sit on rings by hop. Otherwise each layer keeps its own band. A page comment is the sidecar
 // note, or the first `#|` line under that screen. Nothing here invents links or writes content.
-import { connectedSitemap } from './sitemap.js?v=20261028-responsive';
+import { connectedSitemap, pageAccessGroup } from './sitemap.js?v=20261028-responsive';
 import { hideJunkPages } from './page-filter.js?v=20261112-skip';
 
 export const NODE = { w: 200, h: 168, guideH: 96, partH: 120, quietH: 56, gapX: 64, gapY: 56, laneGap: 88, laneHead: 34, linkGap: 48 };
@@ -60,6 +60,39 @@ function routePrefix(route) {
     if (!part || part.startsWith(':') || part === '*') return '';
     return `/${part}`;
 };
+
+export function normalizePageRoute(route) {
+    const path = String(route || '').split(/[?#]/)[0].replace(/\/+$/, '') || '/';
+    return path.startsWith('/') ? path : `/${path}`;
+}
+
+// Saved shots are keyed by sitemap id, wire screen key, or the page's route.
+export function captureFor(captures, node = {}, screenKey = '') {
+    if (!captures) return null;
+    const pages = captures.pages || {};
+    const byRoute = captures.byRoute || {};
+    const route = normalizePageRoute(node.route || node.declared_route || '');
+    const keys = [node.sitemapId, screenKey, node.screenKey, node.id];
+    for (const key of keys) {
+        if (key && pages[key]?.image) return pages[key];
+    }
+    if (route && byRoute[route]?.image) return byRoute[route];
+    // /admin/ and /admin, and /shop/orders/:id vs /shop/orders
+    if (route) {
+        const stripped = route.replace(/\/:[^/]+$/, '');
+        if (byRoute[stripped]?.image) return byRoute[stripped];
+        for (const [key, shot] of Object.entries(byRoute)) {
+            if (!shot?.image) continue;
+            const pattern = key.replace(/:[^/]+/g, '[^/]+');
+            if (pattern !== key && new RegExp(`^${pattern}$`).test(route)) return shot;
+            if (key.replace(/\/:[^/]+/g, '') === stripped) return shot;
+        }
+    }
+    for (const key of keys) {
+        if (key && pages[key]) return pages[key];
+    }
+    return byRoute[route] || null;
+}
 
 const AJAX = /\/(ajax|api)(\/|$)|xhr|\.json$/i;
 const DOWNLOAD = /\/(download|export|import|publish)(\/|$)/i;
@@ -134,8 +167,8 @@ export function buildIfaceModel({ sitemap = null, screens = [], captures = null,
     const add = (base, screen) => {
         const journey = isJourneyMap(base.label || screen?.label, base.route, screen?.attrs?.layer);
         if (journey) base.route = '';
-        const shot = captures?.pages?.[base.sitemapId] || null;
         const screenKey = screen?.attrs?.id || (screen ? screenSlug(base.label, base.route, takenKeys) : '');
+        const shot = captureFor(captures, base, screenKey);
         const sidecar = screenKey ? (meta[screenKey] || null) : null;
         const shape = sidecar?.shape || defaultShape(base, shot);
         const note = sidecar?.note || comments.get(screenKey) || '';
@@ -147,10 +180,12 @@ export function buildIfaceModel({ sitemap = null, screens = [], captures = null,
         const collect = node => {
             const label = node.label || node.attrs?.label;
             if (['button', 'link', 'input', 'section', 'form'].includes(node.type) && label && !summary.includes(label)) summary.push(label);
-            for (const child of node.children || []) if (summary.length < 3) collect(child);
+            for (const child of node.children || []) if (summary.length < 12) collect(child);
         };
         if (screen) collect(screen);
-        nodes.push({ ...base, key: base.key, screenId: screen ? String(screen.id) : '', screenKey, shot, summary,
+        const access = pageAccessGroup({ ...base, id: base.sitemapId || screenKey }, shot);
+        const status = ((base.status === 'missing' || base.status === 'incomplete') && (shot || screen)) ? 'wired' : base.status;
+        nodes.push({ ...base, key: base.key, screenId: screen ? String(screen.id) : '', screenKey, shot, access, status, summary,
             shape, shapeSource: sidecar?.shape ? 'sidecar' : 'default', note, method, links: sidecar?.links || {},
             lane, kind, quiet: Boolean(shot?.notFound) && !screen });
     };
@@ -535,24 +570,43 @@ export function layoutIface(model, { aspect = 1.6, pinned = {} } = {}) {
             : flowChains(rows, model.edges || []);
         const top = y;
         y += NODE.laneHead;
-        for (const chain of chains) {
-            let x = 0, rowH = 0, col = 0;
-            for (const node of chain) {
-                if (col >= cols) { y += rowH + NODE.gapY + NODE.linkGap; x = 0; rowH = 0; col = 0; }
-                rowH = Math.max(rowH, place(node, x));
-                x += linkStep;
+        if (large) {
+            // Pack linked groups into the same wrapping grid. Giving each cluster its own row
+            // made Fit shrink to an unreadable 17% on real projects.
+            let col = 0, rowH = 0, quietStarted = false;
+            const wrap = () => { if (col) { y += rowH + NODE.gapY; col = 0; rowH = 0; } };
+            const put = (node) => {
+                if (node.quiet && !quietStarted) { quietStarted = true; wrap(); }
+                if (col >= cols) wrap();
+                rowH = Math.max(rowH, place(node, col * gridStep));
+                col += 1;
+            };
+            for (const chain of chains) {
+                if (chain.length > 1 && col + chain.length > cols) wrap();
+                chain.forEach(put);
+            }
+            rest.forEach(put);
+            wrap();
+        } else {
+            for (const chain of chains) {
+                let x = 0, rowH = 0, col = 0;
+                for (const node of chain) {
+                    if (col >= cols) { y += rowH + NODE.gapY + NODE.linkGap; x = 0; rowH = 0; col = 0; }
+                    rowH = Math.max(rowH, place(node, x));
+                    x += linkStep;
+                    col += 1;
+                }
+                y += rowH + NODE.gapY + NODE.linkGap;
+            }
+            let col = 0, rowH = 0, quietStarted = false;
+            for (const node of rest) {
+                if (node.quiet && !quietStarted) { quietStarted = true; if (col) { y += rowH + NODE.gapY; col = 0; rowH = 0; } }
+                if (col >= cols) { y += rowH + NODE.gapY; col = 0; rowH = 0; }
+                rowH = Math.max(rowH, place(node, col * gridStep));
                 col += 1;
             }
-            y += rowH + NODE.gapY + NODE.linkGap;
+            if (col) y += rowH + NODE.gapY;
         }
-        let col = 0, rowH = 0, quietStarted = false;
-        for (const node of rest) {
-            if (node.quiet && !quietStarted) { quietStarted = true; if (col) { y += rowH + NODE.gapY; col = 0; rowH = 0; } }
-            if (col >= cols) { y += rowH + NODE.gapY; col = 0; rowH = 0; }
-            rowH = Math.max(rowH, place(node, col * gridStep));
-            col += 1;
-        }
-        if (col) y += rowH + NODE.gapY;
         lanes.push({ id: lane.id, label: lane.label, count: rows.length, x: -14, y: top, h: y - top - NODE.gapY + 14 });
         y += NODE.laneGap - NODE.gapY;
     }
@@ -613,9 +667,13 @@ function flowClusters(rows, edges) {
 
 function applyPinned(model, layout, pinned) {
     const pins = pinned && typeof pinned === 'object' ? pinned : {};
+    // A pin saved against an older, taller layout would stretch the map and make Fit unreadable.
+    // On a large map, keep only pins that land within the current map (plus a two-card margin).
+    const maxX = (layout.width || 0) + NODE.w * 2, maxY = (layout.height || 0) + NODE.h * 2;
     for (const node of model.nodes) {
         const pin = pins[node.screenKey] || pins[node.key];
         if (!pin || !Number.isFinite(Number(pin.x)) || !Number.isFinite(Number(pin.y))) continue;
+        if (layout.large && (Number(pin.x) > maxX || Number(pin.y) > maxY || Number(pin.x) < -NODE.w || Number(pin.y) < -NODE.h)) continue;
         node.x = Number(pin.x);
         node.y = Number(pin.y);
         node.pinned = true;

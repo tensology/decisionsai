@@ -168,13 +168,46 @@ export const pageCaptureSets = [
   }
 ];
 
+function liveShotSet(workspace) {
+    const shots = workspace?.interface_shots;
+    if (!shots || typeof shots !== 'object') return { pages: {}, byRoute: {} };
+    const pages = {};
+    const byRoute = {};
+    const norm = (route) => {
+        const path = String(route || '').split(/[?#]/)[0].replace(/\/+$/, '') || '/';
+        return path.startsWith('/') ? path : `/${path}`;
+    };
+    for (const [name, meta] of Object.entries(shots)) {
+        if (!meta || !(meta.image || meta.thumb)) continue;
+        const shot = {
+            image: meta.thumb || (meta.image ? `${meta.image}?thumb=1` : ''),
+            full: meta.image || '',
+            captured_at: meta.captured_at || '',
+            current: meta.current !== false,
+            name,
+            route: norm(meta.route || meta.url || ''),
+        };
+        pages[name] = shot;
+        if (shot.route) byRoute[shot.route] = shot;
+    }
+    return { pages, byRoute };
+}
+
 export function pageCaptureFor(workspace) {
     const root = String(workspace?.root_path || '').replace(/\/+$/, '');
     const workspaceId = Number(workspace?.id);
     const projectId = Number(workspace?.project_id);
-    return pageCaptureSets.find((set) => {
+    const bundled = pageCaptureSets.find((set) => {
         if (root === set.rootPrefix || root.startsWith(set.rootPrefix + '/')) return true;
         if (workspaceId === set.workspaceId) return true;
         return projectId === set.projectId && root.includes('merrypak');
     }) || null;
+    const live = liveShotSet(workspace);
+    if (!Object.keys(live.pages).length) return bundled;
+    // Live captures in planning/ win over the frozen static set.
+    return {
+        ...(bundled || {}),
+        pages: { ...(bundled?.pages || {}), ...live.pages },
+        byRoute: { ...(bundled?.byRoute || {}), ...live.byRoute },
+    };
 }

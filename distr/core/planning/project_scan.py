@@ -1707,7 +1707,11 @@ def build_plan(
             "widen": context.get("widen") or {},
             "passes": len(passes),
             "adequate": not final_gaps,
-            "coverage": 'none' if not context['routes'] and not context['models'] else 'partial',
+            "coverage": (
+                'none' if not context['routes'] and not context['models']
+                else 'complete' if (context.get('sitemap') or {}).get('coverage') in {'verified', 'inferred'}
+                else 'partial'
+            ),
             'python_http_route_count': python_routes['stats']['http_routes'],
             'python_page_count': python_routes['stats']['html_pages'],
             'sqlalchemy_model_count': model_inventory['sqlalchemy_model_count'],
@@ -1759,6 +1763,35 @@ _SCAFFOLD_NAME = re.compile(
     r"(?:^|/)(?:base|layout|skeleton|header|footer|nav|navbar|sidebar)(?:[._-][^/]+)?\.html$",
     re.IGNORECASE,
 )
+_ENDPOINT_VIEWS = re.compile(
+    r"(?:^|\.)(?:RedirectView|redirect|robots_txt|serve_nocache_media)$",
+    re.IGNORECASE,
+)
+_ENDPOINT_ROUTES = re.compile(
+    r"(?:/robots\.txt|/sitemap\.xml|/media/|/static/|/favicon\.ico)(?:/|$)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_endpoint(view_name: str, route: str) -> bool:
+    if _ENDPOINT_VIEWS.search(str(view_name or "")):
+        return True
+    return bool(_ENDPOINT_ROUTES.search(str(route or "")))
+
+
+def _limitation_affects_pages(row: dict[str, Any] | str) -> bool:
+    """True when a discovery limitation is in a URL or view module that defines pages."""
+    if isinstance(row, str):
+        source = row
+    else:
+        source = str((row or {}).get("source") or "")
+    lowered = source.replace("\\", "/").lower()
+    if "management/commands" in lowered or "_backup" in lowered or "/backup/" in lowered:
+        return False
+    name = lowered.rsplit("/", 1)[-1]
+    return name in {"urls.py", "views.py", "urls_i18n.py"} or name.startswith("urls_")
+
+
 _JOURNEY_LABEL = re.compile(r"\b(?:continue|next|proceed|start|begin)\b", re.IGNORECASE)
 _VALID_IF = re.compile(r"^if\b.*\bis_valid\b")
 _LOGIN_NAMES = {"login", "signin", "sign_in", "log_in"}
@@ -2084,7 +2117,12 @@ def _add_edge(edges: list[dict[str, str]], seen: set[tuple[str, str, str]], sour
 
 
 def _coverage(nodes: list[dict[str, Any]], template_count: int) -> tuple[str, str]:
-    if template_count == 0 and not nodes:
+    pages = [
+        node for node in nodes
+        if node.get("kind") == "page" and node.get("route")
+        and not (str(node.get("route") or "").startswith("/admin") and not node.get("template"))
+    ]
+    if template_count == 0 and not pages:
         return (
             "missing",
             "No HTML templates found. Sitemap was not inferred from React routes or JavaScript page files.",
@@ -2094,11 +2132,12 @@ def _coverage(nodes: list[dict[str, Any]], template_count: int) -> tuple[str, st
             "incomplete",
             "No HTML templates found. URL and view names are recorded as incomplete or missing, not invented from React routes.",
         )
-    if not nodes:
+    if not pages:
         return ("incomplete", "Only scaffolding templates were found. No content page is wired to a view and URL.")
-    statuses = {str(node.get("status")) for node in nodes}
+    statuses = {str(node.get("status")) for node in pages}
     if statuses & {"missing", "incomplete"}:
-        return ("incomplete", "Some pages are missing a template, view, or URL.")
+        missing = sum(1 for node in pages if node.get("status") in {"missing", "incomplete"})
+        return ("incomplete", f"{missing} page(s) are missing a template, view, or URL.")
     if "inferred" in statuses:
         return ("inferred", "Some templates were inferred from the view name because the view did not name a template.")
     return ("verified", "")
@@ -2127,7 +2166,7 @@ def build_html_sitemap(project_root: Path | str, *, _python_routes: dict | None 
     seen_python_pages = set()
     for row in _python_routes['pages']:
         route = _normalize_route(re.sub(r'\{([A-Za-z_]\w*)(?::[^}]+)?\}', r':\1', row['route']))
-        template = row.get('template') or ''
+        template = row.get('template') or ((row.get('templates') or [''])[0])
         key = (route, template)
         if key in seen_python_pages:
             continue
@@ -2140,6 +2179,8 @@ def build_html_sitemap(project_root: Path | str, *, _python_routes: dict | None 
         views[identity] = {'name': row['handler'], 'kind': 'function', 'template': template,
                            'explicit_template': bool(template), 'auth': False, 'auth_known': False,
                            'conditional': bool(row.get('conditional')),
+                           # HTML built in the handler itself (inline string or a file it reads).
+                           'inline_html': row.get('kind') == 'html' and not template and not row.get('templates') and not row.get('dynamic_template'),
                            'source': row['source'], 'line': row['line']}
         urls.append({'route': route, 'url_name': label, 'view': identity, 'source': row['source'],
                      'line': row['line'], 'declared_route': row['route'], 'methods': row['methods']})
@@ -2188,7 +2229,10 @@ def build_html_sitemap(project_root: Path | str, *, _python_routes: dict | None 
         template_name = view["template"] if view else ""
         explicit = bool(view and view.get("explicit_template") and template_name)
         inferred = False
-        if view and view.get("endpoint"):
+        view_name = str(row.get("view") or "")
+        route_name = str(row.get("route") or "")
+        endpoint_by_kind = bool(view and view.get("endpoint")) or _looks_like_endpoint(view_name, route_name)
+        if endpoint_by_kind:
             # An endpoint is not a page. Stencilling it produced a blank box with
             # "No fields or sections were found", which is noise, not a gap.
             endpoints.append({
@@ -2207,7 +2251,10 @@ def build_html_sitemap(project_root: Path | str, *, _python_routes: dict | None 
         if template_key in scaffold_templates:
             template_key = None
         if view and view.get('conditional'):
-            status = 'incomplete'
+            # Registered behind a condition (optional router): a real page when its markup is known.
+            status = 'inferred' if (template_key or view.get('inline_html')) else 'incomplete'
+        elif view and view.get('inline_html'):
+            status = 'inferred'
         elif view and template_name and template_key is None:
             status = "missing"
         elif view and template_key and not inferred:
@@ -2294,30 +2341,28 @@ def build_html_sitemap(project_root: Path | str, *, _python_routes: dict | None 
             }
         )
     for key, item in sorted(templates.items()):
-        if len(nodes) >= _MAX_SITEMAP_NODES:
-            break
         if key in scaffold_templates or key in template_node_ids or key in template_users:
             continue
-        node_id = _unique_id("template", key, used_ids)
-        template_node_ids[key] = node_id
-        nodes.append(
+        # An unwired template (admin partials, unused includes) is scaffolding,
+        # not a missing page. Treating them as incomplete nodes made every real
+        # project look like a partial map.
+        scaffolding.append(
             {
-                "id": node_id,
-                "kind": "page_template",
-                "label": _title(Path(key).stem),
-                "route": "",
+                "id": _unique_id("scaffold", key, used_ids),
+                "kind": "unused_template",
+                "label": Path(key).name,
+                "path": item["path"],
                 "template": key,
-                "view": "",
-                "url_name": "",
-                "status": "incomplete",
-                "auth": False,
+                "status": "verified",
             }
         )
+        scaffold_templates.add(key)
 
+    nodes = [node for node in nodes if node.get("kind") != "page" or node.get("route")]
     source_node_count = len(nodes)
     template_candidates = {key for key, users in template_users.items() if len(users) > 1}
     template_candidates.update(key for key in templates if key not in scaffold_templates and key not in template_users)
-    omitted_node_count = max(0, len(pages) + len(template_candidates) - source_node_count)
+    omitted_node_count = max(0, len(pages) + len({key for key, users in template_users.items() if len(users) > 1}) - source_node_count)
 
     def resolve_target(token: str) -> str | None:
         cleaned = str(token or "").strip()
@@ -2402,13 +2447,17 @@ def build_html_sitemap(project_root: Path | str, *, _python_routes: dict | None 
             for login_id in login_ids:
                 _add_edge(edges, edge_seen, login_id, source, "auth", "authentication boundary")
 
+    nodes = [node for node in nodes if node.get("kind") != "page" or node.get("route")]
     coverage, note = _coverage(nodes, len(templates))
     if omitted_node_count:
         coverage = 'incomplete'
         note = (note + f' {omitted_node_count} source-backed nodes were omitted by the {_MAX_SITEMAP_NODES}-node limit.').strip()
     if _python_routes['limitations']:
-        coverage = 'incomplete'
-        note = (note + ' Static Python route discovery has unresolved or unsupported cases; this is not a complete application map.').strip()
+        serious = [row for row in _python_routes['limitations'] if _limitation_affects_pages(row)]
+        if serious:
+            note = (note + ' Some URL or view modules could not be fully parsed.').strip()
+        # Backup files, management commands and dynamic loops elsewhere are
+        # recorded as limitations, but they do not make the page map itself partial.
     return {
         "version": _SITEMAP_VERSION,
         "source": "html-views-urls",
@@ -2653,7 +2702,8 @@ def _captured_page_cues(project_root: Path) -> dict[str, dict[str, Any]]:
                 continue
             route = _normalize_route(urlparse(str(data["url"])).path or "/")
             if _cue_has_content(data["cues"]):
-                out.setdefault(route, data["cues"])
+                from distr.core.planning.dom_cues import clean_cue
+                out.setdefault(route, clean_cue(data["cues"]))
     return out
 
 
@@ -2685,6 +2735,7 @@ def widen_routes_with_sitemap(root: Path, routes: list[dict[str, str]], context:
     try:
         files = iter_sitemap_sources(root) if root.is_dir() else []
         sitemap = build_html_sitemap(root, _python_routes=context.get('_python_routes'))
+        context['sitemap'] = sitemap
         templates = _template_index(files, root)
     except Exception:  # noqa: BLE001 - widening is best effort; the plain route scan still works
         return stats

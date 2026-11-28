@@ -48,6 +48,9 @@ export async function mountErdItem({ preview, item, session, api, toast = () => 
     } else {
         entry.ctx = ctx;
         host.append(entry.editor.el);
+        // A first mount can lose the race when the Data tab re-renders (sidebar/layout).
+        // Re-attach must still measure the canvas or the diagram stays blank.
+        requestAnimationFrame(() => entry.editor.mounted());
     }
 }
 
