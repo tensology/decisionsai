@@ -1228,6 +1228,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
         pending = [str((call.get("function") or {}).get("name") or "") for call in tool_calls or []]
         notice = round_cap_notice(rounds, pending)
         self._round_cap_notice = notice
+        # A Telegram request otherwise gets no reply at all: the finally-block only sends
+        # model text, and the cap fires when the model produced none.
+        self._telegram_fallback_text = notice
         try:
             self._save_assistant_message(notice)
         except Exception:

@@ -718,7 +718,10 @@ class TelegramSenderMixin:
                 # Confirm cards use oc-card:<flow-key> only to correlate the
                 # Telegram message_id. They are not workflow checkpoints.
                 confirm_card = token.startswith('oc-card:')
-                workflow_checkpoint = bool(token) and not durable_proposal and not confirm_card
+                # Job status messages (initiative.job_progress) are edited in place; the token
+                # only correlates the Telegram message_id.
+                status_line = token.startswith('job-status:')
+                workflow_checkpoint = bool(token) and not durable_proposal and not confirm_card and not status_line
                 outbound = msg
                 queued_destination = {key: msg[key] for key in ('chat_id', 'app_user_id') if key in msg}
                 try:

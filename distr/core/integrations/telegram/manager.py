@@ -1331,6 +1331,12 @@ class TelegramWebSocketManager(
                                             data.get("chat_id"))
                     except Exception:
                         logger.warning("Could not record confirm-card Telegram message id", exc_info=True)
+                elif client_message_id.startswith("job-status:"):
+                    try:
+                        from distr.core.initiative.job_progress import record_message
+                        record_message(client_message_id, data.get("telegram_message_id"), data.get("chat_id"))
+                    except Exception:
+                        logger.warning("Could not record job-status Telegram message id", exc_info=True)
                 elif client_message_id:
                     if client_message_id.startswith(closing.PREFIX) and data.get('closing_reply_verified') is True:
                         closing.accept_receipt(client_message_id, telegram_chat_id=data.get('chat_id'),

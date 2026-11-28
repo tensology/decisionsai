@@ -845,6 +845,13 @@ def ensure_development_thread(
         board_ticket_lane=board_ticket_lane,
         _session_provider=session_provider,
     )
+    try:
+        from distr.core.initiative.job_progress import report
+
+        report(f"ticket:{int(ticket_id)}" if ticket_id is not None else f"thread:{int(chat_id)}", "thread",
+               f"#{int(chat_id)}", title=(title or "").strip() or None)
+    except Exception:
+        pass  # narration must never affect thread creation
     return int(chat_id)
 
 

@@ -317,6 +317,12 @@ def create_event(
                 )
             if broadcast:
                 _broadcast(payload)
+            try:
+                from distr.core.initiative.job_progress import on_chat_turn_event
+
+                on_chat_turn_event(payload)
+            except Exception:
+                logger.debug("Job progress narration skipped", exc_info=True)
             return payload
         except IntegrityError:
             if attempt == 4:

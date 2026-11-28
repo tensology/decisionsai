@@ -664,6 +664,13 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             logger.warning("Thread timer startup sweep failed: %s", _timer_sweep_err)
 
         try:
+            from distr.core.initiative.job_progress import install as install_job_progress
+
+            install_job_progress()
+        except Exception as _job_progress_err:
+            logger.debug("Job progress narration not installed: %s", _job_progress_err)
+
+        try:
             from distr.core.orchestrator_memory import run_weekly_machine_activity_compaction
 
             run_weekly_machine_activity_compaction()
