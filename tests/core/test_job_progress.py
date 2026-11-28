@@ -27,7 +27,7 @@ def sinks(monkeypatch):
     monkeypatch.setattr(jp, "_telegram_send", lambda text, token: (s.sent.append((text, token)), s.telegram_ok)[1])
     monkeypatch.setattr(jp, "_telegram_edit",
                         lambda text, mid, chat: (s.edited.append((text, mid, chat)), s.telegram_ok)[1])
-    monkeypatch.setattr(jp, "_ticket_title", lambda _i: "Merrypak EFT banking details")
+    monkeypatch.setattr(jp, "_ticket_title", lambda _i: "Acme Print EFT banking details")
     monkeypatch.setattr(jp, "_step_name", lambda _i: "Update EFT documents")
     yield s
     jp.reset_for_tests()
@@ -39,10 +39,10 @@ def _ack(sinks, key, mid=77):
 
 
 def test_first_step_sends_one_message_and_later_steps_edit_it(sinks):
-    assert jp.report("t:1", "picked_up", "Julie's EFT mail", title="Julie EFT")
+    assert jp.report("t:1", "picked_up", "Dana's EFT mail", title="Dana EFT")
     assert len(sinks.sent) == 1 and sinks.sent[0][1].startswith("job-status:")
-    assert "Julie EFT - working" in sinks.sent[0][0]
-    assert "Picked up: Julie's EFT mail" in sinks.sent[0][0]
+    assert "Dana EFT - working" in sinks.sent[0][0]
+    assert "Picked up: Dana's EFT mail" in sinks.sent[0][0]
     _ack(sinks, "t:1")
     sinks.clock += jp.MIN_EDIT_INTERVAL_S + 0.1
     jp.report("t:1", "proposal", "problem, cause, fix plan")
@@ -155,7 +155,7 @@ def test_gives_up_after_repeated_delivery_failures(sinks):
 
 
 def test_parent_joins_jobs_into_one_status_message(sinks):
-    jp.report("mail:1", "picked_up", "Julie's mail", title="Julie EFT")
+    jp.report("mail:1", "picked_up", "Dana's mail", title="Dana EFT")
     _ack(sinks, "mail:1")
     sinks.clock += jp.MIN_EDIT_INTERVAL_S + 1
     jp.report("ticket:9", "thread", "#2481", parent="mail:1")
@@ -189,7 +189,7 @@ def test_report_never_raises(sinks, monkeypatch):
 def _user_msg(chat=1381, turn=2472, surface="telegram"):
     return {"source": "chat", "event_type": "worker_progress", "payload": {
         "subtype": "chat_user_message", "surface": surface, "chat_id": chat, "chat_row_id": turn,
-        "content_preview": "Check that Julie's mail is a proposal and push it as a thread"}}
+        "content_preview": "Check that Dana's mail is a proposal and push it as a thread"}}
 
 
 def _turn(etype, title="", summary="", chat=1381, turn=2472):
@@ -203,12 +203,12 @@ def test_telegram_turn_with_tools_is_narrated_step_by_step(sinks):
     assert sinks.sent == []
     jp.on_chat_turn_event(_turn("tool_completed", "Google Workspace"))
     assert len(sinks.sent) == 1
-    assert "Check that Julie's mail" in sinks.sent[0][0] and "Google Workspace" in sinks.sent[0][0]
+    assert "Check that Dana's mail" in sinks.sent[0][0] and "Google Workspace" in sinks.sent[0][0]
     _ack(sinks, "turn:1381:2472")
     sinks.clock += 10
     jp.on_chat_turn_event(_turn("tool_failed", "Request Tool", "Invalid arguments"))
     sinks.clock += 10
-    jp.on_chat_turn_event(_turn("turn_completed", "Answer ready", "Julie says go ahead."))
+    jp.on_chat_turn_event(_turn("turn_completed", "Answer ready", "Dana says go ahead."))
     last = sinks.edited[-1][0]
     assert "Request Tool failed: Invalid arguments" in last and "Done: answer sent" in last and "- done" in last
 
@@ -266,7 +266,7 @@ def test_bridge_reports_with_ticket_title_off_thread(sinks):
     ev = _ev("workflow", "run_started", "workflow_run_started")
     jp._report_mapped(ev, "ticket:257", "picked_up", "the work run started")
     job = jp.get_job("ticket:257")
-    assert job.title == "Merrypak EFT banking details" and len(sinks.sent) == 1
+    assert job.title == "Acme Print EFT banking details" and len(sinks.sent) == 1
     jp._report_mapped(_ev("pi", "worker_dispatched", step=3), "ticket:257", "step", "@step")
     assert jp.get_job("ticket:257").lines[-1].text == "started step: Update EFT documents"
 
@@ -300,12 +300,12 @@ def test_sender_transmits_job_status_messages_and_edits_them_in_place(monkeypatc
 
     jp.reset_for_tests()
     sender = DummyTelegramSender()
-    assert sender.send_to_telegram("Julie EFT - working\n13:00 Picked up: mail", interaction_token="job-status:mail_1")
+    assert sender.send_to_telegram("Dana EFT - working\n13:00 Picked up: mail", interaction_token="job-status:mail_1")
     sender._process_message_queue()
     assert len(sender.websocket_attempts) == 1
     frame = sender.websocket_attempts[0]
     assert frame["client_message_id"] == "job-status:mail_1" and frame["type"] == "send_message"
-    assert sender.edit_telegram_message("Julie EFT - done", message_id=77, chat_id=12345)
+    assert sender.edit_telegram_message("Dana EFT - done", message_id=77, chat_id=12345)
     sender._process_message_queue()
     assert sender.websocket_attempts[-1]["type"] == "edit_message" and sender.websocket_attempts[-1]["message_id"] == 77
     json.dumps(sender.websocket_attempts)

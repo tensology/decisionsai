@@ -63,7 +63,7 @@ def world(monkeypatch):
     monkeypatch.setattr(jp, "_remote_active", lambda: remote["live"])
     monkeypatch.setattr(jp, "_remote_push", lambda payload: (relay.remote_frames.append(
         (datetime.now().strftime("%H:%M:%S"), payload)), True)[1])
-    monkeypatch.setattr(jp, "_ticket_title", lambda _i: "Merrypak EFT banking details")
+    monkeypatch.setattr(jp, "_ticket_title", lambda _i: "Acme Print EFT banking details")
     monkeypatch.setattr(jp, "_step_name", lambda i: {11: "Update EFT documents", 12: "Verify payment retry"}.get(i, ""))
     monkeypatch.setattr(jp, "MIN_EDIT_INTERVAL_S", 0.4)
     monkeypatch.setattr(jp, "URGENT_EDIT_INTERVAL_S", 0.1)
@@ -123,7 +123,7 @@ def test_ticket_job_is_narrated_to_telegram_as_one_edited_message(world):
     assert len(sends) == 1 and len(edits) >= 4                       # one message, then edits
     assert all(e[1].endswith(sends[0][1].split("#")[1]) for e in edits)  # every edit hits the same message id
     final = edits[-1][2]
-    assert final.startswith("Merrypak EFT banking details - done")
+    assert final.startswith("Acme Print EFT banking details - done")
     for expected in ("Created thread: from telegram intake", "Picked up: the work run started",
                      "started step: Update EFT documents", "finished step: Update EFT documents: passed",
                      "Waiting for you: your approval: Release the checkout changes?",
@@ -137,7 +137,7 @@ def test_chat_request_from_telegram_gets_step_updates_and_cap_is_reported(world)
     relay, _ = world
     _emit(source="chat", event_type="chat_message_added", status="added", summary="user message",
           payload={"subtype": "chat_user_message", "surface": "telegram", "chat_id": 1381, "chat_row_id": 2472,
-                   "content_preview": "Check that Julie's mail is a proposal and push it as a thread"})
+                   "content_preview": "Check that Dana's mail is a proposal and push it as a thread"})
     for etype, title, summary in [("turn_started", "Request received", ""), ("acknowledgment", "Working on it.", ""),
                                   ("tool_completed", "Google Workspace", ""), ("tool_failed", "Request Tool", "Invalid arguments"),
                                   ("tool_completed", "Ran helper code", ""), ("tool_completed", "Ran helper code", ""),
