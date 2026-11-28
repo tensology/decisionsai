@@ -223,7 +223,77 @@ class OpenAICompatibleLLMService(BaseLLMService):
         )
         if func_name == "system_info" and google_status:
             return "google_workspace", {"action": "connection_status"}
+        if func_name == "clipboard_action":
+            try:
+                from distr.core.agent.tools.clipboard.clipboard_actions import (
+                    is_existing_clipboard_request,
+                    is_selection_read_request,
+                )
+            except Exception:
+                return func_name, func_args
+            if action not in {"explain", "elaborate", "set", "write"}:
+                repaired = dict(func_args or {})
+                if is_existing_clipboard_request(text):
+                    repaired["action"] = "read_clipboard"
+                    repaired.setdefault("text", text)
+                    return func_name, repaired
+                if is_selection_read_request(text):
+                    repaired["action"] = "read"
+                    repaired.setdefault("text", text)
+                    return func_name, repaired
         return func_name, func_args
+
+    async def _speak_clear_read_request(self) -> bool:
+        """If the user asked to hear the clipboard or selection, speak it and skip follow-up questions."""
+        last_user = ""
+        tool_results = []
+        for msg in reversed(self._messages):
+            role = msg.get("role")
+            if role == "user" and not last_user:
+                content = msg.get("content", "")
+                last_user = content if isinstance(content, str) else str(content)
+            elif role == "tool":
+                tool_results.append(msg)
+            if last_user and role == "user":
+                break
+        if not last_user or not tool_results:
+            return False
+        try:
+            from distr.core.agent.tools.clipboard.clipboard_actions import (
+                is_existing_clipboard_request,
+                is_selection_read_request,
+            )
+        except Exception:
+            return False
+        speak_request = is_existing_clipboard_request(last_user) or is_selection_read_request(last_user)
+        if not speak_request:
+            return False
+        text_to_read = None
+        for msg in tool_results:
+            if str(msg.get("name") or "") != "clipboard_action":
+                continue
+            result = str(msg.get("content") or "")
+            if result.startswith("READ_ACTION:"):
+                text_to_read = result[len("READ_ACTION:"):]
+                break
+            if result.startswith("CLIPBOARD CONTENT:"):
+                text_to_read = result.replace("CLIPBOARD CONTENT:", "", 1).strip()
+                marker = "\n\nThis is the current clipboard content."
+                if marker in text_to_read:
+                    text_to_read = text_to_read.split(marker)[0].strip()
+                break
+            if result:
+                text_to_read = result
+                break
+        if not text_to_read or not str(text_to_read).strip():
+            return False
+        deliver = getattr(self, "_fa_deliver_spoken_response", None)
+        if deliver is None:
+            return False
+        await deliver(text_to_read, speakable_symbols=True, read_all=True)
+        logger.info("Spoke clear read request (%s chars); skipping follow-up", len(text_to_read))
+        self._spoke_clear_read_request = True
+        return True
 
     @staticmethod
     def _is_verified_ticket_result(tool_name: str, result: str) -> bool:
@@ -491,6 +561,15 @@ class OpenAICompatibleLLMService(BaseLLMService):
                         tool_calls = []  # Clear so final handling knows we're done
                         break
 
+                # Clear "read this" / "read the clipboard" requests should be spoken,
+                # not sent back to the model for a clarifying question.
+                if await self._speak_clear_read_request():
+                    full_content = ""
+                    follow_up_content = ""
+                    tool_calls = []
+                    end_frame_sent = True
+                    break
+
                 # Feed tool results back to the LLM for the next round
                 # Pass tools so the LLM can keep calling tools if needed
                 try:
@@ -553,7 +632,11 @@ class OpenAICompatibleLLMService(BaseLLMService):
             await self._handle_generation_error(e)
         finally:
             logger.info("%s: total generation: %.3fs", self.SERVICE_NAME, _time.time() - _t0)
-            self._emit_telegram_response(full_content, follow_up_content)
+            if getattr(self, "_spoke_clear_read_request", False):
+                self._spoke_clear_read_request = False
+                self._emit_telegram_response("", "")
+            else:
+                self._emit_telegram_response(full_content, follow_up_content)
             needs_end_frame = self._cleanup_generation(end_frame_sent, full_content, follow_up_content)
             if needs_end_frame:
                 await self._push_pipeline_frame(LLMFullResponseEndFrame())

@@ -219,8 +219,8 @@ def get_tool_parameters(tool_name: str) -> dict:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "REQUIRED: The clipboard action: 'explain', 'elaborate', 'get' (for what's in the clipboard), or 'set'/'write' to write text into the clipboard. NOTE: 'read this' is handled separately.",
-                    "enum": ["explain", "elaborate", "get", "set", "write"]
+                    "description": "REQUIRED. 'read' speaks the current selection (Accessibility first). 'read_clipboard' speaks the existing clipboard without copying. 'get' loads clipboard into chat context. 'explain'/'elaborate' process the selection. 'set'/'write' write text into the clipboard. When the user asks to read it, just read it — do not ask which format they want.",
+                    "enum": ["explain", "elaborate", "get", "set", "write", "read", "read_clipboard"]
                 },
                 "text": {
                     "type": "string",

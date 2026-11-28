@@ -279,17 +279,44 @@ class FastActionDetector:
              ActionType.CLIPBOARD_GET, "clipboard_action", {"action": "get"}, False, "llm_response"),
             (re.compile(r'\b(talk|discuss|review|go\s+through|walk\s+through|explain|summari[sz]e|tell\s+me|what\s+you\s+think)\b.*\bclipboard\b', re.IGNORECASE),
              ActionType.CLIPBOARD_GET, "clipboard_action", {"action": "get"}, False, "llm_response"),
-            # "read this", "read that", "read it" - tool handles copy internally
-            # needs_copy_first=False because clipboard_action handles copy for "this" context
-            (re.compile(r'^read\s+(this|that|it)\.?$', re.IGNORECASE), 
+            # Existing clipboard — pbpaste only, never Cmd+C.
+            # STT often drops "read", leaving just "From Clipboard."
+            (re.compile(
+                r'^(?:(?:can|could|would|will)\s+you\s+|please\s+)?'
+                r'(?:'
+                r'(?:read(?:\s+(?:aloud|out\s*loud|to\s*me))?\s+)(?:from\s+|what(?:\'?s|\s+is)\s+(?:in|on)\s+)?(?:the\s+|my\s+)?clipboard'
+                r'|'
+                r'from\s+(?:the\s+|my\s+)?clipboard'
+                r')'
+                r'(?:\s+(?:aloud|out\s*loud|to\s*me|please))*(?:[.!?,]+)?$',
+                re.IGNORECASE,
+             ),
+             ActionType.CLIPBOARD_READ, "clipboard_action", {"action": "get"}, False, "tts_clipboard"),
+            (re.compile(
+                r'^(?:(?:can|could|would|will)\s+you\s+|please\s+)?'
+                r'read(?:\s+(?:aloud|out\s*loud|to\s*me))?\s+what\s+I\s+copied'
+                r'(?:\s+please)?(?:[.!?,]+)?$',
+                re.IGNORECASE,
+             ),
+             ActionType.CLIPBOARD_READ, "clipboard_action", {"action": "get"}, False, "tts_clipboard"),
+            # "read this / that / selected / the selection" — AX selection, then TTS
+            (re.compile(
+                r'^(?:(?:can|could|would|will)\s+you\s+|please\s+)?'
+                r'read\s+(this|that|it|selected)'
+                r'(?:\s+(?:aloud|out\s*loud|to\s*me|please))*(?:[.!?,]+)?$',
+                re.IGNORECASE,
+             ),
              ActionType.CLIPBOARD_READ, "clipboard_action", {"action": "read", "text": "__ORIGINAL_TEXT__"}, False, "tts"),
-            (re.compile(r'\bread\s+(this|that|it)\s*(aloud|out\s*loud|to\s*me)?\.?$', re.IGNORECASE), 
+            (re.compile(
+                r'^(?:(?:can|could|would|will)\s+you\s+|please\s+)?'
+                r'read(?:\s+(?:aloud|out\s*loud|to\s*me))?\s+'
+                r'(?:the\s+|this\s+|that\s+)?(?:selection|selected(?:\s+text)?)'
+                r'(?:\s+(?:aloud|out\s*loud|to\s*me|please))*(?:[.!?,]+)?$',
+                re.IGNORECASE,
+             ),
              ActionType.CLIPBOARD_READ, "clipboard_action", {"action": "read", "text": "__ORIGINAL_TEXT__"}, False, "tts"),
-            # "read from clipboard", "read the clipboard", "read my clipboard", "read clipboard"
-            # This reads the clipboard content ALOUD via TTS
-            # SUMMARIZE patterns are matched earlier in this list; negative lookahead keeps
-            # "summarize … clipboard" from routing here if regex order ever changes.
-            (re.compile(r'^(?!.*\bsummar(ize|ise)\b)(?!.*\b(talk|discuss|review|go\s+through|walk\s+through|explain|tell\s+me|what\s+you\s+think|about\s+it|with\s+me)\b).*\bread\b.*\b(from\s+)?(the\s+|my\s+)?clipboard\b', re.IGNORECASE), 
+            # Broader "read … clipboard" (not summarize / discuss) still reads aloud
+            (re.compile(r'^(?!.*\bsummar(ize|ise)\b)(?!.*\b(talk|discuss|review|go\s+through|walk\s+through|explain|tell\s+me|what\s+you\s+think|about\s+it|with\s+me)\b).*\bread\b.*\b(from\s+)?(the\s+|my\s+)?clipboard\b', re.IGNORECASE),
              ActionType.CLIPBOARD_READ, "clipboard_action", {"action": "get"}, False, "tts_clipboard"),
             
             # === CLIPBOARD GET (show content, LLM responds) ===

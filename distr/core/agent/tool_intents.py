@@ -17,6 +17,14 @@ except Exception:  # pragma: no cover - routing should never fail on import nois
 
 _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
+        "clipboard_action",
+        (
+            r"\bclipboard\b",
+            r"\bwhat\s+I\s+copied\b",
+            r"\bread\s+(this|that|it|selected|the\s+selection|selected\s+text)\b",
+        ),
+    ),
+    (
         "client_mail_proposal",
         (
             r"\b(e-?mail|gmail|mail|ticket)\b.{0,80}\b(proposal|thread)\b",
