@@ -601,8 +601,7 @@ def test_draft_greets_relevant_people_before_a_plain_language_update(monkeypatch
         complete=lambda p, m, messages, s: (seen.extend(messages) or 'Hi Greg,\n\nI have changed how the usage charge is calculated. It is not live yet.'))
     rules = seen[0]['content']
     context = json.loads(seen[1]['content'])
-    assert 'Start with a friendly greeting' in rules
-    assert 'Hi when the recipients\' local time is unknown' in rules
+    assert 'Start with the recipient' in rules and 'No Hi, Good morning' in rules
     assert 'Do not greet Alex' in rules and 'invent a name' in rules
     assert 'Write a reply from Alex ' in rules
     assert 'everyday language' in rules and 'test counts' in rules
@@ -612,7 +611,7 @@ def test_draft_greets_relevant_people_before_a_plain_language_update(monkeypatch
     assert len(context['source_messages']) == 1
     assert datetime.fromisoformat(context['current_local_time']).tzinfo is not None
     assert context['rewrite_request'] == 'Make it clearer.'
-    assert text.startswith('Hi Greg,')
+    assert text.startswith('Greg,')
 
 
 def test_email_greeting_names_are_from_actual_recipients_only():
@@ -693,3 +692,25 @@ def test_reply_defaults_to_the_original_sender_only():
     # A message whose only sender is the account itself has no external recipient.
     with pytest.raises(ValueError, match='No external reply recipient'):
         replies.mail_target('gmail', {**message, 'from': 'paul@example.com'}, ['paul@example.com'])
+
+
+def test_saved_contact_name_beats_whatsapp_profile_name():
+    """Regression: a private chat whose sender calls himself 'Breakfast' must be addressed by the saved name."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from distr.core.db import Base, WhatsAppPhoneLink
+    from distr.core.incoming.source_reply import _linked_whatsapp_contact_name
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    try:
+        db.add(WhatsAppPhoneLink(board_id=1, phone_jid="111@lid", contact_name="Sibo"))
+        db.add(WhatsAppPhoneLink(board_id=1, phone_jid="222@g.us", contact_name="Group"))
+        db.commit()
+        assert _linked_whatsapp_contact_name(db, "111@lid") == "Sibo"
+        assert _linked_whatsapp_contact_name(db, "222@g.us") == ""  # groups keep sender names
+        assert _linked_whatsapp_contact_name(db, "333@lid") == ""
+    finally:
+        db.close()

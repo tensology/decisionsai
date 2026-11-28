@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import os
+import time
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -83,3 +86,65 @@ def relay_public_base() -> str:
     if explicit:
         return canonical_relay_url(explicit).rstrip("/")
     return "https://decisions.tensology.com"
+
+# Transient nginx/upstream failures when minting a short-lived WebSocket JWT.
+# Five attempts: immediate, then 1s, 2s, 4s, 8s.
+WS_TOKEN_RETRY_STATUSES = frozenset({404, 502, 503})
+WS_TOKEN_RETRY_DELAYS_S = (1, 2, 4, 8)
+
+
+def should_retry_ws_token_status(status: int) -> bool:
+    try:
+        return int(status) in WS_TOKEN_RETRY_STATUSES
+    except (TypeError, ValueError):
+        return False
+
+
+def ws_token_retry_sleep(seconds: float) -> None:
+    """Sleep between ws-token retries. Tests monkeypatch this."""
+    if seconds and seconds > 0:
+        time.sleep(seconds)
+
+
+
+# Clients refresh the relay JWT this many seconds before the exp claim.
+RELAY_TOKEN_REFRESH_LEAD_S = 60
+RELAY_TOKEN_REFRESH_MIN_DELAY_MS = 5_000
+RELAY_TOKEN_REFRESH_FALLBACK_MS = 240_000
+
+
+def relay_jwt_exp_iat(token: str) -> tuple[float | None, float | None]:
+    """Return only the exp and iat unix timestamps from a JWT. Never logs the token."""
+    try:
+        parts = (token or "").split(".")
+        if len(parts) < 2 or not parts[1]:
+            return None, None
+        payload = parts[1]
+        pad = "=" * ((4 - len(payload) % 4) % 4)
+        data = json.loads(base64.urlsafe_b64decode(payload + pad))
+        if not isinstance(data, dict):
+            return None, None
+        exp = data.get("exp")
+        iat = data.get("iat")
+        return (
+            float(exp) if exp is not None else None,
+            float(iat) if iat is not None else None,
+        )
+    except Exception:
+        return None, None
+
+
+def relay_token_refresh_delay_ms(
+    exp: float | None,
+    *,
+    now: float | None = None,
+    lead_s: float = RELAY_TOKEN_REFRESH_LEAD_S,
+) -> int:
+    """Milliseconds until a pre-expiry refresh. Falls back if exp is missing."""
+    if exp is None:
+        return RELAY_TOKEN_REFRESH_FALLBACK_MS
+    now_ts = time.time() if now is None else now
+    return max(
+        RELAY_TOKEN_REFRESH_MIN_DELAY_MS,
+        int((float(exp) - now_ts - lead_s) * 1000),
+    )

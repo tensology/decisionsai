@@ -2216,17 +2216,21 @@ class TelegramRemoteControlMixin:
     def _move_mouse_to(self, x: int, y: int, screen_number: int, instant: bool = False):
         """Move mouse to absolute coordinates with smooth animation. Used for drag operations.
 
-        ``instant`` skips the animation, for live pointer tracking (WebRTC view)."""
+        ``instant`` skips the animation, for live pointer tracking (WebRTC view).
+        On macOS, instant moves use a Quartz warp so crossing displays stays as
+        cheap as moving on one screen (pyautogui.moveTo can hitch at the seam)."""
+        x, y = self._clamp_to_screen(x, y, screen_number)
+        if instant and platform.system() == "Darwin":
+            try:
+                import Quartz
+
+                event = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventMouseMoved, (x, y), 0)
+                Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+                return
+            except Exception:
+                pass
         if not pyautogui:
             return
-        # Minimal validation — clamp to screen bounds
-        screens_info = self._get_screens_list()
-        for s in screens_info:
-            if s.get("screen_number") == screen_number:
-                geo = s["geometry"]
-                x = max(geo["x"], min(x, geo["x"] + geo["width"] - 1))
-                y = max(geo["y"], min(y, geo["y"] + geo["height"] - 1))
-                break
         # Calculate distance-based duration for natural drag feel
         cx, cy = pyautogui.position()
         dist = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5

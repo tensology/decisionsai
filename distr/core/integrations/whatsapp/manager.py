@@ -46,6 +46,11 @@ logger = logging.getLogger(__name__)
 
 from distr.core.integrations.base import IntegrationReconnectMixin
 from distr.core.integrations.telegram.utils import relay_internal_token
+from distr.core.integrations.relay_auth import (
+    WS_TOKEN_RETRY_DELAYS_S,
+    should_retry_ws_token_status,
+    ws_token_retry_sleep,
+)
 
 
 def _whatsapp_agent_bridge_enabled() -> bool:
@@ -357,17 +362,36 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
             payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
             headers = self._relay_auth_headers(payload_str)
             if headers:
-                r = requests.post(f"{self.api_base}/ws-auth", json=payload, headers=headers, timeout=10)
-                try:
-                    obj = r.json()
-                except ValueError:
-                    obj = {}
-                if r.status_code == 200 and obj.get("success") and obj.get("ws_token"):
-                    self._ws_auth_bundle = obj
-                    return obj
+                r = None
+                obj = {}
+                delays = (0,) + tuple(WS_TOKEN_RETRY_DELAYS_S)
+                for attempt, delay in enumerate(delays, start=1):
+                    if delay:
+                        ws_token_retry_sleep(delay)
+                    r = requests.post(
+                        f"{self.api_base}/ws-auth",
+                        json=payload,
+                        headers=headers,
+                        timeout=10,
+                    )
+                    try:
+                        obj = r.json()
+                    except ValueError:
+                        obj = {}
+                    if r.status_code == 200 and obj.get("success") and obj.get("ws_token"):
+                        self._ws_auth_bundle = obj
+                        return obj
+                    if not should_retry_ws_token_status(r.status_code):
+                        break
+                    logger.debug(
+                        "WhatsApp: internal ws-auth HTTP %s, retry %s/%s",
+                        r.status_code,
+                        attempt,
+                        len(delays),
+                    )
                 logger.warning(
                     "WhatsApp: internal ws-auth unavailable (status=%s); trying device authentication",
-                    r.status_code,
+                    r.status_code if r is not None else "unknown",
                 )
 
             # No local secret path: prove possession of local device keypair.

@@ -33,8 +33,18 @@ def _console_level() -> int:
     return logging.INFO if enabled in {"1", "true", "yes", "on"} else logging.WARNING
 
 
+def _in_test_process() -> bool:
+    """True when running under pytest or DECISIONS_TEST_MODE."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return True
+    flag = (os.environ.get("DECISIONS_TEST_MODE") or "").strip().lower()
+    return flag in {"1", "true", "yes", "on"}
+
+
 def _setup_crash_logging() -> None:
     global _crash_log_file
+    if _in_test_process():
+        return
     try:
         import faulthandler
 

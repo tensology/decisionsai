@@ -29,7 +29,21 @@ os.environ.setdefault(
     "DECISIONS_AGENT_RESTART_LOG",
     os.path.join(tempfile.mkdtemp(prefix="decisions-test-logs-"), "agent_death.log"),
 )
+# Lifecycle jsonl is a separate path; isolate it the same way.
+os.environ.setdefault(
+    "DECISIONS_LIFECYCLE_LOG",
+    os.path.join(tempfile.mkdtemp(prefix="decisions-test-logs-"), "runtime_lifecycle.jsonl"),
+)
 os.environ.setdefault("DECISIONS_TEST_MODE", "1")
+# If runtime_lifecycle was already imported, retarget the module-level path too.
+try:
+    from distr.core import runtime_lifecycle as _runtime_lifecycle
+
+    _runtime_lifecycle.LIFECYCLE_LOG = __import__("pathlib").Path(
+        os.environ["DECISIONS_LIFECYCLE_LOG"]
+    )
+except Exception:
+    pass
 # Tests must never reach the running Decisions app on 127.0.0.1:8765. Without this,
 # approval requests (chat_approvals / dev_approvals) posted real Approve/Deny cards
 # into Paul's live Chat thread and then waited 15 minutes for a click.

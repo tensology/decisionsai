@@ -46,6 +46,24 @@ PERMISSION_ERROR = (
 )
 
 
+def is_benign_ice_close(exc: BaseException | None) -> bool:
+    """True when aiortc raises after the ICE transport was already shut down."""
+    if exc is None:
+        return False
+    return (
+        type(exc).__name__ == "InvalidStateError"
+        and "RTCIceTransport is closed" in str(exc)
+    )
+
+
+def webrtc_loop_exception_handler(loop, context):
+    """Ignore the late __connect() race after a session or ICE transport is closed."""
+    if is_benign_ice_close(context.get("exception")):
+        logger.info("WebRTC ICE transport already closed; ignoring stale connect task")
+        return
+    loop.default_exception_handler(context)
+
+
 
 def _ice_host(url: str) -> str:
     raw = (url or "").strip()
@@ -144,6 +162,11 @@ def composite_display_frames(union: dict, parts, scale: float = 1.0):
     ``bgra`` or ``rgb24``. Returns ``(canvas, "bgra")``.
     """
     import numpy as np
+
+    try:
+        import cv2
+    except Exception:
+        cv2 = None
     from PIL import Image
 
     if not scale or scale <= 0:
@@ -158,7 +181,17 @@ def composite_display_frames(union: dict, parts, scale: float = 1.0):
         tw = max(1, int(round(geo["width"] * scale)))
         th = max(1, int(round(geo["height"] * scale)))
         arr = frame
-        if pixel_format == "rgb24":
+        if cv2 is not None:
+            # OpenCV area-resize is an order of magnitude faster than PIL here,
+            # which is what kept a 3-display overview around 4 fps.
+            interp = cv2.INTER_AREA if (tw <= arr.shape[1] and th <= arr.shape[0]) else cv2.INTER_LINEAR
+            if pixel_format == "rgb24":
+                resized = arr if (arr.shape[1] == tw and arr.shape[0] == th) else cv2.resize(arr, (tw, th), interpolation=interp)
+                bgra = np.dstack((resized[:, :, 2], resized[:, :, 1], resized[:, :, 0], np.full(resized.shape[:2], 255, np.uint8)))
+            else:
+                src = arr[:, :, :4] if arr.ndim == 3 and arr.shape[2] >= 4 else np.dstack((arr[:, :, :3], np.full(arr.shape[:2], 255, np.uint8)))
+                bgra = src if (src.shape[1] == tw and src.shape[0] == th) else cv2.resize(src, (tw, th), interpolation=interp)
+        elif pixel_format == "rgb24":
             img = Image.fromarray(arr)
             if img.size != (tw, th):
                 img = img.resize((tw, th), Image.Resampling.BILINEAR)
@@ -234,6 +267,46 @@ def parse_input(raw) -> Optional[dict]:
     return out
 
 
+def parse_viewport(raw) -> Optional[dict]:
+    """A desktop-point crop for the live stream. None when the message is not a viewport."""
+    try:
+        msg = json.loads(raw) if isinstance(raw, (str, bytes)) else None
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(msg, dict) or msg.get("command") != "viewport":
+        return None
+    try:
+        x, y = int(msg["x"]), int(msg["y"])
+        width, height = int(msg["width"]), int(msg["height"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return {"x": x, "y": y, "width": width, "height": height}
+
+
+def parse_cursor_overlay(raw) -> Optional[bool]:
+    """True/False when the client reports a local cursor overlay; None otherwise."""
+    try:
+        msg = json.loads(raw) if isinstance(raw, (str, bytes)) else None
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(msg, dict) or msg.get("command") != "cursor_overlay":
+        return None
+    return bool(msg.get("enabled"))
+
+
+def intersect_rect(geo: dict, view: dict) -> dict | None:
+    """Intersection of two desktop-point rectangles, or None when they do not overlap."""
+    x0 = max(geo["x"], view["x"])
+    y0 = max(geo["y"], view["y"])
+    x1 = min(geo["x"] + geo["width"], view["x"] + view["width"])
+    y1 = min(geo["y"] + geo["height"], view["y"] + view["height"])
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return None
+    return {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0}
+
+
 def screen_capture_allowed() -> bool:
     """macOS Screen Recording permission for this process (True off macOS)."""
     if platform.system() != "Darwin":
@@ -259,11 +332,49 @@ class ScreenGrabber:
             if self.geometry["width"] <= 0 or self.geometry["height"] <= 0:
                 raise ValueError("screen geometry is missing")
         self._display_ids = {}
-        self.size = target_size(self.geometry["width"], self.geometry["height"], pixel_scale=self._pixel_scale())
+        self._view_lock = threading.Lock()
+        self._view = None  # None = the full geometry; else a desktop-point crop.
+        self.size = self._size_for(self.geometry)
         self._cursor = None
         self._cursor_path = cursor_path
+        self._local_cursor = False
+
+    def _size_for(self, geo: dict):
+        """Same cap as a single display: native (Retina) pixels, at most MAX_WIDTH x MAX_HEIGHT."""
+        return target_size(geo["width"], geo["height"], pixel_scale=self._pixel_scale())
+
+    def set_view(self, view: Optional[dict]) -> None:
+        """Crop the stream to ``view`` (desktop points) so a zoomed region stays sharp.
+
+        The output size is the same ``target_size`` a single display of that region would
+        use, so each display in a stitched zoom matches single-screen quality. The full
+        union stays at the 2560-wide cap, which is enough for the unzoomed overview and
+        stays inside common H.264 / phone decoder limits. A full-res composite of three
+        Retina displays would be ~8714x1806, above Level 5.2.
+        """
+        if not view:
+            rect = None
+        else:
+            try:
+                rect = intersect_rect(self.geometry, {
+                    "x": int(view["x"]), "y": int(view["y"]),
+                    "width": int(view["width"]), "height": int(view["height"]),
+                })
+            except (KeyError, TypeError, ValueError):
+                return
+        size = self._size_for(rect or self.geometry)
+        with self._view_lock:
+            if rect == self._view and size == self.size:
+                return
+            self._view = rect
+            self.size = size
+
+    def set_local_cursor(self, enabled: bool) -> None:
+        """Skip burning the pointer into the video when the client draws its own."""
+        self._local_cursor = bool(enabled)
 
     def _quartz_display(self, geometry: Optional[dict] = None):
+
         import Quartz
 
         geo = geometry or self.geometry
@@ -333,14 +444,35 @@ class ScreenGrabber:
         return np.array(img.convert("RGB")), "rgb24"
 
     def _grab_raw(self):
-        """Full-resolution writable frame and its pixel format ("bgra" or "rgb24")."""
+        """Writable frame of the current view (or the full geometry) and its pixel format.
+
+        Multi-display captures are composited at the *output* scale, not at full
+        Retina union size, so the overview stays near the 20 fps budget instead
+        of building a ~8K-wide canvas and downscaling it every frame.
+        """
+        with self._view_lock:
+            view = self._view
+            out_w, out_h = self.size
+        target = view or self.geometry
         if len(self.displays) > 1:
             parts = []
             for geo in self.displays:
+                if view and not intersect_rect(geo, view):
+                    continue
                 frame, fmt = self._grab_one(geo)
                 parts.append((geo, frame, fmt))
-            return composite_display_frames(self.geometry, parts, self._pixel_scale())
-        return self._grab_one(self.displays[0] if self.displays else self.geometry)
+            scale = out_w / target["width"] if target["width"] else 1.0
+            return composite_display_frames(target, parts, scale)
+        raw = self._grab_one(self.displays[0] if self.displays else self.geometry)
+        if view is None or raw[0] is None:
+            return raw
+        frame, fmt = raw
+        scale = frame.shape[1] / self.geometry["width"]
+        x0 = max(0, min(frame.shape[1] - 1, int(round((view["x"] - self.geometry["x"]) * scale))))
+        y0 = max(0, min(frame.shape[0] - 1, int(round((view["y"] - self.geometry["y"]) * scale))))
+        x1 = max(x0 + 1, min(frame.shape[1], int(round((view["x"] + view["width"] - self.geometry["x"]) * scale))))
+        y1 = max(y0 + 1, min(frame.shape[0], int(round((view["y"] + view["height"] - self.geometry["y"]) * scale))))
+        return frame[y0:y1, x0:x1], fmt
 
     def _pointer(self):
         try:
@@ -371,14 +503,16 @@ class ScreenGrabber:
             self._cursor = (scale, cursor)
         return self._cursor[1]
 
-    def draw_pointer(self, frame, pixel_format: str):
-        """Composite the pointer onto a full-resolution frame in place."""
+    def draw_pointer(self, frame, pixel_format: str, geo: Optional[dict] = None):
+        """Composite the pointer onto a frame in place. ``geo`` is the desktop rect of the frame."""
         import numpy as np
 
+        if self._local_cursor:
+            return frame
         pos = self._pointer()
         if pos is None:
             return frame
-        g = self.geometry
+        g = geo or self.geometry
         out_h, out_w = frame.shape[:2]
         scale = out_w / g["width"]
         px, py = int((pos[0] - g["x"]) * scale), int((pos[1] - g["y"]) * out_h / g["height"])
@@ -404,9 +538,11 @@ class ScreenGrabber:
         raw, pixel_format = self._grab_raw()
         if raw is None:
             return None
-        self.draw_pointer(raw, pixel_format)
+        with self._view_lock:
+            view = self._view
+            out_w, out_h = self.size
+        self.draw_pointer(raw, pixel_format, view or self.geometry)
         frame = av.VideoFrame.from_ndarray(raw, format=pixel_format)
-        out_w, out_h = self.size
         # Area averaging keeps small text legible when Retina pixels are scaled down.
         return frame.reformat(width=out_w, height=out_h, format="yuv420p", interpolation="AREA")
 
@@ -535,6 +671,7 @@ class WebRTCScreenServer:
         with self._loop_lock:
             if self._loop is None:
                 loop = asyncio.new_event_loop()
+                loop.set_exception_handler(webrtc_loop_exception_handler)
                 threading.Thread(target=loop.run_forever, name="webrtc-loop", daemon=True).start()
                 self._loop = loop
             return self._loop
@@ -579,7 +716,11 @@ class WebRTCScreenServer:
         self._session = None
         _, pc, pump, _ = session
         pump.stop()
-        await pc.close()
+        try:
+            await pc.close()
+        except Exception as exc:
+            if not is_benign_ice_close(exc):
+                raise
         logger.info("WebRTC screen session %s closed", session[0][:12])
         return True
 
@@ -599,6 +740,18 @@ class WebRTCScreenServer:
         def on_datachannel(channel):
             @channel.on("message")
             def on_message(raw):
+                view = parse_viewport(raw)
+                if view is not None:
+                    setter = getattr(grabber, "set_view", None)
+                    if setter:
+                        setter(view)
+                    return
+                overlay = parse_cursor_overlay(raw)
+                if overlay is not None:
+                    setter = getattr(grabber, "set_local_cursor", None)
+                    if setter:
+                        setter(overlay)
+                    return
                 msg = parse_input(raw)
                 if msg:
                     pump.put(msg)

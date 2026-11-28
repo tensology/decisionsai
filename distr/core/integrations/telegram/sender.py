@@ -549,6 +549,38 @@ class TelegramSenderMixin:
         self._last_message_time = time.time()
         return True
 
+
+    def edit_telegram_message(self, text, *, message_id, chat_id=None, reply_markup=None):
+        """Edit a previously sent private-chat message and optionally clear its buttons."""
+        destination = _outbound_destination(self)
+        if destination is None:
+            logger.error("No valid private Telegram destination; card edit was not queued.")
+            return False
+        try:
+            mid = int(message_id)
+        except (TypeError, ValueError):
+            logger.warning("Telegram card edit skipped: invalid message_id")
+            return False
+        if mid <= 0 or not str(text or "").strip():
+            return False
+        msg = {
+            "type": "edit_message",
+            "text": str(text),
+            "message_id": mid,
+            "reply_markup": {"inline_keyboard": []} if reply_markup is None else reply_markup,
+        }
+        msg.update(destination)
+        if chat_id is not None:
+            raw = str(chat_id).strip()
+            if raw.lstrip("-").isdigit():
+                msg["chat_id"] = int(raw)
+        try:
+            self._message_queue.put_nowait(msg)
+        except queue.Full:
+            logger.error("[Telegram] Outbound queue is full; card edit was not queued")
+            return False
+        return True
+
     def _process_message_queue(self):
         """Pop queue run by QTimer."""
         if not self.is_connected():
@@ -683,7 +715,10 @@ class TelegramSenderMixin:
                     continue
                 queue_id = getattr(self, '_proposal_delivery_queue_id', None)
                 durable_proposal = token.startswith('proposal-update:')
-                workflow_checkpoint = bool(token) and not durable_proposal
+                # Confirm cards use oc-card:<flow-key> only to correlate the
+                # Telegram message_id. They are not workflow checkpoints.
+                confirm_card = token.startswith('oc-card:')
+                workflow_checkpoint = bool(token) and not durable_proposal and not confirm_card
                 outbound = msg
                 queued_destination = {key: msg[key] for key in ('chat_id', 'app_user_id') if key in msg}
                 try:

@@ -87,6 +87,7 @@ def test_stale_relay_token_completion_cannot_open_socket() -> None:
     manager = manager_mod.TelegramWebSocketManager.__new__(manager_mod.TelegramWebSocketManager)
     manager._ws_token_request_id = 3
     manager._ws_token_fetch_in_progress = True
+    manager._planned_token_refresh = False
     manager._open_websocket_with_token = opened.append
 
     manager_mod.TelegramWebSocketManager._finish_ws_token_request(manager, 2, "stale")

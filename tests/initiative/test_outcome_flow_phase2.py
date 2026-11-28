@@ -194,7 +194,7 @@ def test_standard_work_done_card_holds_the_send(env):
     assert out["pending_approval"] is True and out["delivered"] is False
     sent.assert_not_called()
     labels = [b["text"] for row in env.tg.sent[0]["reply_markup"]["inline_keyboard"] for b in row]
-    assert labels == ["Continue", "Check it", "Send message to client"]
+    assert labels == ["Continue", "Check it", "Send message to client", "Rework"]
     _all_human(m["text"] for m in env.tg.sent)
 
 
@@ -220,7 +220,7 @@ def test_standard_send_shows_overview_then_sends_only_after_confirm(env, monkeyp
     assert kwargs["approval_context"] == {"chat_id": 909}
     assert done["text"].startswith("Sent.")
     again = of.handle_telegram_text(f"oc:{key}:confirm")
-    assert "already went out" in again["text"]
+    assert again["text"] == "Sent to Anna on WhatsApp."
     deliver.assert_called_once()
     rec = [e for e in _audit_lines(env.tmp) if e["event"] == "operate_client_reply_confirmed"][0]
     assert rec["body"] == "Hi Anna, it's fixed now." and rec["destination"] == "+27 82"
@@ -279,7 +279,7 @@ def test_two_telegram_confirmations_claim_one_client_send(env, monkeypatch):
         finally:
             release.set()
         assert first.result(5)["text"].startswith("Sent.")
-    assert "already went out" in of.handle_telegram_text(f"oc:{key}:send")["text"]
+    assert of.handle_telegram_text(f"oc:{key}:send")["text"] == "Sent to Anna on WhatsApp."
     assert of.get_flow(key)["status"] == "sent"
     deliver.assert_called_once()
 
@@ -325,7 +325,7 @@ def test_quiet_client_reply_untouched(env):
 
 
 def test_stale_flow_button_is_humanized(env):
-    assert "already been wrapped up" in of.handle_telegram_text("oc:deadbeef:confirm")["text"]
+    assert of.handle_telegram_text("oc:deadbeef:confirm")["text"] == of.CANCELLED_REPLACED_TEXT
 
 
 def test_humanize_strips_ids_json_and_tracebacks():

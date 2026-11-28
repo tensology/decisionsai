@@ -49,9 +49,11 @@ def register_routes(router, templates):
         from distr.core.incoming.source_reply import ReplyHistoryUnavailableError, create_draft
         try:
             body = await request.json()
+            preset = body.get('preset_text', body.get('text'))
             draft = await asyncio.to_thread(create_draft, chat_id, int(body['response_id']), str(body['source_key']),
                 previous=str(body.get('previous') or ''), instruction=str(body.get('instruction') or ''),
-                replaces=str(body.get('replaces') or ''))
+                replaces=str(body.get('replaces') or ''),
+                preset_text=None if preset is None else str(preset))
             return JSONResponse(draft)
         except ReplyHistoryUnavailableError as exc:
             return reply_history_conflict(exc)

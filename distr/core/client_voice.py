@@ -111,5 +111,30 @@ def unverified_claims(text: str, evidence: str = "") -> list[str]:
     return found
 
 
+_LEADING_GREETING = re.compile(
+    r"^\s*(?:good\s+(?:morning|afternoon|evening)|hi|hey|hello)\b"
+    r"(?:\s*,\s*|\s+)"
+    r"(?:(?P<name>[A-Z][A-Za-z-]+(?:\s+[A-Z][A-Za-z-]+){0,2})\s*,\s*)?",
+    re.I,
+)
+
+
+def strip_leading_client_greeting(text: str) -> str:
+    """Turn 'Good afternoon, Sibo,' / 'Hi Sibo,' into the name-first opener 'Sibo, ...'."""
+    raw = str(text or "")
+    match = _LEADING_GREETING.match(raw)
+    if not match:
+        return raw
+    rest = raw[match.end():].lstrip()
+    name = (match.group("name") or "").strip().strip(",")
+    if name and not re.fullmatch(r"(?:there|everyone|all|team)", name, re.I):
+        if rest.lower().startswith(name.lower() + ","):
+            return rest
+        return f"{name}, {rest}" if rest else f"{name},"
+    return rest
+
+
 def apply_client_voice(text: str) -> str:
-    return drop_pleasantries(drop_client_setup_lectures(first_person(text))).strip()
+    return strip_leading_client_greeting(
+        drop_pleasantries(drop_client_setup_lectures(first_person(text)))
+    ).strip()

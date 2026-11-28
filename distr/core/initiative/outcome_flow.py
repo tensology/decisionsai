@@ -260,14 +260,14 @@ def find_workflow_reply_review(ticket_id: int, workflow: dict) -> dict[str, Any]
         if status == "notification_failed":
             continue
         return {"delivered": status == "sent", "unconfirmed": status in {"sending", "unconfirmed"},
-                "pending_approval": status in {"awaiting_decision", "continuing", "checking", "confirming"},
+                "pending_approval": status in {"awaiting_decision", "continuing", "checking", "confirming", "awaiting_rework"},
                 "telegram_flow_key": key, "channel": flow.get("source")}
     return None
 
 
 def posture_handles_reply(ticket_id: Any) -> bool:
     """True when the Initiative flow already sent this ticket's client update or holds it for the owner."""
-    live = {"awaiting_decision", "continuing", "checking", "confirming", "sending", "sent", "unconfirmed"}
+    live = {"awaiting_decision", "continuing", "checking", "confirming", "awaiting_rework", "sending", "sent", "unconfirmed"}
     for flow in (_load_state().get("flows") or {}).values():
         if flow.get("kind") == "reply" and str(flow.get("ticket_id")) == str(ticket_id) and flow.get("status") in live:
             return True
@@ -320,7 +320,8 @@ def _telegram_manager():
 
 
 def send_telegram(text: str, *, reply_markup: dict | None = None, settings: dict[str, Any] | None = None,
-                  require_toggle: bool = True) -> bool:
+                  require_toggle: bool = True, interaction_token: str | None = None,
+                  force_reply: bool = False) -> bool:
     settings = load_settings() if settings is None else settings
     if require_toggle and not telegram_allowed(settings):
         return False
@@ -328,16 +329,183 @@ def send_telegram(text: str, *, reply_markup: dict | None = None, settings: dict
     if not manager:
         return False
     body = humanize(text, max_len=3500)
+    markup = {"force_reply": True, "selective": True} if force_reply else reply_markup
+    kwargs: dict[str, Any] = {}
+    if markup:
+        kwargs["reply_markup"] = markup
+    if interaction_token:
+        kwargs["interaction_token"] = interaction_token
     try:
-        return bool(manager.send_to_telegram(body, reply_markup=reply_markup) if reply_markup
-                    else manager.send_to_telegram(body))
+        try:
+            ok = bool(manager.send_to_telegram(body, **kwargs) if kwargs else manager.send_to_telegram(body))
+        except TypeError:
+            ok = bool(manager.send_to_telegram(body, reply_markup=markup) if markup
+                      else manager.send_to_telegram(body))
     except Exception:
         logger.warning("outcome_flow: Telegram send failed", exc_info=True)
         return False
+    mid = getattr(manager, "last_telegram_message_id", None)
+    if ok and interaction_token and str(interaction_token).startswith(OC_CARD_PREFIX) and mid:
+        record_card_message(str(interaction_token)[len(OC_CARD_PREFIX):], mid,
+                            getattr(manager, "last_telegram_chat_id", None))
+    return ok
 
 
 def _kb(*rows: list[tuple[str, str]]) -> dict[str, Any]:
     return {"inline_keyboard": [[{"text": label, "callback_data": data} for label, data in row] for row in rows]}
+
+
+OC_CARD_PREFIX = "oc-card:"
+REWORK_PROMPT = "What should I change?"
+CANCELLED_REPLACED_TEXT = "Cancelled — replaced by newer card"
+SUPERSEDED_TEXT = CANCELLED_REPLACED_TEXT
+FORCE_REPLY = {"force_reply": True, "selective": True}
+_TERMINAL_FLOW = {"sent", "sending", "unconfirmed", "superseded", "cancelled"}
+
+
+def _as_telegram_id(value: Any) -> int | None:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def record_card_message(key: str, message_id: Any, chat_id: Any = None) -> None:
+    """Remember a Telegram message id so a later Rework or cancel can edit that card."""
+    mid = _as_telegram_id(message_id)
+    if not mid or not key:
+        return
+    key = str(key).removeprefix(OC_CARD_PREFIX)
+    flow = get_flow(key)
+    if not flow:
+        return
+    ids = [int(x) for x in (flow.get("telegram_message_ids") or []) if _as_telegram_id(x)]
+    if mid not in ids:
+        ids.append(mid)
+    fields: dict[str, Any] = {"telegram_message_ids": ids}
+    cid = chat_id if chat_id is not None else flow.get("telegram_chat_id")
+    if cid is not None:
+        fields["telegram_chat_id"] = cid
+    save_flow(key, **fields)
+
+
+def edit_telegram(text: str, *, message_id: Any, chat_id: Any = None,
+                  reply_markup: dict | None = None, settings: dict[str, Any] | None = None) -> bool:
+    settings = load_settings() if settings is None else settings
+    if not telegram_allowed(settings):
+        return False
+    manager = _telegram_manager()
+    if not manager or not hasattr(manager, "edit_telegram_message"):
+        return False
+    try:
+        return bool(manager.edit_telegram_message(
+            text, message_id=message_id, chat_id=chat_id,
+            reply_markup={"inline_keyboard": []} if reply_markup is None else reply_markup,
+        ))
+    except Exception:
+        logger.warning("outcome_flow: Telegram card edit failed", exc_info=True)
+        return False
+
+
+
+def _send_failure_text(exc: BaseException) -> str:
+    """One short status line; never double up 'Nothing was sent'."""
+    reason = str(exc or "").strip()
+    reason = re.sub(r"^(Nothing was sent[:.]\s*)+", "", reason, flags=re.I).strip()
+    if reason.lower().startswith("couldn't send:"):
+        return reason
+    return f"Couldn't send: {reason or 'the send failed.'}"
+
+
+def _retire_other_cards(flow: dict[str, Any] | None, keep_id: Any, chat_id: Any = None) -> None:
+    """Strip buttons from older cards in this flow so only the current one stays live."""
+    keep = _as_telegram_id(keep_id)
+    cid = chat_id if chat_id is not None else (flow or {}).get("telegram_chat_id")
+    for other in (flow or {}).get("telegram_message_ids") or []:
+        oid = _as_telegram_id(other)
+        if oid and oid != keep:
+            edit_telegram(CANCELLED_REPLACED_TEXT, message_id=oid, chat_id=cid)
+
+
+def _reply_on_card(text: str, *, message_id: Any = None, chat_id: Any = None,
+                   flow: dict[str, Any] | None = None, reply_markup: dict[str, Any] | None = None,
+                   retire_others: bool = True, interaction_token: str | None = None) -> dict[str, Any]:
+    """Edit the tapped card in place. Fall back to a new message if the edit fails."""
+    markup = {"inline_keyboard": []} if reply_markup is None else reply_markup
+    mid = _as_telegram_id(message_id)
+    edited = bool(mid) and edit_telegram(text, message_id=mid, chat_id=chat_id, reply_markup=markup)
+    if retire_others:
+        _retire_other_cards(flow, mid, chat_id)
+    out: dict[str, Any] = {"text": text}
+    if reply_markup is not None:
+        out["reply_markup"] = reply_markup
+    if interaction_token:
+        out["interaction_token"] = interaction_token
+    if edited:
+        out["suppress"] = True
+        out["edit_message_id"] = mid
+    return out
+
+
+def _edit_flow_cards(key: str, flow: dict[str, Any] | None = None, text: str = SUPERSEDED_TEXT) -> None:
+    flow = flow or get_flow(key) or {}
+    chat_id = flow.get("telegram_chat_id")
+    for mid in flow.get("telegram_message_ids") or []:
+        edit_telegram(text, message_id=mid, chat_id=chat_id)
+
+
+def _supersede_flow(key: str, flow: dict[str, Any] | None = None, *, status: str = "superseded") -> dict[str, Any] | None:
+    saved = save_flow(key, status=status)
+    _edit_flow_cards(key, saved or flow or get_flow(key))
+    return saved
+
+
+def latest_awaiting_rework() -> tuple[str, dict[str, Any]] | None:
+    flows = _load_state().get("flows") or {}
+    open_flows = [(k, v) for k, v in flows.items() if v.get("status") == "awaiting_rework"]
+    if not open_flows:
+        return None
+    return max(open_flows, key=lambda kv: float(kv[1].get("updated", 0)))
+
+
+def _is_group_destination(destination: Any, envelope: dict[str, Any] | None = None) -> bool:
+    env = envelope or {}
+    resolved = env.get("resolved_target") if isinstance(env.get("resolved_target"), dict) else {}
+    dest = destination if isinstance(destination, dict) else {}
+    raw = str(dest.get("id") or dest.get("jid") or dest.get("thread_id") or resolved.get("chat_id")
+              or (destination if isinstance(destination, str) else "") or "")
+    return raw.endswith("@g.us") or bool(env.get("is_group") or resolved.get("is_group"))
+
+
+def _saved_whatsapp_contact_name(target: dict[str, Any] | None) -> str:
+    target = target or {}
+    jid = str(target.get("jid") or target.get("id") or target.get("thread_id") or "")
+    if not jid:
+        return ""
+    try:
+        from distr.core.db import get_session
+        from distr.core.incoming.source_reply import _linked_whatsapp_contact_name
+
+        with get_session() as db:
+            return _linked_whatsapp_contact_name(db, jid) or ""
+    except Exception:
+        logger.debug("outcome_flow: contact display name lookup failed", exc_info=True)
+        return ""
+
+
+def thread_contact_name(target: dict[str, Any] | None, label: str = "") -> str:
+    """Decisions contact display name for a 1:1 chat; never the raw WhatsApp label."""
+    target = target or {}
+    names = [str(n).strip() for n in (target.get("recipient_names") or []) if str(n).strip()]
+    if names:
+        return ", ".join(names)
+    saved = _saved_whatsapp_contact_name(target)
+    if saved:
+        return saved
+    if _is_group_destination(target):
+        return str(label or "").strip()
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -558,7 +726,8 @@ def _hold_in_telegram(*, level: str, ticket_id: int, shaped: str, source: str, c
     )
     if note:
         text = f"{note}\n\n{text}"
-    if flow is not None and not send_telegram(text, reply_markup=work_done_markup(key), settings=settings):
+    if flow is not None and not send_telegram(text, reply_markup=work_done_markup(key), settings=settings,
+                                               interaction_token=f"{OC_CARD_PREFIX}{key}"):
         save_flow(key, expected_status="awaiting_decision", status="notification_failed")
         return None
     saved = get_flow(key) or {}
@@ -687,9 +856,9 @@ def recipient_label(client: str, source: str, destination: Any, envelope: dict[s
         env.get("conversation_label"), env.get("chat_name"), env.get("group_name"),
         resolved.get("chat_name"), resolved.get("name"), dest.get("chat_name"), dest.get("name"),
     ) if v and str(v).strip() and str(v).strip() != "(No subject)"), "")
-    raw = str(dest.get("id") or dest.get("jid") or resolved.get("chat_id") or (destination if isinstance(destination, str) else "") or "")
-    group = raw.endswith("@g.us") or bool(env.get("is_group") or resolved.get("is_group"))
-    who = name or str(client or "the client")
+    group = _is_group_destination(destination, env)
+    # 1:1 chats use the Decisions contact display name, not the raw WhatsApp chat label.
+    who = (name or str(client or "the client")) if group else (str(client or "").strip() or "the client")
     kind = "group" if group else "chat"
     return f"{who} ({source_label(source)} {kind})"
 
@@ -722,8 +891,32 @@ def _answering_text(ticket_id: int, envelope: dict[str, Any] | None = None) -> s
         return ""
 
 
+def confirm_send_markup(key: str) -> dict[str, Any]:
+    return _kb([("Yes, send it", f"oc:{key}:confirm"), ("Rework", f"oc:{key}:rework")],
+               [("Not yet", f"oc:{key}:cancel")])
+
+
 def thread_reply_markup(key: str) -> dict[str, Any]:
-    return _kb([("Send message to client", f"oc:{key}:send")], [("Not yet", f"oc:{key}:cancel")])
+    return _kb([("Send message to client", f"oc:{key}:send"), ("Rework", f"oc:{key}:rework")],
+               [("Not yet", f"oc:{key}:cancel")])
+
+
+
+def _supersede_open_thread_replies(chat_id: int, keep_key: str | None = None) -> None:
+    """Retire earlier confirm cards for this thread so only the new one stays live."""
+    for key, flow in list((_load_state().get("flows") or {}).items()):
+        if key == keep_key or not isinstance(flow, dict):
+            continue
+        if flow.get("kind") != "thread_reply":
+            continue
+        try:
+            if int(flow.get("chat_id") or 0) != int(chat_id):
+                continue
+        except (TypeError, ValueError):
+            continue
+        if flow.get("status") in _TERMINAL_FLOW:
+            continue
+        _supersede_flow(key, flow)
 
 
 def hold_thread_reply(chat_id: int, draft: dict[str, Any], *, answering: str = "", label: str = "",
@@ -734,69 +927,98 @@ def hold_thread_reply(chat_id: int, draft: dict[str, Any], *, answering: str = "
     and the exact text. Nothing is sent until "Yes, send it". Returns the key.
     """
     target = draft.get("target") if isinstance(draft.get("target"), dict) else {}
-    names = [str(n) for n in (target.get("recipient_names") or []) if str(n).strip()]
-    client = ", ".join(names) or label or "the client"
+    client = thread_contact_name(target, label) or "the client"
     source = str(target.get("channel") or "")
     body = str(draft.get("text") or "")
     if not draft.get("id") or not body.strip():
         return None
     key = _flow_key("thread_reply", chat_id, draft["id"])
+    _supersede_open_thread_replies(int(chat_id), keep_key=key)
+    group = _is_group_destination(target)
     flow = save_flow(key, expected_status="", kind="thread_reply", level="operate", ticket_id=0, body=body,
                      source=source, client=client, destination=target, chat_id=int(chat_id),
-                     draft_id=str(draft["id"]), status="awaiting_decision")
+                     draft_id=str(draft["id"]), answering=answering,
+                     source_key=draft.get("source_key"), response_id=draft.get("response_id"),
+                     status="awaiting_decision")
     if flow is None:
         return key  # a card for this exact draft already exists
     text = work_done_text(
         client, source, body,
-        recipient=recipient_label(client, source, target, {"chat_name": label}),
+        recipient=recipient_label(client, source, target, {"chat_name": label} if group else {}),
         answering=answering,
     ).replace(" Continue if there's more to do, or Check it first.", "")
-    if not send_telegram(text, reply_markup=thread_reply_markup(key), settings=settings):
+    if not send_telegram(text, reply_markup=thread_reply_markup(key), settings=settings,
+                         interaction_token=f"{OC_CARD_PREFIX}{key}"):
         save_flow(key, expected_status="awaiting_decision", status="notification_failed")
         return None
     return key
 
 
-def _handle_thread_reply_action(key: str, flow: dict[str, Any], action: str, status: str) -> dict[str, Any]:
+def _handle_thread_reply_action(key: str, flow: dict[str, Any], action: str, status: str,
+                                *, telegram_message_id: Any = None,
+                                telegram_chat_id: Any = None) -> dict[str, Any]:
     client = flow.get("client") or "the client"
     src = source_label(flow.get("source"))
     body = str(flow.get("body") or "")
+    card_chat = telegram_chat_id or flow.get("telegram_chat_id")
+    live = {"awaiting_decision", "confirming"}
+
+    def card_reply(text: str, *, reply_markup: dict[str, Any] | None = None,
+                   retire_others: bool = True) -> dict[str, Any]:
+        token = f"{OC_CARD_PREFIX}{key}" if reply_markup else None
+        return _reply_on_card(
+            text, message_id=telegram_message_id, chat_id=card_chat, flow=get_flow(key) or flow,
+            reply_markup=reply_markup, retire_others=retire_others, interaction_token=token,
+        )
+
     if action == "send":
         if not save_flow(key, expected_status=status, status="confirming"):
-            return _handle_flow_action(key, "send")
-        return {"text": (f"Here's the message I'd send:\n\nTo: {client}\nVia: {src}\n\n\u201c{body}\u201d\n\n"
-                         f"If you send it, {client} gets exactly this on {src} straight away. Shall I send it?"),
-                "reply_markup": _kb([("Yes, send it", f"oc:{key}:confirm"), ("Not yet", f"oc:{key}:cancel")])}
+            return _handle_flow_action(key, "send", telegram_message_id=telegram_message_id,
+                                       telegram_chat_id=telegram_chat_id)
+        return card_reply(
+            (f"Here's the message I'd send:\n\nTo: {client}\nVia: {src}\n\n\u201c{body}\u201d\n\n"
+             f"If you send it, {client} gets exactly this on {src} straight away. Shall I send it?"),
+            reply_markup=confirm_send_markup(key),
+        )
+    if action == "rework":
+        return _begin_rework(key, flow, status)
     if action == "cancel":
-        save_flow(key, expected_status=status, status="awaiting_decision")
-        return {"text": "Holding it. Nothing has been sent.", "reply_markup": thread_reply_markup(key)}
+        try:
+            from distr.core.incoming.source_reply import act_on_draft
+            act_on_draft(int(flow["chat_id"]), str(flow["draft_id"]), "cancel")
+        except Exception:
+            logger.warning("Thread reply cancel from Telegram could not close the draft", exc_info=True)
+        _supersede_flow(key, flow, status="cancelled")
+        return card_reply(CANCELLED_REPLACED_TEXT, retire_others=True)
     if action == "confirm":
-        if status != "confirming":
-            return {"text": "Let's look at the message first. Tap Send message to client to see it."}
-        if not save_flow(key, expected_status="confirming", status="sending"):
-            return _handle_flow_action(key, "confirm")
+        # A Yes tap on a live card sends. Don't bounce the owner back to "look first".
+        if status not in live and status != "sending":
+            return card_reply(CANCELLED_REPLACED_TEXT)
+        if status != "sending" and not save_flow(key, expected_status=status, status="sending"):
+            return _handle_flow_action(key, "confirm", telegram_message_id=telegram_message_id,
+                                       telegram_chat_id=telegram_chat_id)
         from distr.core.incoming.source_reply import act_on_draft
 
         try:
             # Exactly the text shown on the card, through the thread's own approval claim.
             result = act_on_draft(int(flow["chat_id"]), str(flow["draft_id"]), "approve", text=body)
         except Exception as exc:
-            save_flow(key, expected_status="sending", status="awaiting_decision")
+            save_flow(key, expected_status="sending", status="confirming")
             logger.warning("Thread reply send from Telegram failed", exc_info=True)
-            return {"text": f"Nothing was sent: {str(exc)[:200]}", "reply_markup": thread_reply_markup(key)}
+            return card_reply(_send_failure_text(exc), reply_markup=confirm_send_markup(key))
         sent = str(result.get("status") or "") == "sent" or result.get("already_sent")
         save_flow(key, expected_status="sending", status="sent" if sent else "unconfirmed")
         audit("thread_client_reply_confirmed", chat_id=flow.get("chat_id"), source=flow.get("source"),
               client=client, body=body, delivered=bool(sent), status="sent" if sent else "unconfirmed")
         if sent:
-            return {"text": f"Sent. {client} has it on {src}."}
-        return {"text": "Waiting for the send to confirm. Check the conversation before sending again."}
-    return {"text": "Use Send message to client or Not yet on this one."}
+            return card_reply(f"Sent to {client} on {src}.")
+        return card_reply("Couldn't send: waiting for WhatsApp to confirm. Check the conversation before trying again.")
+    return card_reply("Use Send message to client, Rework, or Not yet on this one.")
 
 
 def work_done_markup(key: str) -> dict[str, Any]:
     return _kb([("Continue", f"oc:{key}:continue"), ("Check it", f"oc:{key}:check")],
-               [("Send message to client", f"oc:{key}:send")])
+               [("Send message to client", f"oc:{key}:send"), ("Rework", f"oc:{key}:rework")])
 
 
 def _thread_steer(chat_id: Any, instruction: str) -> bool:
@@ -1947,7 +2169,8 @@ _CALLBACK_RE = re.compile(r"^(oc|ip):([A-Za-z0-9]+):([a-z_]+)$")
 _ASK_CALLBACK_RE = re.compile(r"^ac:([0-9a-f]{12}):(in_app|telegram|spoken)$")
 
 
-def handle_telegram_text(text: str, *, chat_id: Any = None) -> dict[str, Any] | None:
+def handle_telegram_text(text: str, *, chat_id: Any = None,
+                         telegram_message_id: Any = None) -> dict[str, Any] | None:
     """Route Telegram text/callbacks for outcome flows. None = not ours."""
     raw = str(text or "").strip()
     if not raw:
@@ -1973,7 +2196,10 @@ def handle_telegram_text(text: str, *, chat_id: Any = None) -> dict[str, Any] | 
         kind, key, action = callback.groups()
         if kind == "ip":
             return decide_proposal(key, action, chat_id=chat_id)
-        return _handle_flow_action(key, action)
+        return _handle_flow_action(key, action, telegram_message_id=telegram_message_id, telegram_chat_id=chat_id)
+    pending = latest_awaiting_rework()
+    if pending and chat_id is not None:
+        return apply_rework_instruction(pending[0], pending[1], raw)
     # Only button presses: plain "yes"/"no" stay with their existing handlers.
     if raw.lower().startswith("wi:"):
         settings = load_settings()
@@ -2038,13 +2264,104 @@ def _names_other_work(text: str, flow: dict[str, Any]) -> bool:
         return True
 
 
-def _handle_flow_action(key: str, action: str) -> dict[str, Any]:
+def _begin_rework(key: str, flow: dict[str, Any], status: str) -> dict[str, Any]:
+    if status in _TERMINAL_FLOW:
+        if status == "sent":
+            return {"text": f"That message already went out to {flow.get('client') or 'the client'}."}
+        if status in {"sending", "unconfirmed"}:
+            return {"text": "The send was not confirmed. Check the original conversation before sending another reply."}
+        return {"text": CANCELLED_REPLACED_TEXT}
+    if status == "awaiting_rework":
+        return {"text": REWORK_PROMPT, "reply_markup": FORCE_REPLY}
+    if not save_flow(key, expected_status=status, status="awaiting_rework"):
+        return _handle_flow_action(key, "rework")
+    _edit_flow_cards(key, get_flow(key) or flow)
+    return {"text": REWORK_PROMPT, "reply_markup": FORCE_REPLY, "interaction_token": f"{OC_CARD_PREFIX}{key}"}
+
+
+def apply_rework_instruction(key: str, flow: dict[str, Any], instruction: str) -> dict[str, Any]:
+    """Redraft the held client reply and send a fresh confirm card. Never sends to the client."""
+    if flow.get("status") != "awaiting_rework":
+        return {"text": "That draft is no longer waiting for a change. Nothing was sent."}
+    from distr.core.incoming.client_reply_rework import compose_rework_text
+
+    body = str(flow.get("body") or "")
+    try:
+        new_text = compose_rework_text(body, instruction)
+    except Exception as exc:
+        logger.warning("Client reply rework failed", exc_info=True)
+        return {"text": f"I couldn't rework that just now: {str(exc)[:200]}. Tell me what to change."}
+    if flow.get("kind") == "thread_reply":
+        try:
+            from distr.core.incoming.source_reply import create_draft, _decode_reply
+            from distr.core.db import SourceReplyDraft, get_session
+
+            draft = {}
+            try:
+                with get_session() as db:
+                    row = db.get(SourceReplyDraft, str(flow["draft_id"]))
+                    draft = _decode_reply(row) if row is not None else {}
+            except Exception:
+                logger.debug("Thread reply rework could not load the stored draft", exc_info=True)
+            source_key = (draft or {}).get("source_key") or flow.get("source_key")
+            response_id = (draft or {}).get("response_id") or flow.get("response_id")
+            if not source_key or response_id is None:
+                raise ValueError("The previous draft is no longer available to rewrite.")
+            created = create_draft(
+                int(flow["chat_id"]), response_id, source_key,
+                previous=body, instruction=instruction, replaces=str(flow["draft_id"]),
+                preset_text=new_text,
+            )
+        except Exception as exc:
+            logger.warning("Thread reply rework could not create a new draft", exc_info=True)
+            return {"text": f"I couldn't rework that just now: {str(exc)[:200]}. Tell me what to change."}
+        _supersede_flow(key, flow)
+        if not created or not created.get("id"):
+            return {"text": "I couldn't open a new confirm card. Tell me what to change."}
+        return {"suppress": True}
+    held = _hold_in_telegram(
+        level=str(flow.get("level") or "operate"), ticket_id=int(flow.get("ticket_id") or 0),
+        shaped=new_text, source=str(flow.get("source") or ""), client=str(flow.get("client") or "the client"),
+        destination=flow.get("destination"), approval_context=flow.get("approval_context") or {},
+        settings=load_settings(),
+    )
+    if not held or not held.get("pending_approval"):
+        return {"text": "I couldn't open a new confirm card. Tell me what to change."}
+    _supersede_flow(key, flow)
+    return {"suppress": True}
+
+
+def _handle_flow_action(key: str, action: str, *, telegram_message_id: Any = None,
+                        telegram_chat_id: Any = None) -> dict[str, Any]:
+    if telegram_message_id:
+        record_card_message(key, telegram_message_id, telegram_chat_id)
     flow = get_flow(key)
     if not flow:
-        return {"text": "That one has already been wrapped up, so there's nothing more to do here."}
+        return _reply_on_card(
+            CANCELLED_REPLACED_TEXT,
+            message_id=telegram_message_id,
+            chat_id=telegram_chat_id,
+            flow=None,
+            retire_others=False,
+        )
     client = flow.get("client") or "the client"
     src = source_label(flow.get("source"))
     status = flow.get("status")
+    if status in {"superseded", "cancelled"}:
+        return _reply_on_card(
+            CANCELLED_REPLACED_TEXT,
+            message_id=telegram_message_id,
+            chat_id=telegram_chat_id or flow.get("telegram_chat_id"),
+            flow=flow,
+        )
+    if status == "awaiting_rework" and action not in {"rework"}:
+        if action in {"confirm", "send"}:
+            return _reply_on_card(
+                "Couldn't send: waiting for what to change.",
+                message_id=telegram_message_id,
+                chat_id=telegram_chat_id or flow.get("telegram_chat_id"),
+                flow=flow,
+            )
     if status in {"sending", "unconfirmed"} and flow.get("delivery_key"):
         from distr.core.db import get_session
         from distr.core.db.workflow import AutoWorkflowRun
@@ -2060,11 +2377,16 @@ def _handle_flow_action(key: str, action: str) -> dict[str, Any]:
         if status == "not_sent":
             return {"text": "Nothing was sent. Open the workflow and review the current recipient before sending."}
     if status == "sent":
-        return {"text": f"That message already went out to {client}."}
+        return _reply_on_card(
+            f"Sent to {client} on {src}.",
+            message_id=telegram_message_id,
+            chat_id=telegram_chat_id or flow.get("telegram_chat_id"),
+            flow=flow,
+        )
     if status in {"sending", "unconfirmed"}:
         return {"text": f"The send to {client} on {src} was not confirmed. Check the original conversation before sending another reply."}
     if flow.get("kind") == "thread_reply":
-        return _handle_thread_reply_action(key, flow, action, status)
+        return _handle_thread_reply_action(key, flow, action, status, telegram_message_id=telegram_message_id, telegram_chat_id=telegram_chat_id)
     if action == "continue":
         try:
             _thread_steer(flow.get("chat_id"), "Please continue with any remaining work on this ticket.")
@@ -2084,7 +2406,10 @@ def _handle_flow_action(key: str, action: str) -> dict[str, Any]:
             f"\u201c{client_body(flow.get('body'))}\u201d\n\nIf you send it, {client} gets exactly this on {src} straight away. "
             "Shall I send it?"
         )
-        return {"text": text, "reply_markup": _kb([("Yes, send it", f"oc:{key}:confirm"), ("Not yet", f"oc:{key}:cancel")])}
+        return {"text": text, "reply_markup": confirm_send_markup(key),
+                "interaction_token": f"{OC_CARD_PREFIX}{key}"}
+    if action == "rework":
+        return _begin_rework(key, flow, status)
     if action == "cancel":
         if not save_flow(key, expected_status=status, status="awaiting_decision"):
             return _handle_flow_action(key, "cancel")

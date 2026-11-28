@@ -45,6 +45,13 @@ from distr.core.integrations.telegram.receipt_writes import (
 from distr.core.integrations.telegram.sender import TelegramSenderMixin
 from distr.core.integrations.telegram.remote_control import TelegramRemoteControlMixin
 from distr.core.integrations.base import IntegrationReconnectMixin
+from distr.core.integrations.relay_auth import (
+    WS_TOKEN_RETRY_DELAYS_S,
+    relay_jwt_exp_iat,
+    relay_token_refresh_delay_ms,
+    should_retry_ws_token_status,
+    ws_token_retry_sleep,
+)
 from distr.core.log_retention import rotate_oversize_file
 from distr.core.workflow.interactions import TELEGRAM_CHECKPOINT_RECEIPT_PREFIX
 
@@ -312,6 +319,9 @@ class TelegramWebSocketManager(
         self._immediate_close_count: int = 0
         self._ws_token_request_id: int = 0
         self._ws_token_fetch_in_progress: bool = False
+        self._planned_token_refresh: bool = False
+        self._pending_refresh_token: Optional[str] = None
+        self._relay_token_exp: Optional[float] = None
 
         # Rate Limiting & Dedup
         self._last_send_time = 0
@@ -331,8 +341,8 @@ class TelegramWebSocketManager(
         self._health_check_timer = QTimer()
         self._health_check_timer.timeout.connect(self._check_health)
         self._health_check_timer.start(3 * 60 * 1000)  # Every 3 minutes
-        # The relay JWT lasts 5 minutes (JWT_EXPIRY_SECONDS). Reconnect 60s early
-        # so the server does not drop the socket out from under a live remote session.
+        # The relay JWT lifetime comes from the token's exp claim. Reconnect 60s
+        # early so the server does not drop the socket under a live remote session.
         self._relay_token_refresh_timer = QTimer()
         self._relay_token_refresh_timer.setSingleShot(True)
         self._relay_token_refresh_timer.timeout.connect(self._refresh_relay_ws_token)
@@ -660,7 +670,11 @@ class TelegramWebSocketManager(
             logger.debug("[Telegram] Ignoring stale relay token response id=%s", request_id)
             return
         self._ws_token_fetch_in_progress = False
-        self._open_websocket_with_token(str(ws_token or ""))
+        token = str(ws_token or "")
+        if getattr(self, "_planned_token_refresh", False):
+            self._finish_planned_token_refresh(token)
+            return
+        self._open_websocket_with_token(token)
 
     def _open_websocket_with_token(self, ws_token: Optional[str]) -> None:
         """Open QWebSocket after the blocking token request has completed."""
@@ -673,6 +687,7 @@ class TelegramWebSocketManager(
             if not self._active_disconnect:
                 self._schedule_reconnect("Telegram")
             return
+        self._remember_relay_token_expiry(ws_token)
         url_str = self.server_url
         params = []
         params.append(f"token={quote(ws_token, safe='')}")
@@ -704,28 +719,45 @@ class TelegramWebSocketManager(
         if self.telegram_user_id:
             payload["telegram_user_id"] = self.telegram_user_id
         try:
-            response = requests.post(api_url, headers=headers, json=payload, timeout=10)
-            if response.status_code != 200:
-                reason = (
-                    f"Telegram relay rejected connection (HTTP {response.status_code})"
+            delays = (0,) + tuple(WS_TOKEN_RETRY_DELAYS_S)
+            last_response = None
+            for attempt, delay in enumerate(delays, start=1):
+                if delay:
+                    ws_token_retry_sleep(delay)
+                response = requests.post(
+                    api_url, headers=headers, json=payload, timeout=10
                 )
-                self._connect_failure_reason = reason
+                last_response = response
+                if response.status_code == 200:
+                    token = (response.json().get("token") or "").strip()
+                    if not token:
+                        self._connect_failure_reason = (
+                            "Telegram relay did not return a connection token"
+                        )
+                        return None
+                    return token
+                if not should_retry_ws_token_status(response.status_code):
+                    break
                 logger.debug(
-                    "[Telegram] WS token request failed: HTTP %s %s",
+                    "[Telegram] WS token request HTTP %s, retry %s/%s",
                     response.status_code,
-                    response.text[:200],
+                    attempt,
+                    len(delays),
                 )
-                self._log_detailed(
-                    f"WS TOKEN HTTP {response.status_code}: {response.text[:500]}"
-                )
-                return None
-            token = (response.json().get("token") or "").strip()
-            if not token:
-                self._connect_failure_reason = (
-                    "Telegram relay did not return a connection token"
-                )
-                return None
-            return token
+            response = last_response
+            reason = (
+                f"Telegram relay rejected connection (HTTP {response.status_code})"
+            )
+            self._connect_failure_reason = reason
+            logger.debug(
+                "[Telegram] WS token request failed: HTTP %s %s",
+                response.status_code,
+                (response.text[:200] if response is not None else ""),
+            )
+            self._log_detailed(
+                f"WS TOKEN HTTP {response.status_code}: {(response.text[:500] if response is not None else '')}"
+            )
+            return None
         except Exception as e:
             endpoint = self._relay_endpoint_label()
             self._connect_failure_reason = friendly_telegram_connect_error(
@@ -764,6 +796,8 @@ class TelegramWebSocketManager(
         # reopen the socket after an intentional disconnect.
         self._ws_token_request_id += 1
         self._ws_token_fetch_in_progress = False
+        self._planned_token_refresh = False
+        self._pending_refresh_token = None
 
         logger.info("Disconnecting Telegram WebSocket...")
 
@@ -839,30 +873,81 @@ class TelegramWebSocketManager(
                 self._active_disconnect = False
                 self.socket.close()
 
+    def _remember_relay_token_expiry(self, token: str) -> None:
+        """Keep only the exp unix timestamp from the live relay JWT."""
+        exp, _iat = relay_jwt_exp_iat(token)
+        self._relay_token_exp = exp
+
     def _schedule_relay_token_refresh(self):
-        """Reconnect before the 5-minute relay JWT expires."""
+        """Reconnect 60s before the live relay JWT expires (from the exp claim)."""
         timer = getattr(self, "_relay_token_refresh_timer", None)
         if timer is None:
             return
-        timer.start(240_000)
+        delay_ms = relay_token_refresh_delay_ms(getattr(self, "_relay_token_exp", None))
+        self._log_detailed(f"RELAY TOKEN REFRESH: scheduled in {delay_ms / 1000:.0f}s")
+        timer.start(delay_ms)
 
     def _stop_relay_token_refresh(self):
         timer = getattr(self, "_relay_token_refresh_timer", None)
         if timer is not None:
             timer.stop()
 
+    def _finish_planned_token_refresh(self, token: str) -> None:
+        """Swap the live socket after a pre-expiry JWT fetch, without an outage announcement."""
+        if not token:
+            self._planned_token_refresh = False
+            self._pending_refresh_token = None
+            if self.is_connected():
+                logger.warning(
+                    "[Telegram] Planned token refresh failed; keeping the current connection"
+                )
+                self._log_detailed("RELAY TOKEN REFRESH: fetch failed, keeping current socket")
+                timer = getattr(self, "_relay_token_refresh_timer", None)
+                if timer is not None:
+                    timer.start(30_000)
+                return
+            self._open_websocket_with_token(token)
+            return
+        self._pending_refresh_token = token
+        if self.socket and self.socket.isValid():
+            self._log_detailed("RELAY TOKEN REFRESH: swapping socket")
+            self._stop_socket_heartbeat()
+            self.socket.close()
+            return
+        self._planned_token_refresh = False
+        self._pending_refresh_token = None
+        self._open_websocket_with_token(token)
+
     def _refresh_relay_ws_token(self):
-        """Close and reconnect so we pick up a fresh JWT before the server kicks us."""
+        """Fetch a fresh JWT first, then swap the socket without announcing an outage."""
         if getattr(self, "_active_disconnect", False) or not self.is_connected():
             return
+        if getattr(self, "_ws_token_fetch_in_progress", False):
+            return
         logger.info("[Telegram] Refreshing relay WebSocket before token expiry")
-        self._log_detailed("RELAY TOKEN REFRESH: reconnecting before JWT expiry")
+        self._log_detailed("RELAY TOKEN REFRESH: fetching new JWT")
         self._is_auto_reconnecting = True
+        self._planned_token_refresh = True
+        self._pending_refresh_token = None
         self._stop_relay_token_refresh()
-        self._stop_socket_heartbeat()
-        # Leave _active_disconnect False so the existing close path auto-reconnects.
-        if self.socket:
-            self.socket.close()
+        self._ws_token_request_id += 1
+        request_id = self._ws_token_request_id
+        self._ws_token_fetch_in_progress = True
+
+        def fetch_token() -> None:
+            token = self._fetch_ws_token()
+            try:
+                self._ws_token_ready_signal.emit(request_id, token)
+            except RuntimeError:
+                logger.debug(
+                    "[Telegram] Manager deleted before relay token refresh completed"
+                )
+
+        threading.Thread(
+            target=fetch_token,
+            daemon=True,
+            name="TelegramRelayTokenRefresh",
+        ).start()
 
     # =========================================================================
     # WebSocket Slots
@@ -1008,6 +1093,14 @@ class TelegramWebSocketManager(
         self._release_sleep()
         self._stop_socket_heartbeat()
 
+        if getattr(self, "_planned_token_refresh", False):
+            token = getattr(self, "_pending_refresh_token", None) or ""
+            self._planned_token_refresh = False
+            self._pending_refresh_token = None
+            self._log_detailed("RELAY TOKEN REFRESH: reopening with fresh JWT")
+            self._open_websocket_with_token(token)
+            return
+
         if not self._active_disconnect:
             lived_for = (
                 time.time() - self._connected_at if self._connected_at > 0 else None
@@ -1039,6 +1132,11 @@ class TelegramWebSocketManager(
     def _on_error(self, error_code):
         """Handle socket errors."""
         err_str = self.socket.errorString()
+        if getattr(self, "_planned_token_refresh", False):
+            self._log_detailed(
+                f"SOCKET ERROR (planned refresh): {err_str} (code={error_code})"
+            )
+            return
         endpoint = self._relay_endpoint_label()
         friendly = friendly_telegram_socket_error(err_str, endpoint=endpoint)
         lived_for = time.time() - self._connected_at if self._connected_at > 0 else None
@@ -1226,7 +1324,14 @@ class TelegramWebSocketManager(
                     f"[Telegram WebSocket] 📥 Server confirmed message sent: {data}"
                 )
                 client_message_id = str(data.get("client_message_id") or "").strip()
-                if client_message_id:
+                if client_message_id.startswith("oc-card:"):
+                    try:
+                        from distr.core.initiative.outcome_flow import record_card_message
+                        record_card_message(client_message_id[8:], data.get("telegram_message_id"),
+                                            data.get("chat_id"))
+                    except Exception:
+                        logger.warning("Could not record confirm-card Telegram message id", exc_info=True)
+                elif client_message_id:
                     if client_message_id.startswith(closing.PREFIX) and data.get('closing_reply_verified') is True:
                         closing.accept_receipt(client_message_id, telegram_chat_id=data.get('chat_id'),
                                                telegram_message_id=data.get('telegram_message_id'),

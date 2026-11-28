@@ -308,7 +308,7 @@ def test_source_reply_prompt_carries_the_voice_rules_and_revises_claims(monkeypa
     system = prompts[0][0]["content"]
     assert "never we" in system.lower() and "hope you're well" in system
     assert len(prompts) == 2  # one revision for the unverified "reproduced" claim
-    assert text.startswith("Hi Sibo, I've added")
+    assert text.startswith("Sibo, I've added")
 
 
 # --- setup self-check ------------------------------------------------------------------
@@ -493,7 +493,7 @@ def test_thread_reply_card_shows_full_context_and_sends_only_on_confirm(monkeypa
 
     monkeypatch.setattr(of, "_state_path", lambda: tmp_path / "flows.json")
     cards = []
-    monkeypatch.setattr(of, "send_telegram", lambda text, reply_markup=None, settings=None: cards.append((text, reply_markup)) or True)
+    monkeypatch.setattr(of, "send_telegram", lambda text, reply_markup=None, settings=None, **k: cards.append((text, reply_markup)) or True)
     sent = []
     monkeypatch.setattr(source_reply, "act_on_draft",
                         lambda chat_id, draft_id, action, text="", sender=None: sent.append((chat_id, draft_id, text)) or {"status": "sent"})
@@ -503,15 +503,18 @@ def test_thread_reply_card_shows_full_context_and_sends_only_on_confirm(monkeypa
     key = of.hold_thread_reply(42, draft, answering="Why is the total wrong?", label="Merrypak team")
     assert key and len(cards) == 1
     text, markup = cards[0]
-    assert "Ready to send to Merrypak team (WhatsApp chat)" in text and body in text and "Why is the total wrong?" in text
+    # Contact display name beats the raw WhatsApp chat label.
+    assert "Ready to send to Anna (WhatsApp chat)" in text and body in text and "Why is the total wrong?" in text
+    labels = [b["text"] for row in markup["inline_keyboard"] for b in row]
+    assert labels == ["Send message to client", "Rework", "Not yet"]
     assert not sent
-    assert "Shall I send it?" in of._handle_flow_action(key, "send")["text"]
+    overview = of._handle_flow_action(key, "send")
+    assert "Shall I send it?" in overview["text"]
+    assert [b["text"] for row in overview["reply_markup"]["inline_keyboard"] for b in row] == ["Yes, send it", "Rework", "Not yet"]
     assert not sent
-    assert "Holding it" in of._handle_flow_action(key, "cancel")["text"]
-    of._handle_flow_action(key, "send")
     out = of._handle_flow_action(key, "confirm")
-    assert sent == [(42, "d1", body)] and out["text"].startswith("Sent.")
-    assert "already went out" in of._handle_flow_action(key, "confirm")["text"]
+    assert sent == [(42, "d1", body)] and out["text"] == "Sent to Anna on WhatsApp."
+    assert of._handle_flow_action(key, "confirm")["text"] == "Sent to Anna on WhatsApp."
     assert of.hold_thread_reply(42, draft) == key and len(cards) == 1  # no second card
 
 

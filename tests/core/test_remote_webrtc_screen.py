@@ -307,7 +307,7 @@ class _FakeQuartz(types.ModuleType):
         names = ("kCGMouseButtonLeft", "kCGMouseButtonRight", "kCGMouseButtonCenter", "kCGEventLeftMouseDown",
                  "kCGEventLeftMouseUp", "kCGEventLeftMouseDragged", "kCGEventRightMouseDown", "kCGEventRightMouseUp",
                  "kCGEventRightMouseDragged", "kCGEventOtherMouseDown", "kCGEventOtherMouseUp",
-                 "kCGEventOtherMouseDragged", "kCGHIDEventTap", "kCGMouseEventClickState", "kCGScrollEventUnitPixel")
+                 "kCGEventOtherMouseDragged", "kCGEventMouseMoved", "kCGHIDEventTap", "kCGMouseEventClickState", "kCGScrollEventUnitPixel")
         for name in names:
             setattr(self, name, name)
         self.location = types.SimpleNamespace(x=100.0, y=200.0)
@@ -430,6 +430,47 @@ def test_grabber_combined_uses_union_size(monkeypatch):
     assert grabber.size == webrtc_screen.target_size(160, 80, pixel_scale=1.0)
 
 
+
+
+def test_parse_viewport_accepts_desktop_rect_only():
+    assert webrtc_screen.parse_viewport('{"command": "viewport", "x": -10, "y": 2, "width": 100.4, "height": 80}') == {
+        "x": -10, "y": 2, "width": 100, "height": 80,
+    }
+    assert webrtc_screen.parse_viewport('{"command": "mouse_move", "x": 1, "y": 2}') is None
+    assert webrtc_screen.parse_viewport('{"command": "viewport", "x": 0, "y": 0, "width": 0, "height": 10}') is None
+    assert webrtc_screen.parse_viewport("not json") is None
+
+
+def test_intersect_rect_clips_to_union():
+    union = {"x": -1920, "y": -80, "width": 5352, "height": 1110}
+    view = webrtc_screen.intersect_rect(union, {"x": 0, "y": 0, "width": 1512, "height": 982})
+    assert view == {"x": 0, "y": 0, "width": 1512, "height": 982}
+    assert webrtc_screen.intersect_rect(union, {"x": 9000, "y": 0, "width": 10, "height": 10}) is None
+
+
+def test_grabber_viewport_matches_single_screen_size(monkeypatch):
+    """A crop the size of screen 1 is encoded at the same size as that display alone."""
+    displays = [
+        {"x": 0, "y": 0, "width": 1512, "height": 982},
+        {"x": -1920, "y": -50, "width": 1920, "height": 1080},
+        {"x": 1512, "y": -80, "width": 1920, "height": 1080},
+    ]
+    monkeypatch.setattr(webrtc_screen.ScreenGrabber, "_pixel_scale", lambda self: 2.0)
+    monkeypatch.setattr(webrtc_screen.ScreenGrabber, "_pixel_scale_for", lambda self, geo: 2.0)
+    stitched = webrtc_screen.ScreenGrabber({"x": 0, "y": 0, "width": 1, "height": 1}, displays=displays)
+    solo = webrtc_screen.ScreenGrabber(displays[0])
+    # Overview is still capped (the whole union does not get a 8K-wide stream).
+    assert stitched.size == webrtc_screen.target_size(5352, 1110, pixel_scale=2.0)
+    assert stitched.size[0] == 2560
+    stitched.set_view({"x": 0, "y": 0, "width": 1512, "height": 982})
+    assert stitched.size == solo.size == webrtc_screen.target_size(1512, 982, pixel_scale=2.0)
+    assert stitched.size == (2462, 1600)
+    # Source pixels per desktop point match the single-screen stream.
+    assert abs(stitched.size[0] / 1512 - solo.size[0] / 1512) < 1e-9
+    stitched.set_view(None)
+    assert stitched.size[0] == 2560
+
+
 def test_offer_all_screens_uses_union_geometry_and_displays():
     server = Mock()
     server.answer.return_value = {"sdp": "answer-sdp", "type": "answer", "width": 2560, "height": 600}
@@ -489,3 +530,107 @@ def test_capture_all_screens_composites_mocked_images():
     assert result["format"] == "webp"
     assert result["image_data"][:4] == b"RIFF"
 
+
+
+def test_benign_ice_close_is_ignored_by_loop_handler():
+    class InvalidStateError(Exception):
+        pass
+
+    benign = InvalidStateError("RTCIceTransport is closed")
+    assert webrtc_screen.is_benign_ice_close(benign) is True
+    assert webrtc_screen.is_benign_ice_close(RuntimeError("RTCIceTransport is closed")) is False
+    assert webrtc_screen.is_benign_ice_close(None) is False
+
+    seen = []
+
+    class _Loop:
+        def default_exception_handler(self, context):
+            seen.append(context)
+
+    loop = _Loop()
+    webrtc_screen.webrtc_loop_exception_handler(loop, {"exception": benign})
+    assert seen == []
+    other = {"exception": RuntimeError("TURN TransactionFail")}
+    webrtc_screen.webrtc_loop_exception_handler(loop, other)
+    assert seen == [other]
+
+
+def test_parse_cursor_overlay_reads_enabled_flag():
+    assert webrtc_screen.parse_cursor_overlay('{"command": "cursor_overlay", "enabled": true}') is True
+    assert webrtc_screen.parse_cursor_overlay('{"command": "cursor_overlay", "enabled": false}') is False
+    assert webrtc_screen.parse_cursor_overlay('{"command": "viewport", "x": 0, "y": 0, "width": 10, "height": 10}') is None
+
+
+def test_set_view_noop_when_unchanged(monkeypatch):
+    monkeypatch.setattr(webrtc_screen.ScreenGrabber, "_pixel_scale", lambda self: 2.0)
+    grabber = webrtc_screen.ScreenGrabber({"x": 0, "y": 0, "width": 1512, "height": 982})
+    first = grabber.size
+    grabber.set_view(None)
+    assert grabber.size == first
+    grabber.set_view({"x": 0, "y": 0, "width": 800, "height": 600})
+    cropped = grabber.size
+    assert cropped != first
+    grabber.size = (2, 2)  # would stick if set_view wrongly no-ops on the same rect after a size change
+    grabber.set_view({"x": 0, "y": 0, "width": 800, "height": 600})
+    assert grabber.size == cropped
+
+
+def test_overview_composite_uses_output_size(monkeypatch):
+    """The unzoomed stitch is composited at the encoded size, not a full-Retina union."""
+    import numpy as np
+
+    displays = [
+        {"x": 0, "y": 0, "width": 1512, "height": 982},
+        {"x": -1920, "y": -50, "width": 1920, "height": 1080},
+        {"x": 1512, "y": -80, "width": 1920, "height": 1080},
+    ]
+    monkeypatch.setattr(webrtc_screen.ScreenGrabber, "_pixel_scale", lambda self: 2.0)
+    monkeypatch.setattr(webrtc_screen.ScreenGrabber, "_pixel_scale_for", lambda self, geo: 2.0)
+
+    def grab_one(self, geometry):
+        # Pretend each display is captured at Retina, like CGDisplayCreateImage.
+        w, h = geometry["width"] * 2, geometry["height"] * 2
+        return np.zeros((h, w, 4), np.uint8), "bgra"
+
+    monkeypatch.setattr(webrtc_screen.ScreenGrabber, "_grab_one", grab_one)
+    grabber = webrtc_screen.ScreenGrabber({"x": 0, "y": 0, "width": 1, "height": 1}, displays=displays)
+    raw, fmt = grabber._grab_raw()
+    assert fmt == "bgra"
+    assert raw.shape[1] == 2560
+    assert abs(raw.shape[0] - grabber.size[1]) <= 2
+    # A full-Retina union would be 10704 x 2220; that path is what made the overview hitch.
+    assert raw.shape[1] * raw.shape[0] < (10704 * 2220) // 4
+
+
+def test_draw_pointer_skipped_when_local_cursor(monkeypatch):
+    import numpy as np
+
+    monkeypatch.setattr(webrtc_screen.ScreenGrabber, "_pixel_scale", lambda self: 1.0)
+    grabber = webrtc_screen.ScreenGrabber({"x": 0, "y": 0, "width": 100, "height": 80})
+    monkeypatch.setattr(grabber, "_pointer", lambda: (10, 10))
+    frame = np.zeros((80, 100, 4), np.uint8)
+    grabber.draw_pointer(frame, "bgra")
+    assert frame[10, 10, :3].sum() > 0  # burned-in fallback
+    frame[:] = 0
+    grabber.set_local_cursor(True)
+    grabber.draw_pointer(frame, "bgra")
+    assert frame.sum() == 0
+
+
+def test_instant_move_posts_quartz_mouse_moved(monkeypatch):
+    quartz = _FakeQuartz()
+    monkeypatch.setitem(sys.modules, "Quartz", quartz)
+    monkeypatch.setattr(remote_control, "pyautogui", Mock())
+    monkeypatch.setattr(remote_control.platform, "system", lambda: "Darwin")
+    host = _Host()
+    host._get_screens_list = lambda: [
+        {"screen_number": 1, "geometry": {"x": 0, "y": 0, "width": 1512, "height": 982}},
+        {"screen_number": 2, "geometry": {"x": -1920, "y": -50, "width": 1920, "height": 1080}},
+    ]
+    host._move_mouse_to(100, 200, 1, instant=True)
+    host._move_mouse_to(-100, 10, 2, instant=True)
+    assert [e["kind"] for e in quartz.posted] == ["kCGEventMouseMoved", "kCGEventMouseMoved"]
+    assert quartz.posted[0]["point"] == (100, 200)
+    assert quartz.posted[1]["point"] == (-100, 10)
+    # Instant Quartz path must not also call pyautogui (the hitch at display seams).
+    remote_control.pyautogui.moveTo.assert_not_called()

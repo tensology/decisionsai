@@ -247,6 +247,18 @@ def _mailshot_original(client, message_id):
     return message, thread
 
 
+def _linked_whatsapp_contact_name(db, jid):
+    """Contact name saved on a board link for a private WhatsApp chat (groups keep sender names)."""
+    from distr.core.db import WhatsAppPhoneLink
+    if not str(jid or '').endswith(('@lid', '@s.whatsapp.net')):
+        return ''
+    for link in db.query(WhatsAppPhoneLink).filter(WhatsAppPhoneLink.phone_jid == jid).order_by(WhatsAppPhoneLink.id).all():
+        name = str(link.contact_name or '').strip()
+        if name:
+            return name
+    return ''
+
+
 def resolve_target(source):
     """Read authoritative provider identities. No cross-conversation fallback."""
     channel, thread = source['channel'], source['thread_id']
@@ -259,9 +271,15 @@ def resolve_target(source):
                 WhatsAppMessage.message_id.in_(ids)).order_by(WhatsAppMessage.id.desc()).all()
             if not any(not row.from_me for row in rows):
                 raise ValueError('The original WhatsApp conversation is unavailable.')
-            return {'channel': channel, 'jid': thread, 'label': source['label'],
-                    'recipient_names': list(dict.fromkeys(row.sender_push_name.strip() for row in reversed(rows)
-                        if not row.from_me and row.sender_push_name and row.sender_push_name.strip())),
+            names = list(dict.fromkeys(row.sender_push_name.strip() for row in reversed(rows)
+                         if not row.from_me and row.sender_push_name and row.sender_push_name.strip()))
+            label = source['label']
+            saved = _linked_whatsapp_contact_name(db, thread)
+            if saved:
+                # The name Paul saved for this contact beats the sender's own WhatsApp profile name.
+                names, label = [saved], saved
+            return {'channel': channel, 'jid': thread, 'label': label,
+                    'recipient_names': names,
                     'source_message_ids': context_ids if source.get('scoped_ids') else [row.message_id for row in rows]}
     if channel == 'telegram':
         # Only the Telegram group the request came from; never the owner's private chat or another chat.
@@ -341,12 +359,12 @@ def generate_draft(proposal, source, response, *, previous='', instruction='', c
         {'role': 'system', 'content': f'Write a reply from {owner} to the selected original source. '
          'Use the Humanizer skill in embedded mode: draft, audit and revise internally; return only the final message. '
          'Address a nontechnical client. Write as one developer: I, me, my, never we/us/our for development work. '
-         'Start with a friendly greeting: Hi, Good morning, Good afternoon or Good evening, followed by the relevant people\'s names and a comma. '
-         'Use Hi when the recipients\' local time is unknown; never use the old source-message timestamp as the current time. '
+         'Start with the recipient\'s name and a comma (Sibo, ...). No Hi, Good morning, Good afternoon, Good evening, or other pleasantries. '
+         'Never use the old source-message timestamp as the current time. '
          'Choose names from the selected source messages and verified recipient_names, addressing the people involved in the current request. '
          f'For a group, name the relevant requesters, not everyone mentioned in older history. Do not greet {owner}, quote a group/project title as a person, '
-         'invent a name, or infer one from an email address or phone number. If no person can be identified, use Hi, without a name. '
-         'After the greeting, give a short update on their request in everyday language: what changed, what it means for them, '
+         'invent a name, or infer one from an email address or phone number. If no person can be identified, start with the update and no greeting. '
+         'After the name, give a short update on their request in everyday language: what changed, what it means for them, '
          'and any remaining step or question. Translate technical findings into the visible result for the recipient. '
          'Leave out jargon, implementation details, test counts, commands and internal tools. '
          'Be short, natural and direct. Explain the result and relevant next step without code, JSON, paths or internal logs. '
@@ -654,7 +672,17 @@ def reply_review(chat_id, response_id):
                 for key, draft in drafts.items() if key not in blocked_sources], blocked_sources
 
 
-def create_draft(chat_id, response_id, source_key, *, previous='', instruction='', replaces='', complete=None):
+def resolve_draft_text(*, preset_text=None, proposal=None, source=None, response=None,
+                       previous='', instruction='', complete=None):
+    """If exact text was supplied, skip the model and keep it (after the client-voice guard)."""
+    from distr.core.client_voice import apply_client_voice
+    supplied = None if preset_text is None else str(preset_text).strip()
+    if supplied:
+        return apply_client_voice(str(preset_text)), {'provider': 'owner', 'model': 'preset'}
+    return generate_draft(proposal, source, response, previous=previous, instruction=instruction, complete=complete)
+
+
+def create_draft(chat_id, response_id, source_key, *, previous='', instruction='', replaces='', complete=None, preset_text=None):
     from distr.core.db import Chat, get_session
     with get_session() as db:
         root = db.get(Chat, int(chat_id))
@@ -685,8 +713,12 @@ def create_draft(chat_id, response_id, source_key, *, previous='', instruction='
     if target.get('channel') == 'telegram':
         target['project_id'] = project_id  # the group must be linked to this exact project at send time
     source = {**source, 'message_ids': target.get('source_message_ids') or source['message_ids'],
-              'recipient_names': target.get('recipient_names') or []}
-    text, route = generate_draft(proposal, source, response, previous=previous, instruction=instruction, complete=complete)
+              'recipient_names': target.get('recipient_names') or [],
+              'label': target.get('label') or source.get('label')}
+    text, route = resolve_draft_text(
+        preset_text=preset_text, proposal=proposal, source=source, response=response,
+        previous=previous, instruction=instruction, complete=complete,
+    )
     draft = {'id': uuid4().hex, 'source_key': source_key, 'response_id': int(response_id), 'project_id': project_id,
              'response_revision': revision, 'scope_revision': scope_revision,
              'source_message_ids': source_message_ids, 'primary_message_ids': primary_message_ids,

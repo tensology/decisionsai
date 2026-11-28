@@ -419,14 +419,25 @@ class TelegramMessagesMixin:
                 # round-ups, and "it's not done" follow-ups. Works in every posture.
                 from distr.core.initiative.outcome_flow import handle_telegram_text as _initiative_flow_reply
 
-                flow_reply = _initiative_flow_reply(text, chat_id=chat_id if is_private_message else None)
+                flow_reply = _initiative_flow_reply(
+                    text,
+                    chat_id=chat_id if is_private_message else None,
+                    telegram_message_id=inner_data.get("telegram_message_id"),
+                )
                 if flow_reply:
                     if flow_reply.get("ack"):
                         self.send_to_telegram(flow_reply["ack"])
+                    if flow_reply.get("suppress"):
+                        return
+                    token = flow_reply.get("interaction_token")
                     if flow_reply.get("reply_markup"):
-                        self.send_to_telegram(flow_reply.get("text") or "Done.", reply_markup=flow_reply["reply_markup"])
+                        self.send_to_telegram(
+                            flow_reply.get("text") or "Done.",
+                            reply_markup=flow_reply["reply_markup"],
+                            interaction_token=token,
+                        )
                     else:
-                        self.send_to_telegram(flow_reply.get("text") or "Done.")
+                        self.send_to_telegram(flow_reply.get("text") or "Done.", interaction_token=token)
                     return
             except Exception as exc:
                 logger.error("[Telegram] Initiative flow routing failed: %s", exc, exc_info=True)

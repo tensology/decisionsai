@@ -50,8 +50,7 @@ def test_invalid_internal_auth_response_falls_back_to_device_authentication(monk
         format=serialization.PrivateFormat.Raw,
         encryption_algorithm=serialization.NoEncryption(),
     )
-    responses = iter([
-        _Response(404, invalid_json=True),
+    device_responses = iter([
         _Response(200, {"success": True, "challenge_id": "challenge", "challenge_message": "sign-me"}),
         _Response(200, {"success": True, "ws_token": "device-token"}),
     ])
@@ -59,9 +58,15 @@ def test_invalid_internal_auth_response_falls_back_to_device_authentication(monk
 
     def post(url, **_kwargs):
         urls.append(url)
-        return next(responses)
+        if url.endswith("/ws-auth") and "/device/" not in url:
+            return _Response(404, invalid_json=True)
+        return next(device_responses)
 
     monkeypatch.setattr("requests.post", post)
+    monkeypatch.setattr(
+        "distr.core.integrations.whatsapp.manager.ws_token_retry_sleep",
+        lambda _seconds: None,
+    )
     manager = SimpleNamespace(
         api_base="https://example.test/api/whatsapp",
         _collect_subscribe_phones=lambda: [],
@@ -76,11 +81,11 @@ def test_invalid_internal_auth_response_falls_back_to_device_authentication(monk
     bundle = WhatsAppWebSocketManager._request_ws_auth_bundle(manager)
 
     assert bundle["ws_token"] == "device-token"
-    assert urls == [
-        "https://example.test/api/whatsapp/ws-auth",
+    assert urls[-2:] == [
         "https://example.test/api/whatsapp/device/challenge",
         "https://example.test/api/whatsapp/device/ws-auth",
     ]
+    assert urls[:-2] == ["https://example.test/api/whatsapp/ws-auth"] * 5
 
 
 def test_connect_worker_does_not_open_socket_without_authentication():
@@ -127,3 +132,37 @@ def test_socket_error_uses_exponential_reconnect_scheduler():
     WhatsAppWebSocketManager._on_error(manager, "connection-refused")
 
     assert scheduled == ["WhatsApp"]
+
+
+def test_internal_ws_auth_retries_transient_http_and_succeeds(monkeypatch):
+    slept = []
+    responses = iter([
+        _Response(404, invalid_json=True),
+        _Response(502, invalid_json=True),
+        _Response(200, {"success": True, "ws_token": "relay-token"}),
+    ])
+    urls = []
+
+    def post(url, **_kwargs):
+        urls.append(url)
+        return next(responses)
+
+    monkeypatch.setattr("requests.post", post)
+    monkeypatch.setattr(
+        "distr.core.integrations.whatsapp.manager.ws_token_retry_sleep",
+        lambda seconds: slept.append(seconds),
+    )
+    manager = SimpleNamespace(
+        api_base="https://example.test/api/whatsapp",
+        _collect_subscribe_phones=lambda: [],
+        _relay_auth_headers=lambda _payload: {"X-Relay-Internal-Token": "secret"},
+        _load_or_create_device_identity=lambda: {},
+        _ws_auth_bundle=None,
+    )
+
+    bundle = WhatsAppWebSocketManager._request_ws_auth_bundle(manager)
+
+    assert bundle["ws_token"] == "relay-token"
+    assert manager._ws_auth_bundle["ws_token"] == "relay-token"
+    assert urls == ["https://example.test/api/whatsapp/ws-auth"] * 3
+    assert slept == [1, 2]
