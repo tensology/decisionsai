@@ -52,6 +52,24 @@ BULK_PLATFORMS = frozenset({"substack.com", "beehiiv.com", "mailchimp.com", "sen
 # Reports Paul's own agents and trading system mail to him.
 _SELF_SUBJECT = re.compile(r"^(?:nightly repo|\[trader\]|currency trader|easyequities market brief)", re.I)
 
+# Vendors Paul pays. A failed payment from one of them is never a newsletter: it can switch a
+# service off. Matched on the exact domain or a subdomain of it, never on a display name.
+VENDOR_DOMAINS = frozenset({
+    "digitalocean.com", "hetzner.com", "hetzner.de", "linode.com", "akamai.com", "vultr.com", "cloudflare.com",
+    "amazon.com", "amazonaws.com", "aws.amazon.com", "google.com", "googlecloud.com", "microsoft.com",
+    "github.com", "godaddy.com", "namecheap.com", "name.com", "xneelo.co.za", "afrihost.com", "openai.com",
+    "anthropic.com", "openrouter.ai", "stripe.com", "paddle.com", "fastspring.com", "sendgrid.com",
+    "twilio.com", "mailgun.com", "postmarkapp.com", "render.com", "fly.io", "vercel.com", "netlify.com",
+})
+_PAYMENT_FAILED = re.compile(
+    r"payment (?:has )?(?:failed|was declined|declined|unsuccessful|issue|problem|could not be)|"
+    r"(?:failed|declined|unsuccessful|unable to (?:process|charge|collect)) (?:payment|charge|transaction|to charge)|"
+    r"(?:card|payment method) (?:was )?(?:declined|expired|failed|on file)|"
+    r"(?:billing|payment) (?:issue|problem|failure|problem)|past due|overdue (?:invoice|payment|balance)|"
+    r"(?:service|account|droplet|server)s? (?:will be |has been |have been |is |are )?(?:suspended|shut ?down|terminated|locked)|"
+    r"update your (?:payment|billing|card)|we (?:were )?(?:unable|couldn'?t) (?:to )?(?:charge|process|collect)|"
+    r"action required.{0,40}(?:payment|billing|card)", re.I)
+
 _BULK_LOCAL = re.compile(
     r"^(no-?reply|do-?not-?reply|newsletters?|news|marketing|mailer|mailer-daemon|postmaster|bounces?|"
     r"notifications?|updates?|offers?|promo\w*|deals|hello|info|team|communications?|alerts?)$", re.I)
@@ -150,10 +168,32 @@ def _is_known(address: str, known: dict[str, set[str]]) -> bool:
 # Stage 1: deterministic triage of one list row
 # ---------------------------------------------------------------------------
 
+# A vendor subject worth opening the body for, unless it is plainly routine.
+_VENDOR_BILLING = re.compile(r"payment|billing|\bcard\b|suspend|past due|overdue|action required|account (?:issue|notice)", re.I)
+_VENDOR_ROUTINE = re.compile(r"is available|receipt|thank(?:s| you) for your payment|payment (?:received|successful|"
+                             r"confirmation|processed)|successfully (?:paid|charged)|invoice for|statement", re.I)
+
+
+VENDOR_FIX_PLAN = (
+    "Open the vendor's billing page by typing its address, not through a link in the email",
+    "Check the payment method on file: expiry, limit and the balance behind it",
+    "Retry the payment or update the card, then confirm the invoice shows as paid",
+    "Check nothing was suspended or switched off in the meantime and bring it back up if it was",
+)
+
+
+def _vendor(domain: str) -> str:
+    """The vendor domain this address belongs to, or ''."""
+    for d in VENDOR_DOMAINS:
+        if domain == d or domain.endswith("." + d):
+            return d
+    return ""
+
+
 def classify(row: dict[str, Any], known: dict[str, set[str]], *, folder: str = "") -> dict[str, Any]:
     """Return {"category", "important", "reasons"} for a Mailshot list row.
 
-    Categories: self, bulk, client_alert, client, unknown_human, other.
+    Categories: self, bulk, vendor_payment, client_alert, client, unknown_human, other.
     ``important`` means the orchestrator must look at the message body.
     """
     sender = _addr(row.get("from"))
@@ -165,6 +205,14 @@ def classify(row: dict[str, Any], known: dict[str, set[str]], *, folder: str = "
         return {"category": "self", "important": False, "reasons": ["Paul's own system"]}
     if domain in BULK_PLATFORMS:
         return {"category": "bulk", "important": False, "reasons": ["bulk-mail platform"]}
+    vendor = _vendor(domain)
+    if vendor and _PAYMENT_FAILED.search(text):
+        # Before the bulk rules: vendors send from no-reply@, and this one can take a service offline.
+        return {"category": "vendor_payment", "important": True, "vendor": vendor,
+                "reasons": [f"failed-payment notice from {vendor}"]}
+    if vendor and _VENDOR_BILLING.search(subject) and not _VENDOR_ROUTINE.search(subject):
+        return {"category": "vendor_payment", "important": True, "vendor": vendor, "confirm": True,
+                "reasons": [f"billing notice from {vendor}; body decides"]}
     known_sender = _is_known(sender, known)
     alert = bool(_ALERT_SUBJECT.search(subject))
     bulkish = bool(
@@ -207,7 +255,7 @@ _SYSTEM = (
     "must act on: a billing or invoice error, a bug or outage, an access problem, an urgent "
     "request, or a question that blocks the client. Newsletters, receipts, automated notices and "
     "thanks are not actionable.\n"
-    "Return only JSON: {\"actionable\": bool, \"kind\": \"billing_error|bug|outage|access|urgent_request|question|other|none\", "
+    "Return only JSON: {\"actionable\": bool, \"kind\": \"billing_error|bug|outage|access|urgent_request|question|vendor_payment|other|none\", "
     "\"urgency\": \"high|normal|low\", \"client\": string, \"summary\": string, \"fix_plan\": [string], "
     "\"draft_reply\": string, \"needs_info\": string}.\n"
     "- client: the sender's first name, with their company in brackets only if the email states it, "
@@ -224,6 +272,9 @@ _SYSTEM = (
     "Empty string when no reply is needed.\n"
     "- needs_info: only when Paul must answer before any work can start. Never ask for a figure that the "
     "plan finds on file (a client's agreed rate). Otherwise empty.\n"
+    "- vendor_payment is for a supplier Paul pays (hosting, domains, APIs) saying a payment failed or a service "
+    "will be suspended. Set client to the vendor, draft_reply to an empty string, and fix_plan to checking the "
+    "card on file via the vendor's own site.\n"
     "Never invent figures. If the email is not actionable set actionable=false and kind=none."
 )
 
@@ -256,8 +307,14 @@ def _rules_assessment(row: dict[str, Any], body: str) -> dict[str, Any]:
     text = f"{row.get('subject') or ''}\n{body}"
     strong = bool(_STRONG.search(text))
     name, _ = parseaddr(str(row.get("from") or ""))
+    vendor = _vendor(_domain(_addr(row.get("from"))))
+    if vendor:
+        return {"actionable": bool(_PAYMENT_FAILED.search(text)), "kind": "vendor_payment", "urgency": "high",
+                "client": (name or vendor).strip("'\" "), "summary": f"{vendor} says a payment failed: \u201c{str(row.get('subject') or '')[:100]}\u201d.",
+                "fix_plan": list(VENDOR_FIX_PLAN), "draft_reply": "", "needs_info": ""}
     return {
-        "actionable": strong, "kind": "other", "urgency": "high" if strong else "normal",
+        "actionable": strong, "urgency": "high" if strong else "normal",
+        "kind": "billing_error" if strong and re.search(r"\binvoice\b|\bI\d{4,6}\b", text, re.I) else "other",
         "client": name or _addr(row.get("from")),
         "summary": f"{name or 'A client'} wrote \u201c{str(row.get('subject') or '(no subject)')[:100]}\u201d and it reads like a problem.",
         "fix_plan": ["Read the message", "Find the cause", "Fix it and check the result"],
@@ -291,7 +348,7 @@ def assess(row: dict[str, Any], body: str, *, settings: dict[str, Any],
 # Card
 # ---------------------------------------------------------------------------
 
-_KIND_LABEL = {"billing_error": "billing error", "bug": "bug", "outage": "outage", "access": "access problem",
+_KIND_LABEL = {"billing_error": "billing error", "vendor_payment": "failed vendor payment", "bug": "bug", "outage": "outage", "access": "access problem",
                "urgent_request": "urgent request", "question": "question", "other": "issue"}
 
 
@@ -299,14 +356,21 @@ def card_text(row: dict[str, Any], a: dict[str, Any], folder: str) -> str:
     client = a.get("client") or parseaddr(str(row.get("from") or ""))[0] or "A client"
     kind = _KIND_LABEL.get(a.get("kind"), "issue")
     where = f" It was sitting in {folder}, not your inbox." if folder in {"archived", "spam", "bin"} else ""
-    lines = [f"{client} reports a {kind}: {a.get('summary') or row.get('subject')}{where}"]
+    vendor = a.get("kind") == "vendor_payment"
+    lines = [f"{client} reports a {kind}: {a.get('summary') or row.get('subject')}{where}" if not vendor else
+             f"{client}: {a.get('summary') or row.get('subject')}{where}"]
+    if a.get("root_cause"):
+        lines += ["", "Root cause:"] + [f"- {c}" for c in a["root_cause"]]
     if a.get("fix_plan"):
-        lines += ["", "My plan:"] + [f"{i}. {s}" for i, s in enumerate(a["fix_plan"], 1)]
-    if a.get("draft_reply"):
-        lines += ["", "Draft reply, not sent:", f"\u201c{a['draft_reply']}\u201d"]
+        lines += ["", "The fix:" if a.get("root_cause") else "My plan:"] + [f"{i}. {s}" for i, s in enumerate(a["fix_plan"], 1)]
     if a.get("needs_info"):
         lines += ["", f"I need to know: {a['needs_info']}"]
-    lines += ["", "Start the fix and I'll open a ticket and work on it. Nothing goes to the client."]
+    waiting = a.get("waiting_on_paul") or ["Production changes, restarts, money and anything sent to anyone are yours to approve."]
+    lines += ["", "Waiting on you:"] + [f"- {w}" for w in waiting]
+    if vendor:
+        lines += ["", "Nothing is paid or sent from here. Open the vendor's site yourself to check."]
+    else:
+        lines += ["", "Start the fix and I'll make the change, check it, then draft the reply from what actually changed. Nothing goes to the client until you tap send."]
     return "\n".join(lines)
 
 
@@ -411,13 +475,73 @@ def read_body(client: Any, row: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Investigation and the proposal (the existing Incoming machinery carries it from here)
+# ---------------------------------------------------------------------------
+
+def investigate_issue(row: dict[str, Any], body: str, a: dict[str, Any], *, settings: dict[str, Any],
+                      fn: Callable | None = None) -> dict[str, Any] | None:
+    """Read-only look at the records the complaint is about. None when there is nothing to look at
+    (only billing complaints naming an invoice have a probe today) or the look failed."""
+    if a.get("kind") != "billing_error":
+        return None
+    from distr.core.initiative import client_issue_pipeline as pipe
+
+    text = f"{row.get('subject') or ''}\n{body}"
+    if not pipe.read_complaint(text)["invoices"]:
+        return None
+    try:
+        if fn is not None:
+            inv = fn(text)
+        else:
+            inv = pipe.investigate(text, pipe.Runner(target=str(settings.get(pipe.SSH_TARGET_KEY) or pipe.DEFAULT_SSH_TARGET)))
+        inv["plan"] = pipe.plan_change(inv)
+        return inv
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("client mail watch: investigation failed (%s)", type(exc).__name__)
+        return None
+
+
+def enrich_assessment(a: dict[str, Any], investigation: dict[str, Any]) -> dict[str, Any]:
+    from distr.core.initiative import client_issue_pipeline as pipe
+
+    text = pipe.describe_plan(investigation["plan"], investigation)
+    return {**a, "fix_plan": text["tasks"], "root_cause": text.get("root_cause", []),
+            "waiting_on_paul": text.get("waiting_on_paul", []), "draft_reply": "",
+            "summary": a.get("summary") or text["title"], "investigated": True}
+
+
+def _proposal(row: dict[str, Any], body: str, mid: str, a: dict[str, Any], investigation: dict[str, Any]) -> dict[str, Any]:
+    from distr.core.initiative import client_issue_pipeline as pipe
+
+    flow = {"thread_id": str(row.get("thread_id") or mid), "message_id": mid, "sender": _addr(row.get("from")),
+            "client": a.get("client")}
+    return pipe.proposal_payload(flow, investigation["plan"], investigation)
+
+
+def publish_proposal(proposal: dict[str, Any], *, settings: dict[str, Any], publish: Callable | None = None) -> dict[str, Any]:
+    """Put the curated proposal into Tensology's Incoming, which shows it in Decisions and sends the
+    Accept/Decline card to Telegram. Returns {"ok": False, "error": ...} instead of raising."""
+    try:
+        if publish is not None:
+            out = publish(proposal)
+        else:
+            from distr.core.tensology_client import create_curated_work_request
+
+            out = create_curated_work_request(proposal, idempotency_key=f"client-issue-{proposal['source']['message_ids'][0]}"[:120])
+        return {"ok": True, "id": (out or {}).get("id"), "created": (out or {}).get("created")}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+
+
+# ---------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------
 
 def run_once(settings: dict[str, Any] | None = None, *, dry_run: bool = False, force: bool = False,
              client: Any = None, complete: Callable | None = None, send: Callable | None = None,
              now: datetime | None = None, lookback_days: int = LOOKBACK_DAYS,
-             ignore_state: bool = False) -> dict[str, Any]:
+             ignore_state: bool = False, investigate_fn: Callable | None = None,
+             publish_fn: Callable | None = None) -> dict[str, Any]:
     """Scan, assess and raise cards. ``dry_run`` sends nothing and saves nothing.
 
     ``ignore_state`` (used by simulations) also ignores the first-run baseline and the seen list.
@@ -456,18 +580,41 @@ def run_once(settings: dict[str, Any] | None = None, *, dry_run: bool = False, f
         except Exception as exc:  # noqa: BLE001
             logger.warning("client mail watch: could not read a message (%s)", type(exc).__name__)
             continue
-        a = assess(row, body, settings=settings, complete=complete)
+        if triage["category"] == "vendor_payment":
+            # Deterministic: a vendor notice never needs a model to read, and a model must not rewrite its figures.
+            a = {**_rules_assessment(row, body), "model": "rules"}
+            if triage.get("confirm") and not _PAYMENT_FAILED.search(f"{row.get('subject') or ''}\n{body}"):
+                a["actionable"] = False
+        else:
+            a = assess(row, body, settings=settings, complete=complete)
         if not a["actionable"]:
             result["skipped"].append({"id": mid, "domain": _domain(_addr(row.get("from"))), "subject": str(row.get("subject") or "")[:60], "why": "not actionable", "kind": a.get("kind")})
             seen[mid] = {"at": time.time(), "status": "not_actionable"}
             continue
         key = _flow_key(mid)
+        investigation = investigate_issue(row, body, a, settings=settings, fn=investigate_fn)
+        proposal = None
+        if investigation and investigation.get("plan", {}).get("line_updates"):
+            a = enrich_assessment(a, investigation)
+            proposal = investigation["proposal"] = _proposal(row, body, mid, a, investigation)
         text = card_text(row, a, folder)
         card = {"id": mid, "key": key, "folder": folder, "category": triage["category"], "reasons": triage["reasons"],
-                "assessment": a, "text": text, "markup": card_markup(key)}
+                "assessment": a, "text": text, "markup": card_markup(key), "investigation": investigation,
+                "proposal": proposal}
         if dry_run:
             result["cards"].append({**card, "delivered": False})
             continue
+        if proposal is not None:
+            published = publish_proposal(proposal, settings=settings, publish=publish_fn)
+            card["published"] = published
+            if published.get("ok"):
+                # The proposal is now in Incoming and on Telegram through the normal proposal flow.
+                of.audit("client_mail_proposal", message_id=mid, folder=folder, kind=a.get("kind"),
+                         proposal_id=published.get("id"), status="published")
+                seen[mid] = {"at": time.time(), "status": "proposed", "proposal": published.get("id")}
+                result["cards"].append({**card, "delivered": True, "via": "proposal"})
+                continue
+            logger.info("client mail watch: proposal not published (%s); using the Telegram card", published.get("error"))
         flow = of.save_flow(key, expected_status="", kind="client_issue", level="operate", status="awaiting_decision",
                             message_id=mid, thread_id=str(row.get("thread_id") or mid), client=a.get("client"),
                             sender=_addr(row.get("from")), subject=str(row.get("subject") or ""),
@@ -519,13 +666,15 @@ def maybe_run(settings: dict[str, Any]) -> None:
 def ticket_text(flow: dict[str, Any]) -> str:
     a = flow.get("assessment") or {}
     plan = "\n".join(f"{i}. {s}" for i, s in enumerate(a.get("fix_plan") or [], 1))
+    cause = "\n".join(f"- {c}" for c in a.get("root_cause") or [])
     return (
         f"Client issue from {flow.get('client') or flow.get('sender')}: {a.get('summary') or flow.get('subject')}\n\n"
         f"Their email (subject: {flow.get('subject')}):\n{flow.get('body') or ''}\n\n"
-        f"Plan:\n{plan}\n\n"
-        "Rules: invoices and emails are drafts only. Send nothing to the client. Find the root cause, "
-        "fix it, add a check so it cannot repeat, and put the corrected result and a drafted reply in "
-        "front of Paul for approval."
+        + (f"Root cause found by the read-only investigation:\n{cause}\n\n" if cause else "")
+        + f"Plan:\n{plan}\n\n"
+        "Order of work: make the change, re-read the records to verify it, and only then draft the reply from "
+        "what actually changed (attach any corrected document). Rules: draft only. Send nothing to the client. "
+        "Production restarts and money are Paul's to approve. Put the verified result and the draft in front of Paul."
     )
 
 

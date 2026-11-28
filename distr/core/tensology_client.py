@@ -316,6 +316,16 @@ def create_merged_work_request(payload: dict[str, Any], *, idempotency_key: str 
     return client.post("work-requests", body, idempotency_key=idem[:120])
 
 
+def create_curated_work_request(payload: dict[str, Any], *, idempotency_key: str | None = None) -> dict[str, Any]:
+    """Create a pending Tensology work proposal that Decisions curated itself (root cause and fix plan
+    included) from a message already in Tensology's Incoming. Tensology shows it in Incoming and
+    sends its Telegram card through the normal proposal notification."""
+    client = configured_tensology_client(source="client-issue")
+    body = {**dict(payload or {}), "curated": True}
+    idem = idempotency_key or "curated-" + str((body.get("source") or {}).get("message_ids"))[:100]
+    return client.post("work-requests", body, idempotency_key=idem[:120])
+
+
 _PROPOSAL_DECISION_RE = re.compile(r"^\s*(create\s+(?:a\s+)?ticket|run|queue|dismiss|send)\s+(all|#?[0-9]+)\s*$", re.IGNORECASE)
 _PROPOSAL_VERB_ACTION = {
     "run": "send_to_decisions",

@@ -66,6 +66,12 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr("distr.core.incoming.telegram_reply_intent.strong_model_candidates", lambda s: [("p", "m")])
     sent = []
     monkeypatch.setattr(of, "audit", lambda *a, **k: None)
+    # No test may reach the Tensology host: an investigation that cannot run falls back to the plain card.
+    import distr.core.initiative.client_issue_pipeline as pipe
+
+    def no_host(*a, **k):
+        raise pipe.PipelineError("no host in tests")
+    monkeypatch.setattr(pipe, "investigate", no_host)
 
     def send(text, reply_markup=None, settings=None, interaction_token=None):
         sent.append({"text": text, "markup": reply_markup, "token": interaction_token})
@@ -120,7 +126,8 @@ def test_dry_run_catches_both_invoice_complaints_and_sends_nothing(env):
     assert not (env.tmp / "client_mail_watch.json").exists() and not (env.tmp / "initiative_outcome_flows.json").exists()
     assert set(mail.reads) == {"m-una", "m-mia"}  # newsletter and trader mail are never opened
     card = out["cards"][0]["text"]
-    assert "R605" in card and "My plan:" in card and "Draft reply, not sent:" in card and "Nothing goes to the client" in card
+    assert "R605" in card and "My plan:" in card and "Waiting on you:" in card and "Nothing goes to the client until you tap send" in card
+    assert "Draft reply" not in card  # the reply is drafted after the fix, from what changed
     assert [b["text"] for b in out["cards"][0]["markup"]["inline_keyboard"][0]] == ["Start the fix", "Not now"]
 
 
@@ -238,7 +245,8 @@ def test_ticket_text_forbids_sending_and_carries_the_email():
     flow = {"client": "Una", "sender": "u@x.co", "subject": "Correction", "body": "R850 should be R605",
             "assessment": {"summary": "wrong line", "fix_plan": ["a", "b"]}}
     text = w.ticket_text(flow)
-    assert "R850 should be R605" in text and "Send nothing to the client" in text and "drafts only" in text
+    assert "R850 should be R605" in text and "Send nothing to the client" in text and "draft only" in text.lower()
+    assert "only then draft the reply from what actually changed" in text
 
 
 def test_card_goes_through_the_real_telegram_sender_with_figures_and_buttons_intact(env, monkeypatch):
