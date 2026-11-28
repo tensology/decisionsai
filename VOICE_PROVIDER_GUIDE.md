@@ -301,3 +301,29 @@ After adding a provider, verify:
 - [ ] Custom voices appear with ⭐ prefix in dropdown
 - [ ] Deleting custom voices works
 - [ ] Voice preview for custom voices works
+
+---
+
+## Remote app: live PCM streaming
+
+The remote web app no longer waits for a whole reply to be synthesised, converted and uploaded.
+`distr/core/agent/services/tts/remote_stream.py::open_pcm_stream()` returns mono s16le PCM chunks
+as the provider produces them; `remote_tts_delivery.deliver_remote_tts()` re-frames them
+(`remote_audio_stream.iter_remote_pcm_messages`) and sends `remote_agent_audio_start` (with
+`format: "pcm_s16le"`, `sample_rate`) / `remote_agent_audio_chunk` / `remote_agent_audio_end` over the
+existing relay websocket. The remote app plays them gaplessly through the Web Audio clock
+(`remote-app/src/lib/remoteAudioPlayer.js`).
+
+| Provider | Streaming |
+|---|---|
+| Fish Audio | native: live TTS WebSocket, 24 kHz PCM |
+| OpenAI | native: Speech API `response_format="pcm"`; first sentence alone, rest in parallel batches |
+| ElevenLabs | native: `text_to_speech.stream(output_format="pcm_24000")` (v3 dialogue models use sentence level) |
+| Kokoro | sentence level on a cached model (custom/Kanade voices use the generic path) |
+| Supertonic, Coqui, Pixazo, any new provider | sentence level through `generate_audio()` per sentence, nothing to add |
+
+A new provider streams with no code (sentence level). To stream natively, add an opener to
+`_NATIVE_OPENERS` in `remote_stream.py` that returns a `PcmStream`. If opening a stream fails before
+any audio exists, delivery falls back to the old full-file Ogg path. Switch off with the setting
+`remote_tts_streaming=false` or env `DECISIONS_REMOTE_TTS_STREAM=0`. Benchmark:
+`python scripts/bench_remote_tts.py fishaudio openai kokoro --mode e2e`.

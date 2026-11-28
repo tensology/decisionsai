@@ -1267,9 +1267,17 @@ class EventHandlerMixin:
                 convert_wav_to_ogg=self._convert_wav_to_ogg,
                 cleanup_files=self._telegram_cleanup_temp_files,
                 send_text_first=True,
+                open_pcm_stream=self._remote_open_pcm_stream,
             ),
             str(remote_ctx.get("request_id") or ""),
         )
+
+    @staticmethod
+    def _remote_open_pcm_stream(spoken_text: str):
+        """Open a live PCM stream for the active voice (None when streaming is off)."""
+        from distr.core.agent.services.tts.remote_stream import open_current_voice_pcm_stream
+
+        return open_current_voice_pcm_stream(spoken_text)
 
     def _record_remote_reply_context(self, data: dict, outbound_text: str, *, channel: str) -> None:
         try:

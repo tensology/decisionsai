@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 from distr.core.integrations.telegram.remote_audio_stream import (
     iter_remote_audio_stream_messages,
+    iter_remote_pcm_messages,
     remote_audio_stopped_message,
 )
 
@@ -265,8 +266,15 @@ def deliver_remote_tts(
     convert_wav_to_ogg: Callable[[Any], Any],
     cleanup_files: Callable[..., None],
     send_text_first: bool = True,
+    open_pcm_stream: Callable[[str], Any] | None = None,
 ) -> bool:
-    """Send remote text immediately, then stream Ogg audio when generation finishes."""
+    """Send remote text immediately, then stream the audio.
+
+    With ``open_pcm_stream`` the audio is streamed live as PCM while the provider
+    is still synthesising (first audio after the first chunk). Without it, or when
+    streaming fails before any audio exists, the whole clip is generated, converted
+    to Ogg and then sent in chunks.
+    """
     clean = (text or "").strip()
     if not manager or not clean or not isinstance(remote_ctx, dict):
         return False
@@ -362,6 +370,19 @@ def deliver_remote_tts(
             logger.warning("[REMOTE TTS] Relay did not take the reply text: request_id=%s", request_id)
             return False
 
+    if open_pcm_stream is not None and not is_cancelled():
+        live = _deliver_live_pcm(
+            manager,
+            request_id=str(request_id),
+            spoken=spoken,
+            open_pcm_stream=open_pcm_stream,
+            is_cancelled=is_cancelled,
+            send_text_first=send_text_first,
+            response_data=response_data,
+        )
+        if live:
+            return True
+
     generated_audio_file = None
     stream_audio_file = None
     audio_stream_ready = False
@@ -445,6 +466,98 @@ def deliver_remote_tts(
             cleanup_files(generated_audio_file, None, None)
 
     return True
+
+
+def _deliver_live_pcm(
+    manager: Any,
+    *,
+    request_id: str,
+    spoken: str,
+    open_pcm_stream: Callable[[str], Any],
+    is_cancelled: Callable[[], bool],
+    send_text_first: bool,
+    response_data: Callable[..., dict],
+) -> bool:
+    """Stream live PCM to the remote app. False = nothing was sent, use the file path."""
+    started_at = time.monotonic()
+    try:
+        stream = open_pcm_stream(spoken)
+    except Exception:
+        logger.warning("[REMOTE TTS] Live stream unavailable, using file path: request_id=%s", request_id, exc_info=True)
+        return False
+    if stream is None:
+        return False
+
+    audio_started = False
+    sent_chunks = 0
+    try:
+        for message in iter_remote_pcm_messages(
+            request_id=request_id,
+            sample_rate=int(stream.sample_rate),
+            chunks=stream.chunks,
+        ):
+            if is_cancelled():
+                if audio_started:
+                    manager._send_websocket_message(
+                        remote_audio_stopped_message(request_id, reason="user_stop")
+                    )
+                logger.info("[REMOTE TTS] Live audio stopped by user: request_id=%s", request_id)
+                return True
+            if not audio_started:
+                if not send_text_first:
+                    manager._send_websocket_message(
+                        {
+                            "type": "remote_agent_response",
+                            "request_id": request_id,
+                            "data": response_data(
+                                audio_streamed=True,
+                                audio_pending=False,
+                                audio_mime_type="audio/pcm; format=s16le",
+                            ),
+                        }
+                    )
+                logger.info(
+                    "[REMOTE TTS] First live audio after %.2fs: request_id=%s provider=%s mode=%s rate=%s",
+                    time.monotonic() - started_at,
+                    request_id,
+                    getattr(stream, "provider", "?"),
+                    getattr(stream, "mode", "?"),
+                    stream.sample_rate,
+                )
+                audio_started = True
+            if manager._send_websocket_message(message) is False:
+                raise ConnectionError("relay dropped a live audio chunk")
+            if message.get("type") == "remote_agent_audio_chunk":
+                sent_chunks += 1
+        logger.info(
+            "[REMOTE TTS] Live audio complete in %.2fs: request_id=%s chunks=%d",
+            time.monotonic() - started_at,
+            request_id,
+            sent_chunks,
+        )
+        return True
+    except Exception:
+        logger.exception("[REMOTE TTS] Live audio failed: request_id=%s started=%s", request_id, audio_started)
+        if not audio_started:
+            return False
+        # Audio is already playing: close the stream cleanly so the player finishes
+        # what it has. Retrying would play the reply twice.
+        try:
+            manager._send_websocket_message(
+                {
+                    "type": "remote_agent_audio_end",
+                    "request_id": request_id,
+                    "data": {"chunks": sent_chunks, "truncated": True},
+                }
+            )
+        except Exception:
+            pass
+        return True
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
 
 
 def enqueue_remote_tts_delivery(
