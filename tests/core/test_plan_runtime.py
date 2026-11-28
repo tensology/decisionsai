@@ -107,3 +107,19 @@ def test_cli_route_yields_output_deltas_as_they_arrive(monkeypatch):
     monkeypatch.setattr(runtime, "execute_turn", execute)
     monkeypatch.setattr(runtime.llm_factory, "create_stream", lambda *a: pytest.fail("No API fallback"))
     assert run("openrouter") == ['{"reply": "He', 'llo"}']
+
+
+def test_cli_route_keeps_repeated_deltas(monkeypatch):
+    from distr.core.turn_runtime.contracts import TurnEvent, TurnEventKind, TurnStatus
+
+    pieces = ['{"html": "<p class=\\"a\\">', 'ab', 'ab', '"', '"', '</p>"}']
+    whole = "".join(pieces)
+
+    async def execute(request, *, runtime_id, on_event=None, **kwargs):
+        for piece in pieces:
+            on_event(TurnEvent(kind=TurnEventKind.OUTPUT_DELTA, status=TurnStatus.WORKING,
+                               summary="Writing an update.", runtime_id=runtime_id, output_delta=piece))
+        return TurnResult(True, runtime_id, "pi", request.route.model, output=whole)
+
+    monkeypatch.setattr(runtime, "execute_turn", execute)
+    assert "".join(run("openrouter")) == whole

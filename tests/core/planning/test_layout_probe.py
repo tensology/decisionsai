@@ -102,3 +102,35 @@ def test_every_emitted_line_passes_the_real_validator():
 
     lines = lp.layout_to_lines(RAW, title="Shop", route="/", origin="https://x.test")
     assert validation.validate_wireframe("\n".join(lines) + "\n") == []
+
+
+def _centred_login(vw, ph):
+    """A full-height flex box whose single child sits in the middle of the screen: the height belongs to the box."""
+    body = _rec(1, 0, "body", [0, 0, vw, ph], bg=[255, 255, 255, 1])
+    outer = _rec(2, 1, "div", [0, 0, vw, ph], d="flex", fd="row")
+    inner = _rec(3, 2, "div", [0, 0, vw, ph], d="flex", fd="row", jc="center", ai="center")
+    card = _rec(4, 3, "div", [vw // 2 - 150, ph // 2 - 100, 300, 200], bg=[245, 245, 245, 1])
+    field = _rec(5, 4, "input", [vw // 2 - 140, ph // 2 - 20, 280, 38], bg=[255, 255, 255, 1], it="text")
+    return {"vw": vw, "vh": ph, "pw": vw, "ph": ph, "bg": [255, 255, 255, 1], "records": [body, outer, inner, card, field]}
+
+
+def test_a_full_screen_box_keeps_its_height_on_each_viewport():
+    raw = {"desktop": _centred_login(1440, 900), "mobile": _centred_login(390, 844)}
+    text = "\n".join(lp.layout_to_lines(raw, title="Login", route="/login", origin="https://x.test"))
+    assert "minh=900" in text and "minh:844" in text
+
+
+def _sticky_page(sticky_pos):
+    head = _rec(2, 1, "header", [0, 0, 1440, 100], ps=sticky_pos, bg=[0, 0, 0, 1])
+    main = _rec(3, 1, "main", [0, 100, 1440, 400], bg=[255, 255, 255, 1])
+    body = _rec(1, 0, "body", [0, 0, 1440, 500], bg=[255, 255, 255, 1])
+    logo = _rec(4, 2, "a", [20, 30, 120, 24], href="/", txt="Shop", tb=1, tl=1, fz=16, lh=24, tx=[20, 100])
+    text = _rec(5, 3, "p", [20, 100, 600, 24], txt="Welcome to the shop", tb=1, fz=16, lh=24, tx=[20, 600])
+    return {"vw": 1440, "vh": 900, "pw": 1440, "ph": 500, "bg": [255, 255, 255, 1], "records": [body, head, main, logo, text]}
+
+
+def test_a_sticky_header_still_takes_up_room_so_nothing_below_it_is_pushed_down():
+    sticky = "\n".join(lp.layout_to_lines({"desktop": _sticky_page("sticky"), "mobile": _sticky_page("sticky")}, title="S", route="/"))
+    assert "mar=\"100 0 0 0\"" not in sticky
+    fixed = "\n".join(lp.layout_to_lines({"desktop": _sticky_page("fixed"), "mobile": _sticky_page("fixed")}, title="S", route="/"))
+    assert "mar=\"100 0 0 0\"" in fixed          # a fixed header leaves the flow, so the page below must be spaced down

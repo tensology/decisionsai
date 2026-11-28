@@ -124,12 +124,14 @@ def create_stream(provider, model, messages, settings, *, project_id, project_na
         kind, payload = events.get()
         if kind == "delta":
             text = str(payload or "")
-            if text.startswith(emitted):
-                extra = text[len(emitted):]
+            if not text or (emitted and text == emitted):
+                extra = ""                      # a completed snapshot of what was already streamed
+            elif len(emitted) >= 16 and text.startswith(emitted):
+                extra = text[len(emitted):]     # a longer snapshot of the same text
                 emitted = text
-            elif not text or text in emitted:
-                extra = ""
             else:
+                # A true delta. Repeats are normal (quotes, newlines, a repeated word), so never drop one for
+                # having appeared before: that silently cut long replies short.
                 extra = text
                 emitted += text
             if extra:

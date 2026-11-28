@@ -1385,6 +1385,7 @@ def build_flows(
     models: list[dict[str, Any]] | None = None,
     cues: dict[str, dict[str, Any]] | None = None,
     layouts: dict[str, dict[str, list[str]]] | None = None,
+    extra_screens: list[list[str]] | None = None,
 ) -> str:
     """Wire DSL: overview map plus one screen per route.
 
@@ -1418,6 +1419,10 @@ def build_flows(
             route = _wire_route(row["url"])
             overview.append(f'    link "{_quote(row["title"])}"' + (f' route="{_quote(route)}"' if route else ""))
     chunks.append("\n".join(overview))
+    # The flow map and the base template stencil sit right after the overview.
+    for extra in extra_screens or []:
+        if extra:
+            chunks.append("\n".join(extra))
 
     fr_by_url = {}
     primary = _primary_routes(routes, limit=14)
@@ -1487,6 +1492,7 @@ def render_artifacts(context: dict[str, Any]) -> dict[str, str]:
             models=context["models"],
             cues=cues,
             layouts=context.get("layouts"),
+            extra_screens=context.get("extra_screens"),
         ),
     }
     for kind in ('brief', 'prd'):
@@ -1649,6 +1655,7 @@ def build_plan(
     context["widen"] = widen_routes_with_sitemap(root, context["routes"], context)
     context["captured_cues"] = _apply_captured_cues(root, context)
     context["layouts"] = _captured_page_layouts(root)
+    context["extra_screens"] = _flow_and_base_screens(root, name)
     # If the operator has said where the app is served, read the pages whose
     # source describes them poorly (i18n, client-rendered). Off unless configured.
     try:
@@ -2755,6 +2762,20 @@ def _captured_page_layouts(project_root: Path) -> dict[str, dict[str, list[str]]
             if tiers:
                 out.setdefault(_normalize_route(urlparse(str(data["url"])).path or "/"), tiers)
     return out
+
+
+def _flow_and_base_screens(root: Path, project_name: str) -> list[list[str]]:
+    """The flow map and base-template stencil, from what the capture browser saw. Empty until pages are captured."""
+    try:
+        from distr.core.planning import base_style, flow_map
+
+        pages = flow_map.captured_pages(root)
+        if not pages:
+            return []
+        return [flow_map.wire_lines(pages, project_name), base_style.stencil_lines(flow_map.project_style(pages), project_name)]
+    except Exception:
+        logger.debug("scan: flow map not built", exc_info=True)
+        return []
 
 
 def _layout_screen_lines(

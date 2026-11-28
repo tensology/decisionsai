@@ -105,6 +105,8 @@
     const lh = parseFloat(cs.lineHeight);
     rec.lh = Number.isFinite(lh) ? lh : Math.round(rec.fz * 1.2 * 10) / 10;
     if (parseInt(cs.fontWeight, 10) >= 600) rec.fb = 1;
+    rec.fw = parseInt(cs.fontWeight, 10) || 400;
+    rec.ff = clean((cs.fontFamily || '').split(',')[0].replace(/["']/g, ''), 40);
     if (cs.textAlign && !['start', 'left'].includes(cs.textAlign)) rec.ta = cs.textAlign;
     if (cs.overflow !== 'visible') rec.ov = cs.overflow;
     if (/icon|symbol|glyph|awesome/i.test(cs.fontFamily || '')) rec.ic = 1;

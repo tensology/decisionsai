@@ -89,7 +89,9 @@ def _blocks(text: str) -> dict[str, Any]:
             continue
         if SCREEN_RE.match(line):
             route = _route(line)
-            key = "overview" if line.lstrip().startswith('screen "Overview ·') else (route or None)
+            stripped = line.lstrip()
+            key = ("overview" if stripped.startswith('screen "Overview ·') else "flow-map" if stripped.startswith('screen "Flow map ·')
+                   else "base-template" if stripped.startswith('screen "Base template ·') else (route or None))
             provenance = pending_marker or pending_stale
             blocks.append({"lines": [line], "marker": pending_marker, "stale_marker": pending_stale, "key": provenance.group(1) if provenance else key})
             pending_marker = None

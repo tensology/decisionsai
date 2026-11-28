@@ -494,6 +494,50 @@ def _link_line(link) -> str:
     return str(link)
 
 
+_LOGIC_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def _controls_and_style(project_root: str, route: str) -> tuple[list[str], dict[str, Any]]:
+    """Ticket sections for one page: what every control does (mapped to view logic) and the base template.
+
+    Read-only: uses the page metadata saved by the capture, and reads project source without running it.
+    """
+    import time
+
+    from distr.core.planning import base_style, control_map, flow_map
+
+    if not project_root:
+        return [], {}
+    now = time.monotonic()
+    cached = _LOGIC_CACHE.get(project_root)
+    if cached and now - cached[0] < 120:
+        pages, style, logic = cached[1]["pages"], cached[1]["style"], cached[1]["logic"]
+    else:
+        pages = flow_map.captured_pages(project_root)
+        style = flow_map.project_style(pages) if pages else {}
+        logic = {}
+        _LOGIC_CACHE[project_root] = (now, {"pages": pages, "style": style, "logic": logic})
+    norm = flow_map.norm(route) or "/"
+    info = pages.get(norm)
+    lines: list[str] = []
+    if info:
+        if norm not in logic:
+            try:
+                logic[norm] = control_map.map_project(project_root, {norm: info}).get(norm)
+            except Exception:
+                logic[norm] = None
+        text = flow_map.controls_markdown(norm, info["controls"], logic.get(norm))
+        if text:
+            lines += ["", text.rstrip()]
+    if style:
+        css = base_style.to_css(style)
+        lines += ["", "## Base template (colours, type, form conventions)",
+                  "Every page uses these; a page owns only its layout. Form labels sit "
+                  f"{'above' if style.get('label') == 'above' else ('beside' if style.get('label') == 'beside' else 'as the site does')} their fields.",
+                  "", "```css", css[:3000], "```"]
+    return lines, {"controls": len(flow_map.describe(info["controls"], norm)) if info else 0, "has_style": bool(style)}
+
+
 def page_ticket_draft(workspace_id: int, route: str) -> dict[str, Any]:
     """A non-mutating, actionable ticket body for one page, built from the blueprint."""
     route = _norm_route(route)
@@ -541,6 +585,11 @@ def page_ticket_draft(workspace_id: int, route: str) -> dict[str, Any]:
                   f"Layout rules read from the real page at {layout.get('vw') or 1440}px wide, with phone overrides in `at768`. "
                   "Containers carry flow, columns, gaps, widths and alignment; text and images are grey blocks, so the "
                   "base template supplies colours and typography.", "", "```", layout["wire"][:6000], "```"]
+    try:
+        extra, extra_meta = _controls_and_style(str(blueprint.get("project_folder") or blueprint.get("root_path") or ""), page["route"])
+    except Exception:
+        extra, extra_meta = [], {}
+    lines += extra
     if page.get("shot"):
         lines += ["", f"Screenshot: {page['shot'].get('name') or ''} captured {page['shot'].get('captured_at') or 'unknown'}."]
     if table_count:

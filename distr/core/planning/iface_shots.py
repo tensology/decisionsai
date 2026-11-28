@@ -660,7 +660,7 @@ def _grab(url: str, dest: Path, allowed_hosts: set[str]) -> dict:
                 context.add_init_script(_SHOT_STEALTH)
                 page = _prepare_shot_page(context, allowed_hosts)
                 deadline = time.monotonic() + (_SHOT_PAGE_MS / 1000)
-                _open_shot_url(page, url, allowed_hosts, deadline)
+                response = _open_shot_url(page, url, allowed_hosts, deadline)
                 _wait_for_shot(page, deadline)
                 # Viewport PNG at device_scale_factor 2 (2880x1800). Not a full-page shot, to keep size reasonable.
                 page.screenshot(path=str(dest), type="png")
@@ -678,12 +678,28 @@ def _grab(url: str, dest: Path, allowed_hosts: set[str]) -> dict:
                     raw = layout_probe.read_page(page)
                     layouts = layout_probe.stored_layouts(
                         raw, route=urlparse(url).path or "/", origin=_origin(url))
+                    try:
+                        from distr.core.planning import base_style
+
+                        look = base_style.summarise(raw)
+                        if look:
+                            cue = {**cue, "_style": look}
+                    except Exception:
+                        logger.debug("Interface shot: style not summarised", exc_info=True)
                     if layouts:
                         cue = {**cue, "_layouts": layouts,
                                "_layout_meta": {"vw": raw["desktop"].get("vw"), "ph": raw["desktop"].get("ph"),
                                                 "phone": bool(raw.get("mobile", {}).get("records"))}}
                 except Exception:
                     logger.debug("Interface shot: layout not read", exc_info=True)
+                try:
+                    from distr.core.planning import controls as page_controls
+
+                    found = page_controls.read_controls(page, url, response)
+                    if found:
+                        cue = {**cue, "_controls": found}
+                except Exception:
+                    logger.debug("Interface shot: controls not read", exc_info=True)
                 last_error = None
                 break
             except Exception as exc:
@@ -740,6 +756,26 @@ def clear_interface_shots(workspace_id: int) -> dict:
     return {"cleared": cleared, "saved": []}
 
 
+def shot_payload(cue: dict, *, url: str, screen_id: str, wire_hash: str, stamp: str) -> dict:
+    """The sidecar JSON saved beside a page image: its cues, layout tiers, controls and look."""
+    payload = {"captured_at": stamp, "url": url, "screen_id": screen_id, "wire_hash": wire_hash}
+    if cue:
+        cue = dict(cue)
+        style_found = cue.pop("_style", None)
+        if style_found:
+            payload["style"] = style_found
+        controls_found = cue.pop("_controls", None)
+        if controls_found:
+            payload["controls"] = controls_found
+        layouts = cue.pop("_layouts", None)
+        layout_meta = cue.pop("_layout_meta", None)
+        if layouts:
+            payload["layouts"] = layouts
+            payload["layout"] = {**(layout_meta or {}), "captured_at": stamp}
+        payload["cues"] = cue
+    return payload
+
+
 def capture_interface_shot(workspace_id: int, *, screen_id: str, route: str, lane: str, force: bool = False) -> dict:
     """Return a saved image, capture one page, or explain why it was skipped."""
     if not _SCREEN.fullmatch(str(screen_id or "")):
@@ -783,19 +819,7 @@ def capture_interface_shot(workspace_id: int, *, screen_id: str, route: str, lan
         return {"image": "", "reason": reason, "captured_at": "", "current": False}
     _record_attempt(workspace_id, screen_id, None)
     stamp = datetime.now(timezone.utc).isoformat()
-    payload = {
-        "captured_at": stamp,
-        "url": plan["url"],
-        "screen_id": screen_id,
-        "wire_hash": expected or "",
-    }
-    if cue:
-        layouts = cue.pop("_layouts", None)
-        layout_meta = cue.pop("_layout_meta", None)
-        if layouts:
-            payload["layouts"] = layouts
-            payload["layout"] = {**(layout_meta or {}), "captured_at": stamp}
-        payload["cues"] = cue
+    payload = shot_payload(cue, url=plan["url"], screen_id=screen_id, wire_hash=expected or "", stamp=stamp)
     _write_meta(dest, payload)
     return {"image": image, "reason": "", "captured_at": stamp, "current": True}
 

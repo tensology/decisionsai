@@ -579,6 +579,55 @@ def _scrolled_start(a: dict, node: Node, parent: Node, prec: dict, pinfo: dict, 
         a["mar"] = " ".join(mar)
 
 
+def _fix_top_spacing(a: dict, node: Node, parent: Node, prec: dict, pinfo: dict, vp: str) -> None:
+    """Make the vertical position come out as measured.
+
+    Collapsed margins, inline line boxes and half-leading all move a block without being a margin of its own.
+    The gap between a child and whatever sits above it is read from the page; whatever the declared margins and
+    the container's gap do not explain becomes this child's top margin.
+    """
+    flow = pinfo.get("flow")
+    if flow not in ("col", "block") or pinfo.get("justify", "") not in ("", "start"):
+        return
+    rec = node.rec(vp)
+    if rec is None or rec.get("ps") in ("absolute", "fixed"):          # sticky stays in the flow
+        return
+    x, y, w, h = _box(rec)
+    px0, py0, pw0, ph0 = _box(prec)
+    if rec.get("d") == "inline" or prec.get("d") == "inline" or y < py0 - 2 or y + h > py0 + ph0 + 2:
+        return                                   # an inline box, or content overflowing its parent: its rect is not a block position
+    before = []
+    for kid in parent.kids:
+        if kid is node:
+            break
+        k = kid.rec(vp)
+        if k is not None and k.get("ps") not in ("absolute", "fixed") and (_box(k)[3] > 0):
+            before.append(k)
+    cx, cy, _cw, _ch = _content_box(prec)
+    if before:
+        prev = before[-1]
+        px, py, pw, ph = _box(prev)
+        if y < py + ph - 2:
+            return                               # overlaps its neighbour: not a stacked sibling
+        gap = y - (py + ph)
+        prev_mb = (prev.get("mar") or [0] * 4)[2]
+    else:
+        gap, prev_mb = y - cy, 0
+    mar = (a.get("mar") or "0 0 0 0").split(" ")
+    if len(mar) != 4:
+        return
+    if flow == "col":
+        spacing = pinfo.get("gap_r") or 0
+        top = gap - spacing - prev_mb
+    else:
+        top = gap
+    declared = (rec.get("mar") or [0] * 4)[0]
+    if abs(top - declared) <= 1.5 or abs(top) > 3000:
+        return
+    mar[0] = _n(round(top))
+    a["mar"] = " ".join(mar)
+
+
 def _pct_or_px(w: float, cw: float) -> str:
     if cw > 0:
         pct = w / cw * 100
@@ -635,6 +684,7 @@ def node_attrs(node: Node, vp: str, parent: Node, pinfo: dict, ctx: dict, siblin
             a["top"] = _n(max(0, y - _box(prec)[1] if False else 0))
         a.update(_lengthy(rec, prec, pinfo, vp, siblings_live))
         _scrolled_start(a, node, parent, prec, pinfo, vp)
+        _fix_top_spacing(a, node, parent, prec, pinfo, vp)
     # Surface
     fill = _fill(rec, ctx["page_fill"], ctx["invert"])
     if fill:
@@ -696,6 +746,13 @@ def node_attrs(node: Node, vp: str, parent: Node, pinfo: dict, ctx: dict, siblin
                                   for k in kids if k.rec(vp) and k.rec(vp).get("ps") not in ("absolute", "fixed")), default=y)
             inner_bottom = y + h - (rec.get("pad") or [0] * 4)[2] - _border(rec)[2]
             if inner_bottom - content_bottom > 3 and h > 8:
+                a["minh"] = _n(h)
+        elif stretched and not ps == "absolute":
+            # A box a flex parent stretched to exactly the screen height, with less content than that, is a full-height box
+            # (min-height: 100vh): without it the page loses its vertical centring on the other viewport.
+            screen_h = (MOBILE if vp == "m" else DESKTOP)["height"]
+            kid_bottom = max(((_box(k.rec(vp))[1] + _box(k.rec(vp))[3]) for k in kids if k.rec(vp) and k.rec(vp).get("ps") not in ("absolute", "fixed")), default=y)
+            if abs(h - screen_h) <= 2 and y <= 2 and (y + h - (rec.get("pad") or [0] * 4)[2]) - kid_bottom > 40:
                 a["minh"] = _n(h)
         if _overflows(node, rec, vp):
             # A scroll or clipped box shows a window onto longer content: fix its height and clip.
@@ -805,7 +862,7 @@ def _diff(desk: dict[str, str], mob: dict[str, str]) -> str:
         if a == b:
             continue
         if key in ("w", "h", "minh", "maxw", "top", "left", "fs", "lh", "tw") and a.lstrip("-").isdigit() and b.lstrip("-").isdigit():
-            if abs(int(a) - int(b)) <= max(4, int(abs(int(a)) * 0.08)) and key not in ("fs",):
+            if abs(int(a) - int(b)) <= max(4, int(abs(int(a)) * 0.08)) and key not in ("fs", "minh"):
                 continue
         changes.append(f"{key}:{b or '-'}")
     return ";".join(changes)
