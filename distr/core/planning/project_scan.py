@@ -372,6 +372,192 @@ def _django_declarations(node: ast.ClassDef) -> dict[str, ast.AST | None]:
     return declarations
 
 
+_DISPATCH_VAR = r"(?:page|path|pathname|currentPath|route|location\.pathname)"
+_DISPATCH_EQ = re.compile(_DISPATCH_VAR + r"""\s*===?\s*['"](/[^'"]*)['"]""")
+_DISPATCH_PREFIX = re.compile(_DISPATCH_VAR + r"""\.startsWith\(\s*['"](/[^'"]*)['"]""")
+_DISPATCH_MATCH = re.compile(r"(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*" + _DISPATCH_VAR + r"\.match\(\s*/(\^\\/(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n\[])*)/[a-z]*\s*\)")
+_DISPATCH_TAG = re.compile(r"<([A-Z][\w$]*)\b")
+_IMPORT_NAMES = re.compile(r"""import\s+(?:([A-Za-z_$][\w$]*)\s*,?\s*)?(?:\{([^}]*)\})?\s*from\s+['"](\.[^'"]+)['"]""")
+_LAZY_IMPORT = re.compile(r"""(?:const|let)\s+([A-Z][\w$]*)\s*=\s*(?:React\.)?lazy\(\s*\(\)\s*=>\s*import\(\s*['"](\.[^'"]+)['"]""")
+_DISPATCH_ENTRY_NAMES = ("App.tsx", "App.jsx", "App.js", "main.tsx", "main.jsx", "main.js", "routes.tsx", "routes.jsx", "router.tsx", "router.jsx")
+_WRAPPER_TAGS = {"Suspense", "Fragment", "StrictMode", "ErrorBoundary"}
+MIN_DISPATCH_ROUTES = 3
+
+
+def _regex_routes(pattern: str) -> list[tuple[str, list[str]]]:
+    """``^\\/charters\\/(\\d+)\\/edit$`` -> [("/charters/:id/edit", [])]; alternation groups expand.
+
+    Returns (route, captured alternatives) pairs so a dispatch line that tests one value
+    (``kind === "charters"``) can pick its own route.
+    """
+    body = pattern.strip()
+    body = body[1:] if body.startswith("^") else body
+    body = body[:-1] if body.endswith("$") else body
+    body = re.sub(r"\\/\?$", "", body).replace("\\/", "/")
+    options: list[tuple[str, list[str]]] = [("", [])]
+    position = 0
+    while position < len(body):
+        char = body[position]
+        if char == "(":
+            depth, end = 0, position
+            while end < len(body):
+                if body[end] == "(" and (end == 0 or body[end - 1] != "\\"):
+                    depth += 1
+                elif body[end] == ")" and body[end - 1] != "\\":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                end += 1
+            group = body[position + 1:end]
+            capturing = not group.startswith("?:")
+            group = group[2:] if not capturing else group
+            position = end + 1
+            if position < len(body) and body[position] in "?*+":
+                position += 1
+            if re.fullmatch(r"[A-Za-z0-9_/-]+(?:\|[A-Za-z0-9_/-]+)*", group):
+                alternatives = group.split("|")
+                options = [(route + alt, picked + ([alt] if capturing else [])) for route, picked in options for alt in alternatives]
+            else:
+                token = ":id" if re.search(r"\\d", group) else ":uuid" if "{36}" in group else ":token"
+                options = [(route + token, picked) for route, picked in options]
+            continue
+        if char == "\\" and position + 1 < len(body):
+            options = [(route + body[position + 1], picked) for route, picked in options]
+            position += 2
+            continue
+        if char in "?*+":
+            position += 1
+            continue
+        options = [(route + char, picked) for route, picked in options]
+        position += 1
+    out = []
+    for route, picked in options:
+        route = "/" + route.strip("/") if route.strip("/") else "/"
+        if re.fullmatch(r"/[\w:./-]*", route):
+            out.append((route, picked))
+    return out
+
+
+def _dispatched_component(line: str) -> str:
+    """The page a ``return <Shell><Page/></Shell>`` line renders: the first tag that does not wrap others."""
+    rendered = line.split("return", 1)[1] if "return" in line else ""
+    for name in _DISPATCH_TAG.findall(rendered):
+        if name in _WRAPPER_TAGS or f"</{name}>" in rendered:
+            continue
+        return name
+    return ""
+
+
+def scan_dispatch_routes(source: str) -> list[dict[str, str]]:
+    """Routes of a hand-rolled router: ``if (page === "/x") return <Page/>`` and ``page.match(/^\\/x\\/(\\d+)$/)``.
+
+    Guard lines (``... && !user``) and lines that render no component are skipped; the first page
+    a route renders wins. Returns rows of {url, component}.
+    """
+    match_vars: dict[str, list[tuple[str, list[str]]]] = {}
+    for var, pattern in _DISPATCH_MATCH.findall(source):
+        match_vars[var] = _regex_routes(pattern)
+    claimed: dict[str, str] = {}
+    variant: set[str] = set()      # claimed by a line that also tests something else (a user flag)
+    for line in source.splitlines():
+        if "return" not in line:
+            continue
+        condition = line.split("return", 1)[0]
+        if not condition.strip().startswith("if") or re.search(r"&&\s*\(?\s*!", condition):
+            continue
+        component = _dispatched_component(line)
+        if not component:
+            continue
+        routes = _DISPATCH_EQ.findall(condition) + [prefix for prefix in _DISPATCH_PREFIX.findall(condition)]
+        for var, options in match_vars.items():
+            if not re.search(rf"(?<![\w$.]){re.escape(var)}\b", condition):
+                continue
+            wanted = re.findall(rf"{re.escape(var)}(?:\[\d+\])?\s*===?\s*['\"]([^'\"]+)['\"]", condition)
+            for route, picked in options:
+                if wanted and not set(wanted) & set(picked):
+                    continue
+                routes.append(route)
+        route_words = [re.escape(var) for var in match_vars]
+        clauses = [c for c in re.split(r"&&|\|\|", condition.split("(", 1)[-1]) if c.strip(" ()")]
+        conditional = any(not (re.search(_DISPATCH_VAR, c) or any(re.search(rf"(?<![\w$.]){w}\b", c) for w in route_words))
+                          for c in clauses)
+        for route in routes:
+            route = "/" + route.strip("/") if route.strip("/") else "/"
+            if route.startswith("/api"):
+                continue
+            if route not in claimed or (route in variant and not conditional):
+                claimed[route] = component
+                if conditional:
+                    variant.add(route)
+                else:
+                    variant.discard(route)
+    return [{"url": url, "component": component} for url, component in claimed.items()]
+
+
+def _component_sources(entry: Path, source: str, root: Path) -> dict[str, Path]:
+    """Component name -> the file it is imported from, for an entry file's own imports."""
+    out: dict[str, Path] = {}
+    pairs: list[tuple[str, str]] = []
+    for default, named, spec in _IMPORT_NAMES.findall(source):
+        if default:
+            pairs.append((default, spec))
+        for part in (named or "").split(","):
+            name = part.strip().split(" as ")[-1].strip()
+            if name:
+                pairs.append((name, spec))
+    pairs += _LAZY_IMPORT.findall(source)
+    for name, spec in pairs:
+        target = _component_file(entry, spec, root)
+        if target is not None:
+            out[name] = target
+    return out
+
+
+def _component_slice(source: str, name: str) -> str:
+    """Just one exported component of a file that holds several (``AuthPages.jsx``)."""
+    start = re.search(rf"(?m)^(?:export\s+(?:default\s+)?)?(?:function\s+{re.escape(name)}\b|(?:const|let)\s+{re.escape(name)}\s*=)", source)
+    if start is None:
+        return source
+    rest = source[start.end():]
+    stop = re.search(r"(?m)^(?:export\s+(?:default\s+)?)?(?:function\s+[A-Z]|(?:const|let)\s+[A-Z][\w$]*\s*=\s*(?:\(|function|React\.|memo|forwardRef))", rest)
+    return source[start.start(): start.end() + (stop.start() if stop else len(rest))]
+
+
+def _dispatch_pages(root: Path, candidates: list[Path], *, cues: bool) -> list[dict[str, Any]]:
+    """Pages from the app's hand-rolled router, one row per real route, or [] when there is none."""
+    for entry in sorted(candidates + [p for p in root.rglob("main.js") if "node_modules" not in p.parts][:5], key=lambda p: len(p.parts)):
+        if entry.name not in _DISPATCH_ENTRY_NAMES:
+            continue
+        source = _read_text_prefix(entry, 400_000)
+        found = scan_dispatch_routes(source)
+        if len(found) < MIN_DISPATCH_ROUTES:
+            continue
+        files = _component_sources(entry, source, root)
+        rows: list[dict[str, Any]] = []
+        for item in found[:MAX_REACT_PAGES]:
+            url, component = item["url"], item["component"]
+            path = files.get(component)
+            slug = _slugify(url.strip("/").replace("/", "-").replace(":", "")) if url != "/" else "home"
+            label = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", component)
+            row: dict[str, Any] = {
+                "url": url,
+                "name": slug,
+                "view": component,
+                "title": f"{label} · {url}",
+                "group": _group_for_route(url, slug),
+                "source": (path or entry).relative_to(root).as_posix(),
+            }
+            if cues:
+                text = _component_slice(_read_text_prefix(path, 200_000), component) if path else ""
+                cue = _extract_screen_cues(text)
+                if path is not None and not _cue_has_content(cue):
+                    _merge_imported_cues(cue, path, text, root)
+                row["cue"] = cue
+            rows.append(row)
+        return rows
+    return []
+
+
 _PAGE_DIRS = ("pages", "views", "screens", "routes")
 _PATH_COMPARE = re.compile(r"""(?:currentPath|path|pathname|location\.pathname)\s*(?:===|==|startsWith\()\s*['"]([^'"]+)['"]""")
 MAX_REACT_PAGES = 120
@@ -400,6 +586,11 @@ def scan_react_pages(project_root: Path, *, cues: bool = True) -> list[dict[str,
         ]
     except Exception:
         return out
+
+    # A hand-rolled router is the sitemap: its routes, not the component files, are the pages.
+    dispatched = _dispatch_pages(root, candidates, cues=cues)
+    if dispatched:
+        return dispatched
 
     # Routes declared anywhere in the app, so a page can claim one.
     declared: dict[str, str] = {}
@@ -1326,7 +1517,9 @@ def _screen_lines(
     # a page whose only cue was a <section> or <nav> rendered as an empty box.
     for landmark in ("header", "nav", "hero", "main", "aside", "section"):
         if regions.get(landmark):
-            screen.append(f'    {landmark} "{_quote(str(regions[landmark])[:48])}"')
+            # The wire DSL calls an <aside> a sidebar; "aside" fails the whole flows document.
+            component = "sidebar" if landmark == "aside" else landmark
+            screen.append(f'    {component} "{_quote(str(regions[landmark])[:48])}"')
     screen.append(f'    heading "{title}"')
     fields = list(cue.get("fields") or [])[:6]
     buttons = list(cue.get("buttons") or [])[:3]
