@@ -11,7 +11,9 @@ match, injects the cached tool instance into the session's active set.
 import logging
 from typing import Callable, Optional, Tuple, Union
 
-from distr.core.agent.tools.base import BaseActionTool
+from pydantic import BaseModel, Field
+
+from distr.core.agent.tools.base import BaseActionTool, coerce_transcription
 
 # (success, message) or (success, message, injection_performed)
 RequestToolCallbackResult = Union[Tuple[bool, str], Tuple[bool, str, bool]]
@@ -19,8 +21,30 @@ RequestToolCallbackResult = Union[Tuple[bool, str], Tuple[bool, str, bool]]
 logger = logging.getLogger(__name__)
 
 
+# The shared action schema called ``text`` "the full user request" and offered a ``transcription``
+# list, so models put the query in ``transcription``, as a string, and validation failed.
+class RequestToolInput(BaseModel):
+
+    text: str = Field(
+        default="",
+        description="Exact name of the tool you need, or a short description of the capability (not the user's whole message).",
+    )
+
+
 class RequestToolTool(BaseActionTool):
     """Request a tool that is not currently available in the active tool set."""
+
+    args_schema: type[BaseModel] = RequestToolInput
+
+    def normalize_tool_args(self, arguments: dict) -> dict:
+        """Accept the query in ``transcription`` too (string or list) when ``text`` is empty."""
+        normalized = dict(arguments or {})
+        trans = coerce_transcription(normalized.pop("transcription", None))
+        if not str(normalized.get("text") or "").strip() and trans:
+            normalized["text"] = " ".join(str(t) for t in trans).strip()
+        if not isinstance(normalized.get("text"), str):
+            normalized["text"] = str(normalized.get("text") or "")
+        return normalized
 
     def __init__(
         self,

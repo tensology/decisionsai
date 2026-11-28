@@ -17,6 +17,16 @@ except Exception:  # pragma: no cover - routing should never fail on import nois
 
 _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
+        "client_mail_proposal",
+        (
+            r"\b(e-?mail|gmail|mail|ticket)\b.{0,80}\b(proposal|thread)\b",
+            r"\b(proposal|thread)\b.{0,80}\b(e-?mail|gmail|mail)\b",
+            r"\b(check|see|make\s+sure|confirm)\b.{0,30}\bthat'?s?\b.{0,20}\bproposal\b",
+            r"\b(create|make|turn)\b.{0,25}\b(it|that|this)\b.{0,25}\b(into\s+)?(a\s+)?proposal\b",
+            r"\bcreate\s+(?:it\s+)?(?:as\s+)?a\s+proposal\b",
+        ),
+    ),
+    (
         "initiative_attention",
         (
             r"\b(ignore|stop\s+worrying\s+about|don'?t\s+worry\s+about|set\s+aside|forget\s+about|park)\b.{0,40}\b(client|customer|project|sender|contact)\b",

@@ -1,10 +1,11 @@
+import json
 import re
 import logging
 import platform
 import threading
 from typing import List, Dict, Any, Optional, Tuple
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +46,36 @@ class LazyToolMixin:
         pass
 
 
+def coerce_transcription(value):
+    """Models send ``transcription`` as a bare string or as a JSON-encoded list. Accept both."""
+    if value is None or isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        return [value]
+    if isinstance(value, (tuple, set)):
+        return [str(item) for item in value]
+    return value
+
+
 class BaseActionInput(BaseModel):
     """Input schema for BaseActionTool - used by all config-based tools."""
     text: Optional[str] = Field(default="", description="The full user request text (optional, used for context)")
     transcription: Optional[List[str]] = Field(default=None, description="Optional transcription list (rarely used)")
+
+    @field_validator("transcription", mode="before")
+    @classmethod
+    def _coerce_transcription(cls, value):
+        return coerce_transcription(value)
 
 
 def get_platform_modifier_key() -> str:

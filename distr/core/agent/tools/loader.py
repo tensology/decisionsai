@@ -215,6 +215,7 @@ def _get_tool_definitions(
         ("ProactiveOrchestratorTool", {}),
         ("WorkOpsTool", {}),
         ("InitiativeAttentionTool", {}),
+        ("ClientMailProposalTool", {}),
         ("MemorySearchTool", {}),
         ("MemoryReadTool", {}),
         (
@@ -588,6 +589,7 @@ TOOL_REGISTRY = {
     "ProactiveOrchestratorTool": ("system.proactive_orchestrator", "ProactiveOrchestratorTool"),
     "WorkOpsTool": ("system.work_ops_tool", "WorkOpsTool"),
     "InitiativeAttentionTool": ("system.initiative_attention_tool", "InitiativeAttentionTool"),
+    "ClientMailProposalTool": ("system.client_mail_proposal", "ClientMailProposalTool"),
     "MemorySearchTool":        ("system.memory_tools", "MemorySearchTool"),
     "MemoryReadTool":          ("system.memory_tools", "MemoryReadTool"),
     "MemoryAddTool":           ("system.memory_tools", "MemoryAddTool"),
@@ -760,6 +762,10 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Operate the work loop: intake Jira/email batches onto the Ticket Board, run tickets via project CLI or workflow, "
         "check lifecycle status, show humanized client drafts, and approve client sends. "
         "Telegram remains Send/Revise/Leave. Prefer this over inventing a chat-stream CLI."
+    ),
+    "ClientMailProposalTool": (
+        "Check whether an email or client ticket is already a proposal, or turn it into one: finds the mail read only, "
+        "investigates, files one curated proposal in Incoming and Telegram, and waits for approval. Never sends to a client."
     ),
     "InitiativeAttentionTool": (
         "Durably ignore or un-ignore a client or project, set a focus, or link an email address/account to a project; "

@@ -57,6 +57,7 @@ _LABEL = {
 _STATE_WORD = {"running": "working", "waiting": "waiting for you", "blocked": "blocked", "done": "done", "failed": "failed"}
 _TERMINAL_STATES = {"done", "failed"}
 _URGENT_KINDS = {"blocked", "waiting", "done", "failed"}
+_MILESTONES = {"picked_up", "proposal", "thread", "waiting", "done", "failed", "blocked"}
 
 TOKEN_PREFIX = "job-status:"
 MIN_EDIT_INTERVAL_S = 5.0      # between two updates of the same job
@@ -680,7 +681,14 @@ def on_chat_turn_event(p: dict[str, Any]) -> None:
             if summary.startswith(ROUND_CAP_PREFIX):
                 report(key, "blocked", "hit the tool-round limit before finishing; say continue to resume", title=head)
             else:
-                report(key, "done", "answer sent", title=head)
+                with _LOCK:
+                    j = _jobs.get(_alias.get(key, key))
+                    last = next((ln.kind for ln in reversed(j.lines) if ln.kind in _MILESTONES), "") if j else ""
+                    waiting = last == "waiting"
+                if waiting:  # a proposal or approval is still open: the answer is sent, the job is not done
+                    report(key, "waiting", "answer sent; still waiting for your approval", title=head)
+                else:
+                    report(key, "done", "answer sent", title=head)
         elif etype == "turn_failed":
             report(key, "failed", summary or "the request failed", title=head)
         elif etype == "turn_cancelled":
